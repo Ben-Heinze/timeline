@@ -1,0 +1,45 @@
+{
+  "name": "timeline",
+  "version": "0.1.0",
+  "description": "Interactive lifelong memory timeline",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "rebuild": "electron-rebuild -f -w better-sqlite3,sharp --electron-version 41.6.1",
+    "package": "npm run build && electron-builder"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/fluent-ffmpeg": "^2.1.24",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "playwright-core": "^1.61.1",
+    "typescript": "^5.5.3",
+    "vite": "^5.3.4"
+  },
+  "dependencies": {
+    "@tiptap/pm": "^2.5.9",
+    "@tiptap/react": "^2.5.9",
+    "@tiptap/starter-kit": "^2.5.9",
+    "better-sqlite3": "^12.11.1",
+    "d3-scale": "^4.0.2",
+    "d3-time": "^3.1.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "mammoth": "^1.7.2",
+    "marked": "^12.0.0",
+    "music-metadata": "^7.13.4",
+    "pdfjs-dist": "^4.5.136",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sharp": "^0.33.4",
+    "zustand": "^4.5.4"
+  }
+}

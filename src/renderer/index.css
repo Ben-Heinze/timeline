@@ -1,0 +1,67 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: #f8f8f5;
+  color: #1a1a1a;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f0f0ea;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c8c8c0;
+  border-radius: 3px;
+}
+
+/* TipTap / ProseMirror editor styles */
+.ProseMirror {
+  outline: none;
+  min-height: 220px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: #1a1a1a;
+}
+
+.ProseMirror p { margin: 0 0 8px; }
+.ProseMirror p:last-child { margin-bottom: 0; }
+.ProseMirror h1 { font-size: 20px; font-weight: 700; margin: 4px 0 10px; }
+.ProseMirror h2 { font-size: 16px; font-weight: 600; margin: 4px 0 8px; }
+.ProseMirror h3 { font-size: 14px; font-weight: 600; margin: 4px 0 6px; }
+.ProseMirror ul, .ProseMirror ol { padding-left: 22px; margin: 0 0 8px; }
+.ProseMirror li { margin-bottom: 3px; }
+.ProseMirror strong { font-weight: 700; }
+.ProseMirror em { font-style: italic; }
+.ProseMirror code {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  background: #f0f0ea; padding: 1px 5px; border-radius: 3px; font-size: 12.5px;
+}
+.ProseMirror pre {
+  background: #f4f4ef; border-radius: 6px; padding: 12px 16px; margin: 0 0 8px;
+  font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12.5px; overflow-x: auto;
+}
+.ProseMirror blockquote {
+  border-left: 3px solid #e4e4dc; padding-left: 14px; color: #666; margin: 0 0 8px;
+}
+.ProseMirror hr { border: none; border-top: 1px solid #e4e4dc; margin: 12px 0; }
