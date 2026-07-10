@@ -3,6 +3,7 @@ import { join, normalize } from 'path'
 import { ensureLibraryDirs, getLibraryPath } from './library'
 import { closeDb } from './db'
 import { registerAllHandlers } from './ipc'
+import { startWatcher, stopWatcher } from './sync'
 
 // Allow timeline:// to be used in img src without CSP issues
 protocol.registerSchemesAsPrivileged([
@@ -47,6 +48,7 @@ app.whenReady().then(() => {
   })
 
   createWindow()
+  startWatcher()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -54,6 +56,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  stopWatcher()
   closeDb()
   if (process.platform !== 'darwin') app.quit()
 })

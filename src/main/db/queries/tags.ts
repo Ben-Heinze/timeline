@@ -61,3 +61,16 @@ export function setGroupTags(groupId: number, tagNames: string[]): Tag[] {
   })()
   return getGroupTags(groupId)
 }
+
+export function bulkSetEntryTags(entryIds: number[], tagNames: string[]): void {
+  if (entryIds.length === 0 || tagNames.length === 0) return
+  const db = getDb()
+  const tags = tagNames.map(n => n.trim()).filter(Boolean).map(getOrCreateTag)
+  if (tags.length === 0) return
+  const ins = db.prepare('INSERT OR IGNORE INTO entry_tags (entry_id, tag_id) VALUES (?, ?)')
+  db.transaction(() => {
+    for (const id of entryIds) {
+      for (const t of tags) ins.run(id, t.id)
+    }
+  })()
+}

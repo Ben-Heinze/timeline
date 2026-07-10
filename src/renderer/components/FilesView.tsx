@@ -3,7 +3,7 @@ import { useStore } from '../store/useStore'
 import type { Entry, EntryType } from '../../shared/types'
 
 type ViewMode = 'list' | 'small' | 'medium' | 'large'
-type SortBy = 'date' | 'title' | 'type'
+type SortBy = 'date' | 'title' | 'type' | 'tag'
 type SortDir = 'asc' | 'desc'
 
 const THUMB_SIZE: Record<Exclude<ViewMode, 'list'>, number> = {
@@ -31,7 +31,7 @@ function Thumb({ entry, size }: { entry: Entry; size: number }) {
     return (
       <img
         src={`timeline:///${src}`}
-        style={{ width: size, height: size, objectFit: 'cover', display: 'block', borderRadius: 6, background: '#f4f4ef' }}
+        style={{ width: size, height: size, objectFit: 'cover', display: 'block', borderRadius: 6, background: 'var(--bg-thumb)' }}
         draggable={false}
       />
     )
@@ -39,7 +39,7 @@ function Thumb({ entry, size }: { entry: Entry; size: number }) {
   const badge = Math.round(size * 0.4)
   return (
     <div style={{
-      width: size, height: size, borderRadius: 6, background: '#f4f4ef',
+      width: size, height: size, borderRadius: 6, background: 'var(--bg-thumb)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
       <div style={{
@@ -69,19 +69,19 @@ function GridCell({ entry, selected, onClick, onDoubleClick, size }: RowCommonPr
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
         width: size + 20, padding: 8, borderRadius: 8,
-        background: selected ? '#fffbeb' : 'transparent',
-        outline: selected ? '2px solid #f59e0b' : '2px solid transparent',
+        background: selected ? 'var(--bg-entry-sel)' : 'transparent',
+        outline: selected ? '2px solid var(--accent)' : '2px solid transparent',
         cursor: 'pointer', userSelect: 'none',
       }}
     >
       <Thumb entry={entry} size={size} />
       <div style={{
-        fontSize: 12, color: '#222', maxWidth: size + 12,
+        fontSize: 12, color: 'var(--text)', maxWidth: size + 12,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center',
       }}>
         {entry.title ?? entry.type}
       </div>
-      <div style={{ fontSize: 10, color: '#999' }}>
+      <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
         {new Date(entry.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
       </div>
     </div>
@@ -98,15 +98,15 @@ function ListRow({ entry, selected, onClick, onDoubleClick }: RowCommonProps) {
         gridTemplateColumns: '32px 1fr 90px 180px',
         alignItems: 'center', gap: 12,
         padding: '5px 14px',
-        background: selected ? '#fffbeb' : 'transparent',
-        borderLeft: selected ? '3px solid #f59e0b' : '3px solid transparent',
+        background: selected ? 'var(--bg-entry-sel)' : 'transparent',
+        borderLeft: selected ? '3px solid var(--accent)' : '3px solid transparent',
         cursor: 'pointer', userSelect: 'none',
         fontSize: 13,
       }}
     >
       <Thumb entry={entry} size={26} />
       <span style={{
-        color: '#222', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>
         {entry.title ?? entry.file_path ?? entry.type}
       </span>
@@ -117,7 +117,7 @@ function ListRow({ entry, selected, onClick, onDoubleClick }: RowCommonProps) {
       }}>
         {entry.type}
       </span>
-      <span style={{ color: '#888', fontSize: 12 }}>
+      <span style={{ color: 'var(--text-3)', fontSize: 12 }}>
         {new Date(entry.timestamp).toLocaleString('en-US', {
           month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
         })}
@@ -165,7 +165,6 @@ export default function FilesView() {
     }
   }, [selectedIds, lastSelectedId, entries, setSelection])
 
-  // Group into month-year sections (only meaningful when sorting by date)
   const groupedByMonth = useMemo(() => {
     if (sortBy !== 'date') return null
     const out: { key: string; label: string; items: Entry[] }[] = []
@@ -204,14 +203,14 @@ export default function FilesView() {
   }
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#fff' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-surface)' }}>
       {/* Toolbar */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
-        padding: '5px 12px', borderBottom: '1px solid #eaeae4',
-        background: '#fafaf8', flexShrink: 0,
+        padding: '5px 12px', borderBottom: '1px solid var(--border-light)',
+        background: 'var(--bg-muted)', flexShrink: 0,
       }}>
-        <span style={{ fontSize: 11, color: '#aaa', letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 700 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-4)', letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 700 }}>
           View
         </span>
         <div style={{ display: 'flex', gap: 2 }}>
@@ -225,9 +224,9 @@ export default function FilesView() {
           ))}
         </div>
 
-        <div style={{ width: 1, height: 18, background: '#e4e4dc', margin: '0 4px' }} />
+        <div style={{ width: 1, height: 18, background: 'var(--border)', margin: '0 4px' }} />
 
-        <span style={{ fontSize: 11, color: '#aaa', letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 700 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-4)', letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 700 }}>
           Sort
         </span>
         <select
@@ -238,6 +237,7 @@ export default function FilesView() {
           <option value="date">Date</option>
           <option value="title">Title</option>
           <option value="type">Type</option>
+          <option value="tag">Tag</option>
         </select>
         <button
           onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
@@ -247,7 +247,7 @@ export default function FilesView() {
           {sortDir === 'desc' ? '↓' : '↑'}
         </button>
 
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#999' }}>
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-3)' }}>
           {entries.length} {entries.length === 1 ? 'item' : 'items'}
         </span>
       </div>
@@ -257,7 +257,7 @@ export default function FilesView() {
         {entries.length === 0 ? (
           <div style={{
             height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#bbb', fontSize: 13,
+            color: 'var(--text-4)', fontSize: 13,
           }}>
             No entries
           </div>
@@ -266,13 +266,13 @@ export default function FilesView() {
             <section key={section.key}>
               <header style={{
                 position: 'sticky', top: 0, zIndex: 1,
-                background: 'linear-gradient(#fff, #fff 70%, rgba(255,255,255,0))',
+                background: 'var(--bg-surface)',
                 padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
-                color: '#555', letterSpacing: 0.4,
-                borderBottom: '1px solid #eaeae4',
+                color: 'var(--text-2)', letterSpacing: 0.4,
+                borderBottom: '1px solid var(--border-light)',
               }}>
                 {section.label}
-                <span style={{ marginLeft: 8, color: '#bbb', fontWeight: 400 }}>
+                <span style={{ marginLeft: 8, color: 'var(--text-4)', fontWeight: 400 }}>
                   {section.items.length}
                 </span>
               </header>
@@ -309,9 +309,9 @@ function IconGrid({ n }: { n: 1 | 2 | 3 }) {
 }
 
 const toolBtn = (active: boolean): React.CSSProperties => ({
-  background: active ? '#1a1a1a' : 'none',
-  color: active ? '#fff' : '#666',
-  border: active ? 'none' : '1px solid #e4e4dc',
+  background: active ? 'var(--text)' : 'none',
+  color: active ? 'var(--bg-app)' : 'var(--text-2)',
+  border: active ? 'none' : '1px solid var(--border)',
   borderRadius: 5, padding: '3px 8px',
   fontSize: 12, cursor: 'pointer', lineHeight: 1,
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -320,6 +320,6 @@ const toolBtn = (active: boolean): React.CSSProperties => ({
 
 const selectStyle: React.CSSProperties = {
   fontSize: 12, padding: '3px 6px',
-  border: '1px solid #e4e4dc', borderRadius: 5,
-  background: '#fff', color: '#333',
+  border: '1px solid var(--border)', borderRadius: 5,
+  background: 'var(--bg-input)', color: 'var(--text)',
 }

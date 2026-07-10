@@ -1,21 +1,42 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { IngestProgressEvent, NewGroup, Group, EntryType, SearchFilters } from '../shared/types'
+import type {
+  IngestProgressEvent, SyncProgressEvent, NewGroup, Group,
+  EntryType, SearchFilters, AppSettings, DuplicateGroup,
+} from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
   ingest: {
     pickFiles: (): Promise<string[]> =>
       ipcRenderer.invoke('ingest:pickFiles'),
-    start: (filePaths: string[]) =>
-      ipcRenderer.invoke('ingest:start', filePaths),
+    start: (filePaths: string[], tagNames?: string[]) =>
+      ipcRenderer.invoke('ingest:start', filePaths, tagNames ?? []),
     onProgress: (cb: (event: IngestProgressEvent) => void) => {
       const handler = (_: unknown, data: IngestProgressEvent) => cb(data)
       ipcRenderer.on('ingest:progress', handler)
       return () => ipcRenderer.removeListener('ingest:progress', handler)
     },
   },
+  sync: {
+    run: (): Promise<void> =>
+      ipcRenderer.invoke('sync:run'),
+    isSyncing: (): Promise<boolean> =>
+      ipcRenderer.invoke('sync:isSyncing'),
+    scanDuplicates: (mode: 'hash' | 'name_size'): Promise<DuplicateGroup[]> =>
+      ipcRenderer.invoke('sync:scanDuplicates', mode),
+    onProgress: (cb: (event: SyncProgressEvent) => void) => {
+      const handler = (_: unknown, data: SyncProgressEvent) => cb(data)
+      ipcRenderer.on('sync:progress', handler)
+      return () => ipcRenderer.removeListener('sync:progress', handler)
+    },
+    onWatcherIngest: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('sync:watcherIngest', handler)
+      return () => ipcRenderer.removeListener('sync:watcherIngest', handler)
+    },
+  },
   entries: {
-    histogram: (from: number, to: number, bucketMs: number, groupId?: number) =>
-      ipcRenderer.invoke('entries:histogram', from, to, bucketMs, groupId),
+    histogram: (from: number, to: number, zoomLevel: string, groupId?: number) =>
+      ipcRenderer.invoke('entries:histogram', from, to, zoomLevel, groupId),
     forDay: (dateMs: number) =>
       ipcRenderer.invoke('entries:forDay', dateMs),
     forPeriod: (from: number, to: number, groupId?: number) =>
@@ -24,7 +45,7 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('entries:extent'),
     search: (filters: SearchFilters) =>
       ipcRenderer.invoke('entries:search', filters),
-    listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type'; sortDir: 'asc' | 'desc' }) =>
+    listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type' | 'tag'; sortDir: 'asc' | 'desc' }) =>
       ipcRenderer.invoke('entries:listAll', opts),
     get: (id: number) =>
       ipcRenderer.invoke('entries:get', id),
@@ -46,6 +67,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('groups:delete', id),
     assignEntries: (groupId: number | null, entryIds: number[]) =>
       ipcRenderer.invoke('groups:assignEntries', groupId, entryIds),
+    assignEntriesForPeriod: (groupId: number, from: number, to: number): Promise<number> =>
+      ipcRenderer.invoke('groups:assignEntriesForPeriod', groupId, from, to),
   },
   tags: {
     list: () =>
@@ -62,5 +85,23 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('tags:forGroup', groupId),
     setForGroup: (groupId: number, names: string[]) =>
       ipcRenderer.invoke('tags:setForGroup', groupId, names),
+  },
+  settings: {
+    get: (): Promise<AppSettings> =>
+      ipcRenderer.invoke('settings:get'),
+    set: (patch: Partial<Omit<AppSettings, 'libraryPath'>>) =>
+      ipcRenderer.invoke('settings:set', patch),
+    pickFolder: (): Promise<string | null> =>
+      ipcRenderer.invoke('settings:pickFolder'),
+    getLibraryFileCount: (): Promise<number> =>
+      ipcRenderer.invoke('settings:getLibraryFileCount'),
+    migrateLibrary: (newPath: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('settings:migrateLibrary', newPath),
+    checkPaths: (): Promise<{ libraryExists: boolean; watchedFolders: { path: string; exists: boolean }[] }> =>
+      ipcRenderer.invoke('settings:checkPaths'),
+    resolveWatchedFolder: (oldPath: string, newPath: string): Promise<{ found: number; total: number }> =>
+      ipcRenderer.invoke('settings:resolveWatchedFolder', oldPath, newPath),
+    relocateLibrary: (newPath: string): Promise<{ found: number; total: number }> =>
+      ipcRenderer.invoke('settings:relocateLibrary', newPath),
   },
 })

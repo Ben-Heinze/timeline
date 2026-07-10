@@ -102,14 +102,16 @@ export default function SearchBar() {
     setNewTagName('')
   }
 
+  const isActive = open || activeFilterCount > 0
+
   return (
     <div ref={wrapRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 4 }}>
       <div style={{
         display: 'flex', alignItems: 'center',
-        background: '#fff', border: '1px solid #e4e4dc', borderRadius: 5,
+        background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 5,
         padding: '0 6px', height: 26,
       }}>
-        <span style={{ color: '#bbb', fontSize: 12, marginRight: 4 }}>⌕</span>
+        <span style={{ color: 'var(--text-4)', fontSize: 12, marginRight: 4 }}>⌕</span>
         <input
           value={text}
           onChange={e => setText(e.target.value)}
@@ -120,7 +122,7 @@ export default function SearchBar() {
           placeholder="Search…"
           style={{
             border: 'none', outline: 'none', background: 'transparent',
-            fontSize: 12, width: 140, color: '#333',
+            fontSize: 12, width: 140, color: 'var(--text)',
           }}
         />
         {(text || activeFilterCount > 0) && (
@@ -128,7 +130,7 @@ export default function SearchBar() {
             onClick={clearAll}
             title="Clear"
             style={{
-              background: 'none', border: 'none', color: '#bbb',
+              background: 'none', border: 'none', color: 'var(--text-4)',
               fontSize: 13, cursor: 'pointer', padding: '0 4px', lineHeight: 1,
             }}
           >✕</button>
@@ -138,9 +140,9 @@ export default function SearchBar() {
         onClick={() => setOpen(o => !o)}
         title="Filters"
         style={{
-          background: open || activeFilterCount > 0 ? '#1a1a1a' : 'none',
-          color: open || activeFilterCount > 0 ? '#fff' : '#666',
-          border: '1px solid ' + (open || activeFilterCount > 0 ? '#1a1a1a' : '#e4e4dc'),
+          background: isActive ? 'var(--text)' : 'none',
+          color: isActive ? 'var(--bg-app)' : 'var(--text-2)',
+          border: '1px solid ' + (isActive ? 'var(--text)' : 'var(--border)'),
           borderRadius: 5, padding: '3px 10px',
           fontSize: 12, cursor: 'pointer',
           display: 'flex', alignItems: 'center', gap: 5,
@@ -149,7 +151,7 @@ export default function SearchBar() {
         <span>Filter</span>
         {activeFilterCount > 0 && (
           <span style={{
-            background: '#f59e0b', color: '#1a1a1a',
+            background: 'var(--accent)', color: 'var(--accent-fg)',
             borderRadius: 8, padding: '0 5px', fontSize: 10, fontWeight: 700,
             minWidth: 14, textAlign: 'center',
           }}>{activeFilterCount}</span>
@@ -162,7 +164,7 @@ export default function SearchBar() {
           style={{
             position: 'absolute', top: 'calc(100% + 6px)', right: 0,
             width: 320,
-            background: '#fff', border: '1px solid #e4e4dc', borderRadius: 8,
+            background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 8,
             boxShadow: '0 6px 24px rgba(0,0,0,0.12)',
             padding: 12, zIndex: 60,
             display: 'flex', flexDirection: 'column', gap: 10,
@@ -183,7 +185,7 @@ export default function SearchBar() {
           <FilterSection label="Date range">
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={inputStyle} />
-              <span style={{ fontSize: 11, color: '#aaa' }}>to</span>
+              <span style={{ fontSize: 11, color: 'var(--text-4)' }}>to</span>
               <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={inputStyle} />
             </div>
           </FilterSection>
@@ -212,8 +214,9 @@ export default function SearchBar() {
                 disabled={!newTagName.trim()}
                 style={{
                   padding: '3px 10px', fontSize: 11,
-                  background: newTagName.trim() ? '#1a1a1a' : '#d4d4d0',
-                  color: '#fff', border: 'none', borderRadius: 4,
+                  background: newTagName.trim() ? 'var(--text)' : 'var(--border-strong)',
+                  color: newTagName.trim() ? 'var(--bg-app)' : 'var(--text-4)',
+                  border: 'none', borderRadius: 4,
                   cursor: newTagName.trim() ? 'pointer' : 'default',
                 }}
               >Add</button>
@@ -225,14 +228,14 @@ export default function SearchBar() {
               onClick={() => { runSearch(); setOpen(false) }}
               style={{
                 flex: 1, padding: '5px 0', fontSize: 12, fontWeight: 600,
-                background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer',
+                background: 'var(--text)', color: 'var(--bg-app)', border: 'none', borderRadius: 5, cursor: 'pointer',
               }}
             >Apply</button>
             <button
               onClick={clearAll}
               style={{
                 padding: '5px 12px', fontSize: 12,
-                background: 'none', border: '1px solid #e4e4dc', borderRadius: 5, color: '#666', cursor: 'pointer',
+                background: 'none', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-2)', cursor: 'pointer',
               }}
             >Clear</button>
           </div>
@@ -245,7 +248,7 @@ export default function SearchBar() {
 function FilterSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: '#aaa', marginBottom: 4 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--text-4)', marginBottom: 4 }}>
         {label}
       </div>
       {children}
@@ -254,7 +257,7 @@ function FilterSection({ label, children }: { label: string; children: React.Rea
 }
 
 function TagPicker({ tags, selected, onToggle }: { tags: Tag[]; selected: Set<number>; onToggle: (id: number) => void }) {
-  if (tags.length === 0) return <div style={{ fontSize: 11, color: '#bbb' }}>No tags yet</div>
+  if (tags.length === 0) return <div style={{ fontSize: 11, color: 'var(--text-4)' }}>No tags yet</div>
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxHeight: 100, overflowY: 'auto' }}>
       {tags.map(t => (
@@ -268,13 +271,13 @@ function TagPicker({ tags, selected, onToggle }: { tags: Tag[]; selected: Set<nu
 
 const chipStyle = (active: boolean): React.CSSProperties => ({
   fontSize: 11, padding: '3px 8px', borderRadius: 10,
-  background: active ? '#1a1a1a' : '#f0f0ea',
-  color: active ? '#fff' : '#555',
+  background: active ? 'var(--text)' : 'var(--bg-subtle)',
+  color: active ? 'var(--bg-app)' : 'var(--text-2)',
   border: 'none', cursor: 'pointer',
 })
 
 const inputStyle: React.CSSProperties = {
   fontSize: 12, padding: '3px 6px',
-  border: '1px solid #d8d8d0', borderRadius: 4,
-  background: '#fff', color: '#333', outline: 'none',
+  border: '1px solid var(--border-strong)', borderRadius: 4,
+  background: 'var(--bg-input)', color: 'var(--text)', outline: 'none',
 }

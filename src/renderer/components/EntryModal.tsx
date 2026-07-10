@@ -63,33 +63,31 @@ function EntryContent({ entry }: { entry: Entry }) {
           style={{ maxWidth: '100%', maxHeight: 400, objectFit: 'contain', borderRadius: 6 }}
           draggable={false}
         />
-        <div style={{ fontSize: 13, color: '#888' }}>{dateStr}</div>
+        <div style={{ fontSize: 13, color: 'var(--text-3)' }}>{dateStr}</div>
       </div>
     )
   }
 
-  // Journal entries: show rich text prominently
   if (entry.type === 'journal') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: '#222', flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', flex: 1 }}>
             {entry.title ?? '(untitled)'}
           </div>
-          <div style={{ fontSize: 12, color: '#999', flexShrink: 0 }}>{dateStr}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', flexShrink: 0 }}>{dateStr}</div>
         </div>
         {entry.rich_text_json ? (
-          <div style={{ borderTop: '1px solid #f0f0ea', paddingTop: 12 }}>
+          <div style={{ borderTop: '1px solid var(--border-light)', paddingTop: 12 }}>
             <RichTextView json={entry.rich_text_json} />
           </div>
         ) : (
-          <div style={{ fontSize: 13, color: '#bbb', fontStyle: 'italic' }}>No content</div>
+          <div style={{ fontSize: 13, color: 'var(--text-4)', fontStyle: 'italic' }}>No content</div>
         )}
       </div>
     )
   }
 
-  // Other types — show icon + metadata card
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, padding: '24px 0' }}>
       <div style={{
@@ -104,18 +102,18 @@ function EntryContent({ entry }: { entry: Entry }) {
         :                            '📄'}
       </div>
       <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: '#222', marginBottom: 8 }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
           {entry.title ?? '(untitled)'}
         </div>
-        <div style={{ fontSize: 13, color: '#888', marginBottom: 6 }}>{dateStr}</div>
+        <div style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 6 }}>{dateStr}</div>
         {!entry.file_path && (
-          <div style={{ fontSize: 12, color: '#bbb', marginTop: 4 }}>No file attached</div>
+          <div style={{ fontSize: 12, color: 'var(--text-4)', marginTop: 4 }}>No file attached</div>
         )}
       </div>
       {entry.rich_text_json && (
         <div style={{
           maxWidth: 520, width: '100%', textAlign: 'left',
-          background: '#f8f8f5', borderRadius: 8, padding: 16,
+          background: 'var(--bg-muted)', borderRadius: 8, padding: 16,
         }}>
           <RichTextView json={entry.rich_text_json} />
         </div>
@@ -184,9 +182,9 @@ export default function EntryModal() {
     >
       <div style={{
         width: 600, maxWidth: '90vw',
-        background: '#fff',
+        background: 'var(--bg-surface)',
         borderRadius: 12,
-        border: '1px solid #e4e4dc',
+        border: '1px solid var(--border)',
         display: 'flex', flexDirection: 'column',
         overflow: 'hidden',
         boxShadow: '0 8px 40px rgba(0,0,0,0.14)',
@@ -195,29 +193,29 @@ export default function EntryModal() {
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10,
           padding: '12px 16px',
-          borderBottom: '1px solid #eaeae4',
+          borderBottom: '1px solid var(--border-light)',
           flexShrink: 0,
         }}>
           {entry && <TypeBadge type={entry.type} />}
-          <span style={{ fontSize: 14, fontWeight: 600, color: '#222', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {entry?.title ?? (entry?.type ?? '…')}
           </span>
           {entry?.type === 'journal' && (
             <button
               onClick={() => { openJournalModal(entry); setActiveEntryId(null) }}
-              style={{ background: 'none', border: '1px solid #e4e4dc', color: '#666', fontSize: 12, padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}
+              style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 12, padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}
             >Edit</button>
           )}
           <button
             onClick={() => setActiveEntryId(null)}
-            style={{ background: 'none', border: 'none', color: '#bbb', fontSize: 18, padding: '2px 6px', borderRadius: 4, lineHeight: 1 }}
+            style={{ background: 'none', border: 'none', color: 'var(--text-4)', fontSize: 18, padding: '2px 6px', borderRadius: 4, lineHeight: 1 }}
           >✕</button>
         </div>
 
         {/* Content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px', minHeight: 220 }}>
           {entry ? <EntryContent entry={entry} /> : (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 160, color: '#999' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 160, color: 'var(--text-3)' }}>
               Loading…
             </div>
           )}
@@ -225,10 +223,10 @@ export default function EntryModal() {
 
         {entry && (
           <div style={{
-            padding: '10px 16px', borderTop: '1px solid #eaeae4',
+            padding: '10px 16px', borderTop: '1px solid var(--border-light)',
             display: 'flex', alignItems: 'center', gap: 10,
           }}>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: '#aaa', flexShrink: 0 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--text-4)', flexShrink: 0 }}>
               Tags
             </span>
             <div style={{ flex: 1 }}>
@@ -242,29 +240,29 @@ export default function EntryModal() {
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '10px 16px',
-            borderTop: '1px solid #eaeae4',
+            borderTop: '1px solid var(--border-light)',
             flexShrink: 0,
           }}>
             <button
               onClick={navigatePrev}
               disabled={!hasPrev}
               style={{
-                background: hasPrev ? '#f0f0ea' : 'transparent',
-                border: '1px solid #e4e4dc',
-                color: hasPrev ? '#333' : '#ccc',
+                background: hasPrev ? 'var(--bg-subtle)' : 'transparent',
+                border: '1px solid var(--border)',
+                color: hasPrev ? 'var(--text)' : 'var(--text-4)',
                 borderRadius: 6, padding: '5px 14px', fontSize: 13,
               }}
             >← Prev</button>
-            <span style={{ fontSize: 12, color: '#999' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
               {idx + 1} / {periodEntries.length}
             </span>
             <button
               onClick={navigateNext}
               disabled={!hasNext}
               style={{
-                background: hasNext ? '#f0f0ea' : 'transparent',
-                border: '1px solid #e4e4dc',
-                color: hasNext ? '#333' : '#ccc',
+                background: hasNext ? 'var(--bg-subtle)' : 'transparent',
+                border: '1px solid var(--border)',
+                color: hasNext ? 'var(--text)' : 'var(--text-4)',
                 borderRadius: 6, padding: '5px 14px', fontSize: 13,
               }}
             >Next →</button>

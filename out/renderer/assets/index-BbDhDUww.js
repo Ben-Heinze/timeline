@@ -7167,6 +7167,7 @@ const useStore = create((set) => ({
   visibleRange: [fiveYearsAgo, now],
   zoomLevel: "year",
   activeView: "timeline",
+  settings: null,
   histogramBuckets: [],
   groups: [],
   selectedIds: /* @__PURE__ */ new Set(),
@@ -7176,14 +7177,19 @@ const useStore = create((set) => ({
   selectedGroupId: null,
   dataExtent: null,
   ingestProgress: null,
+  syncProgress: null,
   refreshKey: 0,
   tags: [],
   searchResults: null,
+  rangeSelectMode: false,
+  dateRangeSelection: null,
+  pendingDateRange: null,
   setTags: (tags) => set({ tags }),
   setSearchResults: (results) => set({ searchResults: results }),
   setVisibleRange: (range) => set({ visibleRange: range }),
   setZoomLevel: (level) => set({ zoomLevel: level }),
   setActiveView: (view) => set({ activeView: view }),
+  setSettings: (s) => set({ settings: s }),
   setHistogramBuckets: (buckets) => set({ histogramBuckets: buckets }),
   setGroups: (groups) => set({ groups }),
   setSelection: (ids, lastId) => set({ selectedIds: ids, lastSelectedId: lastId }),
@@ -7192,7 +7198,11 @@ const useStore = create((set) => ({
   setSelectedGroupId: (id2) => set({ selectedGroupId: id2 }),
   setDataExtent: (extent) => set({ dataExtent: extent }),
   setIngestProgress: (progress) => set({ ingestProgress: progress }),
+  setSyncProgress: (progress) => set({ syncProgress: progress }),
   bumpRefreshKey: () => set((s) => ({ refreshKey: s.refreshKey + 1 })),
+  setRangeSelectMode: (on) => set({ rangeSelectMode: on }),
+  setDateRangeSelection: (r2) => set({ dateRangeSelection: r2 }),
+  setPendingDateRange: (r2) => set({ pendingDateRange: r2 }),
   journalModalOpen: false,
   journalEditEntry: null,
   openJournalModal: (entry) => set({ journalModalOpen: true, journalEditEntry: entry ?? null }),
@@ -7400,8 +7410,10 @@ utcYear.every = (k2) => {
 utcYear.range;
 const MS_DAY$2 = 864e5;
 const AXIS_H = 38;
-const BAR_FILL = 0.85;
-const DEFAULT_COLOR = "#f59e0b";
+const BAND_H = 14;
+const BAR_FILL = 0.55;
+const YAXIS_W = 40;
+const cv = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const BUCKET_MS = {
   year: 365.25 * MS_DAY$2,
   month: 30.44 * MS_DAY$2,
@@ -7422,8 +7434,8 @@ const NEXT_LEVEL = {
 };
 const TICK_CONFIG = {
   year: { iv: timeYear, fmt: (d) => `${d.getFullYear()}` },
-  month: { iv: timeMonth, fmt: (d) => d.toLocaleString("en-US", { month: "short", year: "2-digit" }) },
-  week: { iv: timeSunday, fmt: (d) => d.toLocaleString("en-US", { month: "short", day: "numeric" }) },
+  month: { iv: timeMonth, fmt: (d) => d.toLocaleString("en-US", { month: "short" }) },
+  week: { iv: timeSunday, fmt: (d) => d.toLocaleString("en-US", { weekday: "short", day: "numeric" }) },
   day: { iv: timeDay, fmt: (d) => d.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric" }) }
 };
 const LEVEL_LABELS = {
@@ -7472,7 +7484,7 @@ function Scrollbar({ dataExtent, visibleRange, onPan }) {
         const newFrom = Math.max(dFrom, Math.min(dTo - vRange, clickTs - vRange / 2));
         onPan([newFrom, newFrom + vRange]);
       },
-      style: { height: 20, position: "relative", background: "#eaeae4", borderTop: "1px solid #e4e4dc", cursor: "pointer", flexShrink: 0 },
+      style: { height: 20, position: "relative", background: "var(--bg-subtle)", borderTop: "1px solid var(--border)", cursor: "pointer", flexShrink: 0 },
       children: /* @__PURE__ */ jsxRuntimeExports.jsx(
         "div",
         {
@@ -7488,7 +7500,7 @@ function Scrollbar({ dataExtent, visibleRange, onPan }) {
             width: `${thumbWidth * 100}%`,
             top: 4,
             bottom: 4,
-            background: "#b0b0a8",
+            background: "var(--scrollbar-thumb)",
             borderRadius: 4,
             cursor: "grab",
             minWidth: 24
@@ -7514,11 +7526,29 @@ function TimelineCanvas() {
     dataExtent,
     refreshKey,
     zoomLevel,
-    setZoomLevel
+    setZoomLevel,
+    rangeSelectMode,
+    setRangeSelectMode,
+    dateRangeSelection,
+    setDateRangeSelection,
+    setPendingDateRange,
+    settings
   } = useStore();
+  const theme = settings?.theme ?? "light";
+  const [selectedYear, setSelectedYear] = reactExports.useState((/* @__PURE__ */ new Date()).getFullYear());
+  const [selectedMonthStart, setSelectedMonthStart] = reactExports.useState(() => {
+    const now2 = /* @__PURE__ */ new Date();
+    return new Date(now2.getFullYear(), now2.getMonth(), 1).getTime();
+  });
+  const [selectedWeekStart, setSelectedWeekStart] = reactExports.useState(() => {
+    const now2 = /* @__PURE__ */ new Date();
+    return new Date(now2.getFullYear(), now2.getMonth(), now2.getDate() - now2.getDay()).getTime();
+  });
   const rangeRef = reactExports.useRef(visibleRange);
   const extentRef = reactExports.useRef(dataExtent);
   const zoomRef = reactExports.useRef(zoomLevel);
+  const selAnchorRef = reactExports.useRef(null);
+  const dateRangeSelRef = reactExports.useRef(dateRangeSelection);
   reactExports.useEffect(() => {
     rangeRef.current = visibleRange;
   }, [visibleRange]);
@@ -7529,10 +7559,22 @@ function TimelineCanvas() {
     zoomRef.current = zoomLevel;
   }, [zoomLevel]);
   reactExports.useEffect(() => {
+    dateRangeSelRef.current = dateRangeSelection;
+  }, [dateRangeSelection]);
+  reactExports.useEffect(() => {
     const [from2, to] = visibleRange;
-    const bMs = BUCKET_MS[zoomLevel];
-    window.api.entries.histogram(from2 - bMs, to + bMs, bMs, selectedGroupId ?? void 0).then(setHistogramBuckets);
-  }, [visibleRange, zoomLevel, selectedGroupId, refreshKey, setHistogramBuckets]);
+    window.api.entries.histogram(from2, to, zoomLevel, selectedGroupId ?? void 0).then((buckets) => {
+      setHistogramBuckets(buckets);
+      if (buckets.length === 0 && selectedGroupId == null && zoomLevel === "year") {
+        const ext = extentRef.current;
+        if (ext) {
+          const pad = (ext[1] - ext[0]) * 0.04 || MS_DAY$2 * 30;
+          setVisibleRange([ext[0] - pad, ext[1] + pad]);
+          setZoomLevel("year");
+        }
+      }
+    });
+  }, [visibleRange, zoomLevel, selectedGroupId, refreshKey, setHistogramBuckets, setVisibleRange, setZoomLevel]);
   reactExports.useEffect(() => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
@@ -7555,12 +7597,24 @@ function TimelineCanvas() {
     const dpr = window.devicePixelRatio || 1;
     const { w: w2, h } = size;
     const chartH = h - AXIS_H;
+    const barsH = chartH - BAND_H;
     const [from2, to] = visibleRange;
     const rangeMs = to - from2;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = cv("--canvas-bg");
     ctx.fillRect(0, 0, w2, h);
-    const tsToX = (ts) => (ts - from2) / rangeMs * w2;
+    const chartW = w2 - YAXIS_W;
+    const tsToX = (ts) => YAXIS_W + (ts - from2) / rangeMs * chartW;
+    const sel = dateRangeSelection;
+    if (sel) {
+      const sx = tsToX(sel[0]);
+      const sw = tsToX(sel[1]) - sx;
+      ctx.fillStyle = "rgba(99,102,241,0.12)";
+      ctx.fillRect(Math.max(YAXIS_W, Math.floor(sx)), 0, Math.ceil(sw), chartH);
+      ctx.strokeStyle = "rgba(99,102,241,0.5)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(Math.max(YAXIS_W, Math.floor(sx)) + 0.5, 0.5, Math.max(1, Math.ceil(sw) - 1), chartH - 1);
+    }
     const byStart = /* @__PURE__ */ new Map();
     for (const b of histogramBuckets) {
       if (!byStart.has(b.bucket_start)) byStart.set(b.bucket_start, []);
@@ -7571,41 +7625,144 @@ function TimelineCanvas() {
       const total = segs.reduce((s, sg2) => s + sg2.count, 0);
       if (total > maxCount) maxCount = total;
     }
+    const niceStep = (n2) => {
+      if (n2 <= 1) return 1;
+      const rough = n2 / 4;
+      const p2 = Math.pow(10, Math.floor(Math.log10(rough)));
+      const norm = rough / p2;
+      return (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * p2;
+    };
+    const yStep = niceStep(maxCount);
+    const niceMax = Math.ceil(maxCount / yStep) * yStep;
+    const barScale = barsH * 0.92 / niceMax;
+    ctx.strokeStyle = cv("--canvas-grid");
+    ctx.lineWidth = 1;
+    for (let v2 = yStep; v2 <= niceMax; v2 += yStep) {
+      const y2 = Math.round(barsH - v2 * barScale) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(YAXIS_W, y2);
+      ctx.lineTo(w2, y2);
+      ctx.stroke();
+    }
     const bMs = BUCKET_MS[zoomLevel];
-    const slotW = bMs / rangeMs * w2;
-    const barW = Math.max(2, slotW * BAR_FILL);
-    const barOX = (slotW - barW) / 2;
+    const slotW = bMs / rangeMs * chartW;
     const groupColors = new Map(groups.map((g) => [g.id, g.color]));
-    for (const [bucketStart, segs] of byStart) {
-      const slotX = tsToX(bucketStart);
-      if (slotX + slotW < 0 || slotX > w2) continue;
-      const x2 = slotX + barOX;
-      const total = segs.reduce((s, sg2) => s + sg2.count, 0);
-      const totalBarH = Math.max(2, total / maxCount * chartH * 0.92);
-      if (selectedPeriod && bucketStart >= selectedPeriod[0] && bucketStart < selectedPeriod[1]) {
-        ctx.fillStyle = "rgba(245,158,11,0.10)";
-        ctx.fillRect(Math.floor(slotX), 0, Math.ceil(slotW), chartH);
+    const defaultBarColor = cv("--accent");
+    if (!curveMode) {
+      for (const [bucketStart, segs] of byStart) {
+        const slotX = tsToX(bucketStart);
+        let effectiveSlotW;
+        if (zoomLevel === "year") {
+          effectiveSlotW = tsToX(new Date(new Date(bucketStart).getFullYear() + 1, 0, 1).getTime()) - slotX;
+        } else if (zoomLevel === "month") {
+          const d = new Date(bucketStart);
+          effectiveSlotW = tsToX(new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime()) - slotX;
+        } else if (zoomLevel === "week") {
+          effectiveSlotW = tsToX(bucketStart + 7 * MS_DAY$2) - slotX;
+        } else {
+          effectiveSlotW = slotW;
+        }
+        const barW = Math.max(2, effectiveSlotW * BAR_FILL);
+        const barOX = (effectiveSlotW - barW) / 2;
+        if (slotX + effectiveSlotW < YAXIS_W || slotX > w2) continue;
+        const x2 = slotX + barOX;
+        const total = segs.reduce((s, sg2) => s + sg2.count, 0);
+        const totalBarH = Math.max(2, total * barScale);
+        if (selectedPeriod && bucketStart >= selectedPeriod[0] && bucketStart < selectedPeriod[1]) {
+          ctx.fillStyle = "rgba(245,158,11,0.10)";
+          ctx.fillRect(Math.floor(slotX), 0, Math.ceil(effectiveSlotW), chartH);
+        }
+        let yBase = barsH;
+        for (const seg of segs) {
+          const color = seg.group_id !== null ? groupColors.get(seg.group_id) ?? defaultBarColor : defaultBarColor;
+          const segH = seg.count / total * totalBarH;
+          ctx.fillStyle = color;
+          ctx.fillRect(Math.floor(x2), Math.floor(yBase - segH), Math.ceil(barW), Math.ceil(segH) + 1);
+          yBase -= segH;
+        }
       }
-      let yBase = chartH;
-      for (const seg of segs) {
-        const color = seg.group_id !== null ? groupColors.get(seg.group_id) ?? DEFAULT_COLOR : DEFAULT_COLOR;
-        const segH = seg.count / total * totalBarH;
+    } else {
+      const sorted = [...byStart.entries()].sort(([a], [b]) => a - b);
+      const pts = sorted.map(([bs, segs]) => {
+        const total = segs.reduce((s, sg2) => s + sg2.count, 0);
+        let cx;
+        if (zoomLevel === "year") {
+          cx = tsToX((bs + new Date(new Date(bs).getFullYear() + 1, 0, 1).getTime()) / 2);
+        } else if (zoomLevel === "month") {
+          const d = new Date(bs);
+          cx = tsToX((bs + new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime()) / 2);
+        } else if (zoomLevel === "week") {
+          cx = tsToX(bs + 3.5 * MS_DAY$2);
+        } else {
+          cx = tsToX(bs + MS_DAY$2 / 2);
+        }
+        return { x: cx, y: barsH - Math.max(2, total * barScale) };
+      });
+      if (pts.length > 0) {
+        const color = defaultBarColor;
+        const drawSpline = (close2) => {
+          ctx.moveTo(pts[0].x, close2 ? barsH : pts[0].y);
+          if (close2) ctx.lineTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length - 1; i++) {
+            const mx = (pts[i].x + pts[i + 1].x) / 2;
+            const my = (pts[i].y + pts[i + 1].y) / 2;
+            ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+          }
+          ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+          if (close2) {
+            ctx.lineTo(pts[pts.length - 1].x, barsH);
+            ctx.closePath();
+          }
+        };
+        ctx.beginPath();
+        drawSpline(true);
+        ctx.globalAlpha = 0.18;
         ctx.fillStyle = color;
-        ctx.fillRect(Math.floor(x2), Math.floor(yBase - segH), Math.ceil(barW), Math.ceil(segH) + 1);
-        yBase -= segH;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        drawSpline(false);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.stroke();
+      }
+    }
+    const dateRangeGroups = groups.filter((g) => g.date_from != null && g.date_to != null);
+    for (const g of dateRangeGroups) {
+      const x1 = tsToX(g.date_from);
+      const x2 = tsToX(g.date_to);
+      const bx = Math.max(YAXIS_W, Math.floor(x1));
+      const bw = Math.min(w2, Math.ceil(x2)) - bx;
+      if (bw <= 0) continue;
+      ctx.fillStyle = g.color;
+      ctx.fillRect(bx, barsH + 1, bw, BAND_H - 2);
+      if (bw > 36) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bx + 1, barsH + 1, bw - 2, BAND_H - 2);
+        ctx.clip();
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 9px system-ui, sans-serif";
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "left";
+        ctx.fillText(g.name, bx + 4, barsH + BAND_H / 2);
+        ctx.restore();
       }
     }
     if (byStart.size === 0) {
-      ctx.fillStyle = "#ccc";
+      ctx.fillStyle = cv("--text-4");
       ctx.font = "13px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("No entries in this range", w2 / 2, chartH / 2);
+      const msg = dataExtent ? "No entries in this time window" : "No entries yet — import files or add a journal entry to get started";
+      ctx.fillText(msg, YAXIS_W + chartW / 2, barsH / 2);
     }
-    ctx.strokeStyle = "#e8e8e0";
+    ctx.strokeStyle = cv("--canvas-axis");
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(0, chartH + 0.5);
+    ctx.moveTo(YAXIS_W, chartH + 0.5);
     ctx.lineTo(w2, chartH + 0.5);
     ctx.stroke();
     const { iv, fmt } = TICK_CONFIG[zoomLevel];
@@ -7613,17 +7770,72 @@ function TimelineCanvas() {
     ctx.font = "11px system-ui, -apple-system, sans-serif";
     ctx.textBaseline = "bottom";
     for (const tick of ticks) {
-      const x2 = tsToX(tick.getTime());
-      if (x2 < 2 || x2 > w2 - 2) continue;
-      ctx.fillStyle = "#d0d0c8";
+      let tickMs;
+      if (zoomLevel === "year") {
+        tickMs = (tick.getTime() + new Date(tick.getFullYear() + 1, 0, 1).getTime()) / 2;
+      } else if (zoomLevel === "month") {
+        tickMs = (tick.getTime() + new Date(tick.getFullYear(), tick.getMonth() + 1, 1).getTime()) / 2;
+      } else if (zoomLevel === "week") {
+        tickMs = tick.getTime() + 3.5 * MS_DAY$2;
+      } else {
+        tickMs = tick.getTime();
+      }
+      const x2 = tsToX(tickMs);
+      if (x2 < YAXIS_W + 2 || x2 > w2 - 2) continue;
+      ctx.fillStyle = cv("--canvas-tick");
       ctx.fillRect(Math.round(x2), chartH + 1, 1, 5);
-      ctx.fillStyle = "#999";
-      ctx.textAlign = x2 < 30 ? "left" : x2 > w2 - 30 ? "right" : "center";
+      ctx.fillStyle = cv("--canvas-label");
+      ctx.textAlign = x2 < YAXIS_W + 30 ? "left" : x2 > w2 - 30 ? "right" : "center";
       ctx.fillText(fmt(tick), x2, h - 3);
     }
-  }, [visibleRange, histogramBuckets, groups, selectedPeriod, size, zoomLevel]);
+    ctx.fillStyle = cv("--canvas-bg");
+    ctx.fillRect(0, 0, YAXIS_W - 1, h);
+    ctx.fillStyle = cv("--canvas-label");
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (let v2 = yStep; v2 <= niceMax; v2 += yStep) {
+      const y2 = barsH - v2 * barScale;
+      if (y2 < 4) break;
+      ctx.fillText(String(v2), YAXIS_W - 5, y2);
+    }
+    ctx.strokeStyle = cv("--canvas-axis");
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(YAXIS_W - 0.5, 0);
+    ctx.lineTo(YAXIS_W - 0.5, chartH);
+    ctx.stroke();
+  }, [visibleRange, histogramBuckets, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode]);
   const handleWheel = reactExports.useCallback((e) => {
     e.preventDefault();
+    if (zoomRef.current === "month") {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        const [from22, to2] = rangeRef.current;
+        const newYear = new Date((from22 + to2) / 2).getFullYear() + (e.deltaY > 0 ? 1 : -1);
+        setSelectedYear(newYear);
+        setVisibleRange([new Date(newYear, 0, 1).getTime(), new Date(newYear + 1, 0, 1).getTime()]);
+      }
+      return;
+    }
+    if (zoomRef.current === "week") {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        const [from22, to2] = rangeRef.current;
+        const mid = new Date((from22 + to2) / 2);
+        const newMonth = new Date(mid.getFullYear(), mid.getMonth() + (e.deltaY > 0 ? 1 : -1), 1);
+        setSelectedMonthStart(newMonth.getTime());
+        setVisibleRange([newMonth.getTime(), new Date(newMonth.getFullYear(), newMonth.getMonth() + 1, 1).getTime()]);
+      }
+      return;
+    }
+    if (zoomRef.current === "day") {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        const [from22] = rangeRef.current;
+        const newWeekStart = from22 + (e.deltaY > 0 ? 7 : -7) * MS_DAY$2;
+        setSelectedWeekStart(newWeekStart);
+        setVisibleRange([newWeekStart, newWeekStart + 7 * MS_DAY$2]);
+      }
+      return;
+    }
     const [from2, to] = rangeRef.current;
     const width = to - from2;
     const shift2 = (e.deltaY > 0 ? 1 : -1) * width * 0.2;
@@ -7642,34 +7854,102 @@ function TimelineCanvas() {
       }
     }
     setVisibleRange([newFrom, newTo]);
-  }, [setVisibleRange]);
+  }, [setVisibleRange, setSelectedYear, setSelectedMonthStart, setSelectedWeekStart]);
   reactExports.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     canvas.addEventListener("wheel", handleWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", handleWheel);
   }, [handleWheel]);
+  reactExports.useEffect(() => {
+    if (!rangeSelectMode) return;
+    const onUp = () => {
+      if (selAnchorRef.current === null) return;
+      const sel = dateRangeSelRef.current;
+      if (sel && sel[1] - sel[0] > 6e4) {
+        setPendingDateRange(sel);
+      }
+      selAnchorRef.current = null;
+      setDateRangeSelection(null);
+    };
+    window.addEventListener("mouseup", onUp);
+    return () => window.removeEventListener("mouseup", onUp);
+  }, [rangeSelectMode, setPendingDateRange, setDateRangeSelection]);
+  reactExports.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape" && rangeSelectMode) {
+        setRangeSelectMode(false);
+        setDateRangeSelection(null);
+        selAnchorRef.current = null;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rangeSelectMode, setRangeSelectMode, setDateRangeSelection]);
+  const setYearRange = reactExports.useCallback((year) => {
+    const from2 = new Date(year, 0, 1).getTime();
+    const to = new Date(year + 1, 0, 1).getTime();
+    setSelectedYear(year);
+    setVisibleRange([from2, to]);
+  }, [setVisibleRange]);
+  const setMonthRange = reactExports.useCallback((monthStart) => {
+    const d = new Date(monthStart);
+    const from2 = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+    const to = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
+    setSelectedMonthStart(from2);
+    setVisibleRange([from2, to]);
+  }, [setVisibleRange]);
+  const setWeekRange = reactExports.useCallback((weekStart) => {
+    setSelectedWeekStart(weekStart);
+    setVisibleRange([weekStart, weekStart + 7 * MS_DAY$2]);
+  }, [setVisibleRange]);
+  const [curveMode, setCurveMode] = reactExports.useState(false);
   const drag = reactExports.useRef(null);
   const [grabbing, setGrabbing] = reactExports.useState(false);
   const onMouseDown = reactExports.useCallback((e) => {
-    const [from2, to] = rangeRef.current;
-    drag.current = { startX: e.clientX, fromMs: from2, toMs: to, moved: false };
-  }, []);
-  const onMouseMove = reactExports.useCallback((e) => {
-    const d = drag.current;
-    if (!d) return;
-    const dx = e.clientX - d.startX;
-    if (Math.abs(dx) > 4) {
-      d.moved = true;
-      setGrabbing(true);
+    if (rangeSelectMode) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const [from2, to] = rangeRef.current;
+      const ts = from2 + cx / rect.width * (to - from2);
+      selAnchorRef.current = ts;
+      setDateRangeSelection([ts, ts]);
+    } else {
+      const [from2, to] = rangeRef.current;
+      drag.current = { startX: e.clientX, fromMs: from2, toMs: to, moved: false };
     }
-    if (!d.moved) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const shift2 = -(dx / canvas.getBoundingClientRect().width) * (d.toMs - d.fromMs);
-    setVisibleRange([d.fromMs + shift2, d.toMs + shift2]);
-  }, [setVisibleRange]);
+  }, [rangeSelectMode, setDateRangeSelection]);
+  const onMouseMove = reactExports.useCallback((e) => {
+    if (rangeSelectMode) {
+      if (selAnchorRef.current === null) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const [from2, to] = rangeRef.current;
+      const ts = from2 + cx / rect.width * (to - from2);
+      const anchor = selAnchorRef.current;
+      setDateRangeSelection([Math.min(anchor, ts), Math.max(anchor, ts)]);
+    } else {
+      const d = drag.current;
+      if (!d) return;
+      if (zoomRef.current === "month" || zoomRef.current === "week" || zoomRef.current === "day") return;
+      const dx = e.clientX - d.startX;
+      if (Math.abs(dx) > 4) {
+        d.moved = true;
+        setGrabbing(true);
+      }
+      if (!d.moved) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const shift2 = -(dx / canvas.getBoundingClientRect().width) * (d.toMs - d.fromMs);
+      setVisibleRange([d.fromMs + shift2, d.toMs + shift2]);
+    }
+  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange]);
   const onMouseUp = reactExports.useCallback((e) => {
+    if (rangeSelectMode) return;
     const d = drag.current;
     drag.current = null;
     setGrabbing(false);
@@ -7681,63 +7961,107 @@ function TimelineCanvas() {
     const [from2, to] = rangeRef.current;
     const ts = from2 + cx / rect.width * (to - from2);
     const level = zoomRef.current;
-    const bMs = BUCKET_MS[level];
-    const bucketStart = Math.floor(ts / bMs) * bMs;
     if (level === "day") {
-      setSelectedPeriod([bucketStart, bucketStart + bMs]);
+      const dayStart = Math.floor(ts / MS_DAY$2) * MS_DAY$2;
+      setSelectedPeriod([dayStart, dayStart + MS_DAY$2]);
       return;
     }
     const next = NEXT_LEVEL[level];
-    const nextWindow = WINDOW_MS[next];
-    const center = bucketStart + bMs / 2;
-    let newFrom = center - nextWindow / 2;
-    let newTo = newFrom + nextWindow;
+    if (next === "month") {
+      setYearRange(new Date(ts).getFullYear());
+      setZoomLevel("month");
+      return;
+    }
+    if (next === "week") {
+      const d2 = new Date(ts);
+      setMonthRange(new Date(d2.getFullYear(), d2.getMonth(), 1).getTime());
+      setZoomLevel("week");
+      return;
+    }
+    if (next === "day") {
+      const d2 = new Date(ts);
+      const weekStart = new Date(d2.getFullYear(), d2.getMonth(), d2.getDate() - d2.getDay()).getTime();
+      setWeekRange(weekStart);
+      setZoomLevel("day");
+      return;
+    }
+  }, [rangeSelectMode, setSelectedPeriod, setZoomLevel, setVisibleRange, setYearRange, setMonthRange, setWeekRange]);
+  const onMouseLeave = reactExports.useCallback(() => {
+    if (!rangeSelectMode) {
+      drag.current = null;
+      setGrabbing(false);
+    }
+  }, [rangeSelectMode]);
+  const handleLevelChange = reactExports.useCallback((level) => {
     const ext = extentRef.current;
+    if (level === "year") {
+      if (ext) {
+        const pad = (ext[1] - ext[0]) * 0.04 || MS_DAY$2 * 30;
+        setVisibleRange([ext[0] - pad, ext[1] + pad]);
+      }
+      setZoomLevel("year");
+      return;
+    }
+    if (level === "month") {
+      const [from22, to2] = rangeRef.current;
+      const year = new Date((from22 + to2) / 2).getFullYear();
+      setYearRange(year);
+      setZoomLevel("month");
+      return;
+    }
+    if (level === "week") {
+      const [from22, to2] = rangeRef.current;
+      const center2 = (from22 + to2) / 2;
+      const d = new Date(center2);
+      const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+      setMonthRange(monthStart);
+      setZoomLevel("week");
+      return;
+    }
+    if (level === "day") {
+      const [from22, to2] = rangeRef.current;
+      const d = new Date((from22 + to2) / 2);
+      const weekStart = new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay()).getTime();
+      setWeekRange(weekStart);
+      setZoomLevel("day");
+      return;
+    }
+    if (level === zoomRef.current) return;
+    const [from2, to] = rangeRef.current;
+    const center = (from2 + to) / 2;
+    let newFrom = center - WINDOW_MS[level] / 2;
+    let newTo = newFrom + WINDOW_MS[level];
     if (ext) {
       const pad = (ext[1] - ext[0]) * 0.04;
       if (newFrom < ext[0] - pad) {
         newFrom = ext[0] - pad;
-        newTo = newFrom + nextWindow;
+        newTo = newFrom + WINDOW_MS[level];
       }
       if (newTo > ext[1] + pad) {
         newTo = ext[1] + pad;
-        newFrom = newTo - nextWindow;
+        newFrom = newTo - WINDOW_MS[level];
       }
     }
-    setZoomLevel(next);
     setVisibleRange([newFrom, newTo]);
-  }, [setSelectedPeriod, setZoomLevel, setVisibleRange]);
-  const onMouseLeave = reactExports.useCallback(() => {
-    drag.current = null;
-    setGrabbing(false);
-  }, []);
-  const handleLevelChange = reactExports.useCallback((level) => {
-    if (level === zoomRef.current) return;
-    const ext = extentRef.current;
-    if (level === "year" && ext) {
-      const pad = (ext[1] - ext[0]) * 0.04;
-      setVisibleRange([ext[0] - pad, ext[1] + pad]);
-    } else {
-      const [from2, to] = rangeRef.current;
-      const center = (from2 + to) / 2;
-      let newFrom = center - WINDOW_MS[level] / 2;
-      let newTo = newFrom + WINDOW_MS[level];
-      if (ext) {
-        const pad = (ext[1] - ext[0]) * 0.04;
-        if (newFrom < ext[0] - pad) {
-          newFrom = ext[0] - pad;
-          newTo = newFrom + WINDOW_MS[level];
-        }
-        if (newTo > ext[1] + pad) {
-          newTo = ext[1] + pad;
-          newFrom = newTo - WINDOW_MS[level];
-        }
-      }
-      setVisibleRange([newFrom, newTo]);
-    }
     setZoomLevel(level);
-  }, [setVisibleRange, setZoomLevel]);
+  }, [setVisibleRange, setZoomLevel, setYearRange, setMonthRange, setWeekRange]);
   const panLeft = reactExports.useCallback(() => {
+    if (zoomRef.current === "month") {
+      const [from22, to2] = rangeRef.current;
+      setYearRange(new Date((from22 + to2) / 2).getFullYear() - 1);
+      return;
+    }
+    if (zoomRef.current === "week") {
+      const [from22, to2] = rangeRef.current;
+      const mid = new Date((from22 + to2) / 2);
+      setMonthRange(new Date(mid.getFullYear(), mid.getMonth() - 1, 1).getTime());
+      return;
+    }
+    if (zoomRef.current === "day") {
+      const [from22] = rangeRef.current;
+      setWeekRange(from22 - 7 * MS_DAY$2);
+      return;
+    }
     const [from2, to] = rangeRef.current;
     const w2 = to - from2;
     const shift2 = w2 * 0.5;
@@ -7745,8 +8069,24 @@ function TimelineCanvas() {
     let newFrom = from2 - shift2;
     if (ext) newFrom = Math.max(newFrom, ext[0] - (ext[1] - ext[0]) * 0.04);
     setVisibleRange([newFrom, newFrom + w2]);
-  }, [setVisibleRange]);
+  }, [setVisibleRange, setYearRange, setMonthRange]);
   const panRight = reactExports.useCallback(() => {
+    if (zoomRef.current === "month") {
+      const [from22, to2] = rangeRef.current;
+      setYearRange(new Date((from22 + to2) / 2).getFullYear() + 1);
+      return;
+    }
+    if (zoomRef.current === "week") {
+      const [from22, to2] = rangeRef.current;
+      const mid = new Date((from22 + to2) / 2);
+      setMonthRange(new Date(mid.getFullYear(), mid.getMonth() + 1, 1).getTime());
+      return;
+    }
+    if (zoomRef.current === "day") {
+      const [from22] = rangeRef.current;
+      setWeekRange(from22 + 7 * MS_DAY$2);
+      return;
+    }
     const [from2, to] = rangeRef.current;
     const w2 = to - from2;
     const shift2 = w2 * 0.5;
@@ -7754,11 +8094,11 @@ function TimelineCanvas() {
     let newTo = to + shift2;
     if (ext) newTo = Math.min(newTo, ext[1] + (ext[1] - ext[0]) * 0.04);
     setVisibleRange([newTo - w2, newTo]);
-  }, [setVisibleRange]);
+  }, [setVisibleRange, setYearRange, setMonthRange, setWeekRange]);
   const btnStyle = (active) => ({
-    background: active ? "#1a1a1a" : "none",
-    color: active ? "#fff" : "#666",
-    border: active ? "none" : "1px solid #e4e4dc",
+    background: active ? "var(--text)" : "none",
+    color: active ? "var(--bg-app)" : "var(--text-2)",
+    border: active ? "none" : "1px solid var(--border)",
     borderRadius: 5,
     padding: "3px 11px",
     fontSize: 12,
@@ -7767,12 +8107,12 @@ function TimelineCanvas() {
   });
   const navBtnStyle = {
     background: "none",
-    border: "1px solid #e4e4dc",
+    border: "1px solid var(--border)",
     borderRadius: 5,
     padding: "3px 10px",
     fontSize: 13,
     cursor: "pointer",
-    color: "#555"
+    color: "var(--text-2)"
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
@@ -7780,28 +8120,156 @@ function TimelineCanvas() {
       alignItems: "center",
       gap: 3,
       padding: "5px 12px",
-      borderBottom: "1px solid #eaeae4",
-      background: "#fafaf8",
+      borderBottom: "1px solid var(--border-light)",
+      background: "var(--bg-muted)",
       flexShrink: 0
     }, children: [
       ["year", "month", "week", "day"].map((level) => /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => handleLevelChange(level), style: btnStyle(zoomLevel === level), children: LEVEL_LABELS[level] }, level)),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "#bbb", marginLeft: 6 }, children: zoomLevel === "day" ? "click bar to view entries" : "click bar to zoom in" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 1, height: 18, background: "var(--border)", margin: "0 6px", flexShrink: 0 } }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setCurveMode(false), style: btnStyle(!curveMode), title: "Bar chart", children: "▬ Bars" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setCurveMode(true), style: btnStyle(curveMode), title: "Smooth curve", children: "∿ Curve" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", marginLeft: 6 }, children: rangeSelectMode ? "drag to select a date range" : zoomLevel === "day" ? "click bar to view entries" : "click bar to zoom in" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 } }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => {
+            if (rangeSelectMode) {
+              setRangeSelectMode(false);
+              setDateRangeSelection(null);
+              selAnchorRef.current = null;
+            } else {
+              setRangeSelectMode(true);
+            }
+          },
+          style: {
+            background: rangeSelectMode ? "#6366f1" : "none",
+            color: rangeSelectMode ? "#fff" : "#6366f1",
+            border: "1px solid #6366f1",
+            borderRadius: 5,
+            padding: "3px 11px",
+            fontSize: 12,
+            cursor: "pointer",
+            fontWeight: 600,
+            marginRight: 6
+          },
+          children: rangeSelectMode ? "✕ Cancel" : "⊞ Select Range"
+        }
+      ),
       /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: panLeft, style: navBtnStyle, children: "←" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: panRight, style: { ...navBtnStyle, marginLeft: 3 }, children: "→" })
+    ] }),
+    zoomLevel === "day" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 12,
+      padding: "4px 12px",
+      borderBottom: "1px solid var(--border-light)",
+      background: "var(--bg-muted)",
+      flexShrink: 0
+    }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => setWeekRange(selectedWeekStart - 7 * MS_DAY$2),
+          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
+          children: "←"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", minWidth: 160, textAlign: "center" }, children: [
+        new Date(selectedWeekStart).toLocaleString("en-US", { month: "short", day: "numeric" }),
+        " – ",
+        new Date(selectedWeekStart + 6 * MS_DAY$2).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric" })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => setWeekRange(selectedWeekStart + 7 * MS_DAY$2),
+          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
+          children: "→"
+        }
+      )
+    ] }),
+    zoomLevel === "week" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 12,
+      padding: "4px 12px",
+      borderBottom: "1px solid var(--border-light)",
+      background: "var(--bg-muted)",
+      flexShrink: 0
+    }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => {
+            const d = new Date(selectedMonthStart);
+            setMonthRange(new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime());
+          },
+          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
+          children: "←"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", minWidth: 100, textAlign: "center" }, children: new Date(selectedMonthStart).toLocaleString("en-US", { month: "long", year: "numeric" }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => {
+            const d = new Date(selectedMonthStart);
+            setMonthRange(new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime());
+          },
+          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
+          children: "→"
+        }
+      )
+    ] }),
+    zoomLevel === "month" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 12,
+      padding: "4px 12px",
+      borderBottom: "1px solid var(--border-light)",
+      background: "var(--bg-muted)",
+      flexShrink: 0
+    }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => setYearRange(selectedYear - 1),
+          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
+          children: "←"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", minWidth: 48, textAlign: "center" }, children: selectedYear }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => setYearRange(selectedYear + 1),
+          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
+          children: "→"
+        }
+      )
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: containerRef, style: { flex: 1, position: "relative", overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
       "canvas",
       {
         ref: canvasRef,
-        style: { display: "block", width: "100%", height: "100%", cursor: grabbing ? "grabbing" : "crosshair" },
+        style: {
+          display: "block",
+          width: "100%",
+          height: "100%",
+          cursor: rangeSelectMode ? "crosshair" : grabbing ? "grabbing" : "default"
+        },
         onMouseDown,
         onMouseMove,
         onMouseUp,
         onMouseLeave
       }
     ) }),
-    dataExtent && /* @__PURE__ */ jsxRuntimeExports.jsx(Scrollbar, { dataExtent, visibleRange, onPan: setVisibleRange })
+    dataExtent && zoomLevel !== "month" && zoomLevel !== "week" && zoomLevel !== "day" && /* @__PURE__ */ jsxRuntimeExports.jsx(Scrollbar, { dataExtent, visibleRange, onPan: setVisibleRange })
   ] });
 }
 const MS_DAY$1 = 864e5;
@@ -7820,52 +8288,62 @@ const MONTH_NAMES = [
   "December"
 ];
 const DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-function heatColor(count, max) {
-  if (count === 0 || max === 0) return "#f0f0ea";
-  const f2 = count / max;
-  if (f2 < 0.1) return "#fef3c7";
-  if (f2 < 0.25) return "#fde68a";
-  if (f2 < 0.5) return "#fbbf24";
-  if (f2 < 0.75) return "#f59e0b";
-  return "#d97706";
+function heatColorFromF(f2) {
+  if (f2 <= 0) return "var(--bg-subtle)";
+  const pct = Math.round(f2 * 80 + 12);
+  return `color-mix(in srgb, var(--accent) ${pct}%, var(--bg-subtle))`;
 }
-function textColor(count, max) {
-  if (count === 0) return "#c8c8c0";
-  return count / max > 0.5 ? "#fff" : "#555";
+function computeF(count, effectiveMax, scale) {
+  if (count === 0 || effectiveMax === 0) return 0;
+  if (scale === "log") return Math.log(count + 1) / Math.log(effectiveMax + 1);
+  return Math.min(count / effectiveMax, 1);
 }
-function MonthGrid({ year, month, countMap, maxCount, onDayClick }) {
+function heatColor(count, effectiveMax, scale) {
+  return heatColorFromF(computeF(count, effectiveMax, scale));
+}
+function textColor(count, effectiveMax, scale) {
+  if (count === 0) return "var(--text-4)";
+  return computeF(count, effectiveMax, scale) > 0.6 ? "var(--accent-fg)" : "var(--text-2)";
+}
+function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateRangeGroups, onDayClick, onDayMouseDown, onDayMouseEnter }) {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const startDOW = new Date(year, month, 1).getDay();
   const cells = [];
   for (let i = 0; i < startDOW; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "10px 12px", background: "#fff", borderRadius: 8, border: "1px solid #eaeae4" }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, fontWeight: 600, color: "#333", marginBottom: 8 }, children: MONTH_NAMES[month] }),
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "10px 12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border-light)" }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 8 }, children: MONTH_NAMES[month] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }, children: [
-      DOW.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 9, textAlign: "center", color: "#bbb", lineHeight: "14px", height: 14 }, children: d }, d)),
+      DOW.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 9, textAlign: "center", color: "var(--text-4)", lineHeight: "14px", height: 14 }, children: d }, d)),
       cells.map((day, i) => {
         if (day === null) return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 22 } }, i);
         const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
         const count = countMap.get(key) ?? 0;
-        const bg2 = heatColor(count, maxCount);
-        const fg2 = textColor(count, maxCount);
+        const dayTs = new Date(year, month, day).getTime();
+        const inSel = selRange !== null && dayTs >= selRange[0] && dayTs <= selRange[1];
+        const groupForDay = dateRangeGroups.find((gr) => dayTs >= gr.date_from && dayTs < gr.date_to);
+        const bg2 = inSel ? "#c7d2fe" : groupForDay ? `${groupForDay.color}55` : heatColor(count, effectiveMax, scale);
+        const fg2 = inSel ? "#3730a3" : textColor(count, effectiveMax, scale);
         return /* @__PURE__ */ jsxRuntimeExports.jsx(
           "div",
           {
-            onClick: () => count > 0 && onDayClick(new Date(year, month, day).getTime()),
-            title: count > 0 ? `${key}: ${count} entr${count === 1 ? "y" : "ies"}` : key,
+            onClick: () => onDayClick(dayTs),
+            onMouseDown: (e) => onDayMouseDown(dayTs, e),
+            onMouseEnter: () => onDayMouseEnter(dayTs),
+            title: groupForDay ? `${key}: ${count} entr${count === 1 ? "y" : "ies"} · ${groupForDay.name}` : count > 0 ? `${key}: ${count} entr${count === 1 ? "y" : "ies"}` : key,
             style: {
               height: 22,
               borderRadius: 3,
               background: bg2,
-              cursor: count > 0 ? "pointer" : "default",
+              cursor: "pointer",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               fontSize: 9,
               color: fg2,
               fontWeight: 500,
-              transition: "background 0.1s"
+              transition: inSel ? "none" : "background 0.1s",
+              userSelect: "none"
             },
             children: day
           },
@@ -7876,15 +8354,22 @@ function MonthGrid({ year, month, countMap, maxCount, onDayClick }) {
   ] });
 }
 function CalendarHeatmap() {
-  const { selectedGroupId, refreshKey, setSelectedPeriod } = useStore();
+  const { selectedGroupId, refreshKey, setSelectedPeriod, groups, setPendingDateRange, settings } = useStore();
   const [year, setYear] = reactExports.useState((/* @__PURE__ */ new Date()).getFullYear());
   const [countMap, setCM] = reactExports.useState(/* @__PURE__ */ new Map());
-  const [maxCount, setMax] = reactExports.useState(0);
+  const [dataMax, setMax] = reactExports.useState(0);
   const [totalYear, setTotal] = reactExports.useState(0);
+  const scale = settings?.heatmapScale ?? "log";
+  const effectiveMax = (settings?.heatmapMaxCount ?? null) !== null ? settings.heatmapMaxCount : dataMax;
+  const [selRange, setSelRange] = reactExports.useState(null);
+  const selStartRef = reactExports.useRef(null);
+  const selEndRef = reactExports.useRef(null);
+  const isSelectingRef = reactExports.useRef(false);
+  const didSelectRef = reactExports.useRef(false);
   reactExports.useEffect(() => {
     const from2 = new Date(year, 0, 1).getTime();
     const to = new Date(year + 1, 0, 1).getTime();
-    window.api.entries.histogram(from2, to, MS_DAY$1, selectedGroupId ?? void 0).then((buckets) => {
+    window.api.entries.histogram(from2, to, "day", selectedGroupId ?? void 0).then((buckets) => {
       const map2 = /* @__PURE__ */ new Map();
       let max = 0;
       let total = 0;
@@ -7901,41 +8386,87 @@ function CalendarHeatmap() {
       setTotal(total);
     });
   }, [year, selectedGroupId, refreshKey]);
+  reactExports.useEffect(() => {
+    const handleMouseUp = () => {
+      if (!isSelectingRef.current || selStartRef.current === null) return;
+      isSelectingRef.current = false;
+      const start = selStartRef.current;
+      const end = selEndRef.current ?? start;
+      const from2 = Math.min(start, end);
+      const to = Math.max(start, end);
+      if (to > from2) {
+        didSelectRef.current = true;
+        setPendingDateRange([from2, to + MS_DAY$1]);
+      }
+      selStartRef.current = null;
+      selEndRef.current = null;
+      setSelRange(null);
+    };
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => window.removeEventListener("mouseup", handleMouseUp);
+  }, [setPendingDateRange]);
+  const handleDayMouseDown = reactExports.useCallback((ts, e) => {
+    e.preventDefault();
+    selStartRef.current = ts;
+    selEndRef.current = ts;
+    isSelectingRef.current = true;
+    didSelectRef.current = false;
+    setSelRange([ts, ts]);
+  }, []);
+  const handleDayMouseEnter = reactExports.useCallback((ts) => {
+    if (!isSelectingRef.current || selStartRef.current === null) return;
+    selEndRef.current = ts;
+    const from2 = Math.min(selStartRef.current, ts);
+    const to = Math.max(selStartRef.current, ts);
+    setSelRange([from2, to]);
+  }, []);
   const handleDayClick = reactExports.useCallback((ts) => {
+    if (didSelectRef.current) {
+      didSelectRef.current = false;
+      return;
+    }
     setSelectedPeriod([ts, ts + MS_DAY$1]);
   }, [setSelectedPeriod]);
-  const legendSteps = [0, 0.1, 0.3, 0.6, 1];
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, overflowY: "auto", padding: "16px 20px", background: "#f8f8f5" }, children: [
+  const dateRangeGroups = groups.filter(
+    (g) => g.date_from != null && g.date_to != null
+  );
+  const legendFs = [0, 0.2, 0.45, 0.7, 1];
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, overflowY: "auto", padding: "16px 20px", background: "var(--bg-app)" }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
           onClick: () => setYear((y2) => y2 - 1),
-          style: { background: "none", border: "1px solid #e4e4dc", borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 13, color: "#555" },
+          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 13, color: "var(--text-2)" },
           children: "←"
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 18, fontWeight: 700, color: "#1a1a1a", minWidth: 52, textAlign: "center" }, children: year }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 18, fontWeight: 700, color: "var(--text)", minWidth: 52, textAlign: "center" }, children: year }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
           onClick: () => setYear((y2) => y2 + 1),
-          style: { background: "none", border: "1px solid #e4e4dc", borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 13, color: "#555" },
+          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 13, color: "var(--text-2)" },
           children: "→"
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 12, color: "#999" }, children: totalYear > 0 ? `${totalYear} entr${totalYear === 1 ? "y" : "ies"} this year` : "No entries this year" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 12, color: "var(--text-3)" }, children: totalYear > 0 ? `${totalYear} entr${totalYear === 1 ? "y" : "ies"} this year` : "No entries this year" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 12, color: "var(--text-4)" }, children: "· drag across days to create a group" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 } }),
+      dateRangeGroups.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "center", gap: 6 }, children: dateRangeGroups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 4 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 10, height: 10, borderRadius: 2, background: g.color } }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, color: "var(--text-2)" }, children: g.name })
+      ] }, g.name)) }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 4 }, children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, color: "#bbb" }, children: "Less" }),
-        legendSteps.map((f2, i) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, color: "var(--text-4)" }, children: "Less" }),
+        legendFs.map((f2, i) => /* @__PURE__ */ jsxRuntimeExports.jsx(
           "div",
           {
-            style: { width: 14, height: 14, borderRadius: 3, background: heatColor(f2 * (maxCount || 1), maxCount || 1) }
+            style: { width: 14, height: 14, borderRadius: 3, background: heatColorFromF(f2) }
           },
           i
         )),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, color: "#bbb" }, children: "More" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, color: "var(--text-4)" }, children: "More" })
       ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }, children: Array.from({ length: 12 }, (_, m2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -7944,8 +8475,13 @@ function CalendarHeatmap() {
         year,
         month: m2,
         countMap,
-        maxCount,
-        onDayClick: handleDayClick
+        effectiveMax,
+        scale,
+        selRange,
+        dateRangeGroups,
+        onDayClick: handleDayClick,
+        onDayMouseDown: handleDayMouseDown,
+        onDayMouseEnter: handleDayMouseEnter
       },
       m2
     )) })
@@ -7984,7 +8520,7 @@ function Thumb({ entry, size }) {
       "img",
       {
         src: `timeline:///${src}`,
-        style: { width: size, height: size, objectFit: "cover", display: "block", borderRadius: 6, background: "#f4f4ef" },
+        style: { width: size, height: size, objectFit: "cover", display: "block", borderRadius: 6, background: "var(--bg-thumb)" },
         draggable: false
       }
     );
@@ -7994,7 +8530,7 @@ function Thumb({ entry, size }) {
     width: size,
     height: size,
     borderRadius: 6,
-    background: "#f4f4ef",
+    background: "var(--bg-thumb)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center"
@@ -8026,8 +8562,8 @@ function GridCell({ entry, selected, onClick, onDoubleClick, size }) {
         width: size + 20,
         padding: 8,
         borderRadius: 8,
-        background: selected ? "#fffbeb" : "transparent",
-        outline: selected ? "2px solid #f59e0b" : "2px solid transparent",
+        background: selected ? "var(--bg-entry-sel)" : "transparent",
+        outline: selected ? "2px solid var(--accent)" : "2px solid transparent",
         cursor: "pointer",
         userSelect: "none"
       },
@@ -8035,14 +8571,14 @@ function GridCell({ entry, selected, onClick, onDoubleClick, size }) {
         /* @__PURE__ */ jsxRuntimeExports.jsx(Thumb, { entry, size }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
           fontSize: 12,
-          color: "#222",
+          color: "var(--text)",
           maxWidth: size + 12,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
           textAlign: "center"
         }, children: entry.title ?? entry.type }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, color: "#999" }, children: new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) })
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, color: "var(--text-3)" }, children: new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) })
       ]
     }
   );
@@ -8059,8 +8595,8 @@ function ListRow({ entry, selected, onClick, onDoubleClick }) {
         alignItems: "center",
         gap: 12,
         padding: "5px 14px",
-        background: selected ? "#fffbeb" : "transparent",
-        borderLeft: selected ? "3px solid #f59e0b" : "3px solid transparent",
+        background: selected ? "var(--bg-entry-sel)" : "transparent",
+        borderLeft: selected ? "3px solid var(--accent)" : "3px solid transparent",
         cursor: "pointer",
         userSelect: "none",
         fontSize: 13
@@ -8068,7 +8604,7 @@ function ListRow({ entry, selected, onClick, onDoubleClick }) {
       children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(Thumb, { entry, size: 26 }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
-          color: "#222",
+          color: "var(--text)",
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap"
@@ -8084,7 +8620,7 @@ function ListRow({ entry, selected, onClick, onDoubleClick }) {
           padding: "2px 6px",
           justifySelf: "start"
         }, children: entry.type }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "#888", fontSize: 12 }, children: new Date(entry.timestamp).toLocaleString("en-US", {
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-3)", fontSize: 12 }, children: new Date(entry.timestamp).toLocaleString("en-US", {
           month: "short",
           day: "numeric",
           year: "numeric",
@@ -8166,17 +8702,17 @@ function FilesView() {
     }
     return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px" }, children: items.map(renderItem) });
   };
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#fff" }, children: [
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-surface)" }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
       display: "flex",
       alignItems: "center",
       gap: 8,
       padding: "5px 12px",
-      borderBottom: "1px solid #eaeae4",
-      background: "#fafaf8",
+      borderBottom: "1px solid var(--border-light)",
+      background: "var(--bg-muted)",
       flexShrink: 0
     }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "#aaa", letterSpacing: 0.6, textTransform: "uppercase", fontWeight: 700 }, children: "View" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", letterSpacing: 0.6, textTransform: "uppercase", fontWeight: 700 }, children: "View" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 2 }, children: ["list", "small", "medium", "large"].map((m2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
@@ -8187,8 +8723,8 @@ function FilesView() {
         },
         m2
       )) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 1, height: 18, background: "#e4e4dc", margin: "0 4px" } }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "#aaa", letterSpacing: 0.6, textTransform: "uppercase", fontWeight: 700 }, children: "Sort" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 1, height: 18, background: "var(--border)", margin: "0 4px" } }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", letterSpacing: 0.6, textTransform: "uppercase", fontWeight: 700 }, children: "Sort" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs(
         "select",
         {
@@ -8198,7 +8734,8 @@ function FilesView() {
           children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "date", children: "Date" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "title", children: "Title" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "type", children: "Type" })
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "type", children: "Type" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "tag", children: "Tag" })
           ]
         }
       ),
@@ -8211,7 +8748,7 @@ function FilesView() {
           children: sortDir === "desc" ? "↓" : "↑"
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: "auto", fontSize: 12, color: "#999" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: "auto", fontSize: 12, color: "var(--text-3)" }, children: [
         entries.length,
         " ",
         entries.length === 1 ? "item" : "items"
@@ -8222,23 +8759,23 @@ function FilesView() {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      color: "#bbb",
+      color: "var(--text-4)",
       fontSize: 13
     }, children: "No entries" }) : groupedByMonth ? groupedByMonth.map((section) => /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
         position: "sticky",
         top: 0,
         zIndex: 1,
-        background: "linear-gradient(#fff, #fff 70%, rgba(255,255,255,0))",
+        background: "var(--bg-surface)",
         padding: "10px 14px 6px",
         fontSize: 12,
         fontWeight: 700,
-        color: "#555",
+        color: "var(--text-2)",
         letterSpacing: 0.4,
-        borderBottom: "1px solid #eaeae4"
+        borderBottom: "1px solid var(--border-light)"
       }, children: [
         section.label,
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "#bbb", fontWeight: 400 }, children: section.items.length })
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "var(--text-4)", fontWeight: 400 }, children: section.items.length })
       ] }),
       renderItems(section.items)
     ] }, section.key)) : renderItems(entries) })
@@ -8262,9 +8799,9 @@ function IconGrid({ n: n2 }) {
   }, children: Array.from({ length: cells }).map((_, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { background: "currentColor", borderRadius: 1 } }, i)) });
 }
 const toolBtn = (active) => ({
-  background: active ? "#1a1a1a" : "none",
-  color: active ? "#fff" : "#666",
-  border: active ? "none" : "1px solid #e4e4dc",
+  background: active ? "var(--text)" : "none",
+  color: active ? "var(--bg-app)" : "var(--text-2)",
+  border: active ? "none" : "1px solid var(--border)",
   borderRadius: 5,
   padding: "3px 8px",
   fontSize: 12,
@@ -8279,10 +8816,10 @@ const toolBtn = (active) => ({
 const selectStyle = {
   fontSize: 12,
   padding: "3px 6px",
-  border: "1px solid #e4e4dc",
+  border: "1px solid var(--border)",
   borderRadius: 5,
-  background: "#fff",
-  color: "#333"
+  background: "var(--bg-input)",
+  color: "var(--text)"
 };
 const MS_DAY = 864e5;
 function periodLabel(from2, to) {
@@ -8331,10 +8868,10 @@ function AssignDropdown({ selectedIds, groups, onAssign }) {
         style: {
           fontSize: 12,
           padding: "4px 10px",
-          background: "#f59e0b",
+          background: "var(--accent)",
           border: "none",
           borderRadius: 5,
-          color: "#1a1a1a",
+          color: "var(--accent-fg)",
           fontWeight: 600,
           cursor: "pointer"
         },
@@ -8349,15 +8886,15 @@ function AssignDropdown({ selectedIds, groups, onAssign }) {
       position: "absolute",
       top: "calc(100% + 4px)",
       right: 0,
-      background: "#fff",
-      border: "1px solid #e4e4dc",
+      background: "var(--bg-surface)",
+      border: "1px solid var(--border)",
       borderRadius: 8,
       boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
       minWidth: 180,
       zIndex: 50,
       overflow: "hidden"
     }, children: [
-      groups.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "10px 12px", fontSize: 12, color: "#bbb" }, children: "No groups yet" }),
+      groups.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "10px 12px", fontSize: 12, color: "var(--text-4)" }, children: "No groups yet" }),
       groups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
         "div",
         {
@@ -8372,10 +8909,10 @@ function AssignDropdown({ selectedIds, groups, onAssign }) {
             padding: "8px 12px",
             cursor: "pointer",
             fontSize: 13,
-            color: "#333"
+            color: "var(--text)"
           },
           onMouseEnter: (e) => {
-            e.currentTarget.style.background = "#f5f5f0";
+            e.currentTarget.style.background = "var(--bg-subtle)";
           },
           onMouseLeave: (e) => {
             e.currentTarget.style.background = "";
@@ -8398,11 +8935,11 @@ function AssignDropdown({ selectedIds, groups, onAssign }) {
             padding: "8px 12px",
             cursor: "pointer",
             fontSize: 13,
-            color: "#888",
-            borderTop: groups.length > 0 ? "1px solid #eaeae4" : "none"
+            color: "var(--text-3)",
+            borderTop: groups.length > 0 ? "1px solid var(--border-light)" : "none"
           },
           onMouseEnter: (e) => {
-            e.currentTarget.style.background = "#f5f5f0";
+            e.currentTarget.style.background = "var(--bg-subtle)";
           },
           onMouseLeave: (e) => {
             e.currentTarget.style.background = "";
@@ -8438,15 +8975,15 @@ function EntryCard({ entry, onOpen }) {
         width: 140,
         borderRadius: 8,
         overflow: "hidden",
-        background: isSelected ? "#fffbeb" : "#fff",
-        border: `2px solid ${isSelected ? "#f59e0b" : "#e8e8e0"}`,
+        background: isSelected ? "var(--bg-entry-sel)" : "var(--bg-surface)",
+        border: `2px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
         cursor: "pointer",
         userSelect: "none",
         transition: "border-color 0.1s",
         flexShrink: 0
       },
       children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { width: 140, height: 110, position: "relative", overflow: "hidden", background: "#f4f4ef" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { width: 140, height: 110, position: "relative", overflow: "hidden", background: "var(--bg-thumb)" }, children: [
           thumbSrc ? /* @__PURE__ */ jsxRuntimeExports.jsx(
             "img",
             {
@@ -8482,24 +9019,24 @@ function EntryCard({ entry, onOpen }) {
             width: 18,
             height: 18,
             borderRadius: 9,
-            background: "#f59e0b",
+            background: "var(--accent)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             fontSize: 11,
-            color: "#fff"
+            color: "var(--accent-fg)"
           }, children: "✓" })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "7px 8px 8px" }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
             fontSize: 12,
             fontWeight: 500,
-            color: "#222",
+            color: "var(--text)",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap"
           }, children: entry.title ?? entry.type }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "#999", marginTop: 2 }, children: new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) })
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-3)", marginTop: 2 }, children: new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) })
         ] })
       ]
     }
@@ -8539,8 +9076,8 @@ function DayView() {
   const count = entries.length;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
     height: 240,
-    borderTop: "1px solid #e4e4dc",
-    background: "#f8f8f5",
+    borderTop: "1px solid var(--border)",
+    background: "var(--bg-app)",
     display: "flex",
     flexDirection: "column",
     flexShrink: 0
@@ -8550,11 +9087,11 @@ function DayView() {
       alignItems: "center",
       gap: 10,
       padding: "8px 14px",
-      borderBottom: "1px solid #eaeae4",
+      borderBottom: "1px solid var(--border-light)",
       flexShrink: 0
     }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 13, fontWeight: 600, color: "#222" }, children: label }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "#999", marginLeft: 2 }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 13, fontWeight: 600, color: "var(--text)" }, children: label }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-3)", marginLeft: 2 }, children: [
         count,
         " ",
         count === 1 ? "item" : "items"
@@ -8571,7 +9108,7 @@ function DayView() {
             marginLeft: "auto",
             background: "none",
             border: "none",
-            color: "#bbb",
+            color: "var(--text-4)",
             fontSize: 16,
             lineHeight: 1,
             padding: "2px 6px",
@@ -8595,7 +9132,7 @@ function DayView() {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      color: "#bbb",
+      color: "var(--text-4)",
       fontSize: 13
     }, children: "No entries for this period" }) : entries.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(EntryCard, { entry: e, onOpen: setActiveEntryId }, e.id)) })
   ] });
@@ -27478,8 +28015,8 @@ function TagEditor({ tags, onChange, compact }) {
         fontSize: compact ? 10 : 11,
         padding: "2px 6px 2px 8px",
         borderRadius: 10,
-        background: "#f0f0ea",
-        color: "#333",
+        background: "var(--bg-subtle)",
+        color: "var(--text)",
         display: "inline-flex",
         alignItems: "center",
         gap: 3
@@ -27493,7 +28030,7 @@ function TagEditor({ tags, onChange, compact }) {
             style: {
               background: "none",
               border: "none",
-              color: "#999",
+              color: "var(--text-4)",
               fontSize: 11,
               padding: "0 2px",
               cursor: "pointer",
@@ -27523,7 +28060,7 @@ function TagEditor({ tags, onChange, compact }) {
             outline: "none",
             background: "transparent",
             fontSize: compact ? 11 : 12,
-            color: "#333",
+            color: "var(--text)",
             minWidth: 80,
             flex: 1,
             padding: "2px 0"
@@ -27536,8 +28073,8 @@ function TagEditor({ tags, onChange, compact }) {
       top: "calc(100% + 2px)",
       left: 0,
       right: 0,
-      background: "#fff",
-      border: "1px solid #e4e4dc",
+      background: "var(--bg-surface)",
+      border: "1px solid var(--border)",
       borderRadius: 6,
       boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
       zIndex: 20,
@@ -27550,8 +28087,8 @@ function TagEditor({ tags, onChange, compact }) {
           e.preventDefault();
           addByName(t2.name);
         },
-        style: { fontSize: 12, padding: "5px 8px", cursor: "pointer", color: "#333" },
-        onMouseEnter: (e) => e.currentTarget.style.background = "#f5f5f0",
+        style: { fontSize: 12, padding: "5px 8px", cursor: "pointer", color: "var(--text)" },
+        onMouseEnter: (e) => e.currentTarget.style.background = "var(--bg-hover)",
         onMouseLeave: (e) => e.currentTarget.style.background = "",
         children: [
           "#",
@@ -27623,16 +28160,16 @@ function EntryContent({ entry }) {
           draggable: false
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "#888" }, children: dateStr })
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "var(--text-3)" }, children: dateStr })
     ] });
   }
   if (entry.type === "journal") {
     return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "baseline", gap: 10 }, children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 15, fontWeight: 600, color: "#222", flex: 1 }, children: entry.title ?? "(untitled)" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "#999", flexShrink: 0 }, children: dateStr })
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 15, fontWeight: 600, color: "var(--text)", flex: 1 }, children: entry.title ?? "(untitled)" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-3)", flexShrink: 0 }, children: dateStr })
       ] }),
-      entry.rich_text_json ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { borderTop: "1px solid #f0f0ea", paddingTop: 12 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(RichTextView, { json: entry.rich_text_json }) }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "#bbb", fontStyle: "italic" }, children: "No content" })
+      entry.rich_text_json ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { borderTop: "1px solid var(--border-light)", paddingTop: 12 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(RichTextView, { json: entry.rich_text_json }) }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "var(--text-4)", fontStyle: "italic" }, children: "No content" })
     ] });
   }
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 20, padding: "24px 0" }, children: [
@@ -27647,15 +28184,15 @@ function EntryContent({ entry }) {
       fontSize: 28
     }, children: entry.type === "photo" ? "📷" : entry.type === "video" ? "🎬" : entry.type === "audio" ? "🎵" : "📄" }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { textAlign: "center" }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 15, fontWeight: 600, color: "#222", marginBottom: 8 }, children: entry.title ?? "(untitled)" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "#888", marginBottom: 6 }, children: dateStr }),
-      !entry.file_path && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "#bbb", marginTop: 4 }, children: "No file attached" })
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }, children: entry.title ?? "(untitled)" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "var(--text-3)", marginBottom: 6 }, children: dateStr }),
+      !entry.file_path && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-4)", marginTop: 4 }, children: "No file attached" })
     ] }),
     entry.rich_text_json && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
       maxWidth: 520,
       width: "100%",
       textAlign: "left",
-      background: "#f8f8f5",
+      background: "var(--bg-muted)",
       borderRadius: 8,
       padding: 16
     }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(RichTextView, { json: entry.rich_text_json }) })
@@ -27725,9 +28262,9 @@ function EntryModal() {
       children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
         width: 600,
         maxWidth: "90vw",
-        background: "#fff",
+        background: "var(--bg-surface)",
         borderRadius: 12,
-        border: "1px solid #e4e4dc",
+        border: "1px solid var(--border)",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -27738,11 +28275,11 @@ function EntryModal() {
           alignItems: "center",
           gap: 10,
           padding: "12px 16px",
-          borderBottom: "1px solid #eaeae4",
+          borderBottom: "1px solid var(--border-light)",
           flexShrink: 0
         }, children: [
           entry && /* @__PURE__ */ jsxRuntimeExports.jsx(TypeBadge, { type: entry.type }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "#222", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: entry?.title ?? (entry?.type ?? "…") }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: entry?.title ?? (entry?.type ?? "…") }),
           entry?.type === "journal" && /* @__PURE__ */ jsxRuntimeExports.jsx(
             "button",
             {
@@ -27750,7 +28287,7 @@ function EntryModal() {
                 openJournalModal(entry);
                 setActiveEntryId(null);
               },
-              style: { background: "none", border: "1px solid #e4e4dc", color: "#666", fontSize: 12, padding: "2px 8px", borderRadius: 4, cursor: "pointer" },
+              style: { background: "none", border: "1px solid var(--border)", color: "var(--text-2)", fontSize: 12, padding: "2px 8px", borderRadius: 4, cursor: "pointer" },
               children: "Edit"
             }
           ),
@@ -27758,20 +28295,20 @@ function EntryModal() {
             "button",
             {
               onClick: () => setActiveEntryId(null),
-              style: { background: "none", border: "none", color: "#bbb", fontSize: 18, padding: "2px 6px", borderRadius: 4, lineHeight: 1 },
+              style: { background: "none", border: "none", color: "var(--text-4)", fontSize: 18, padding: "2px 6px", borderRadius: 4, lineHeight: 1 },
               children: "✕"
             }
           )
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "24px 32px", minHeight: 220 }, children: entry ? /* @__PURE__ */ jsxRuntimeExports.jsx(EntryContent, { entry }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: 160, color: "#999" }, children: "Loading…" }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "24px 32px", minHeight: 220 }, children: entry ? /* @__PURE__ */ jsxRuntimeExports.jsx(EntryContent, { entry }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: 160, color: "var(--text-3)" }, children: "Loading…" }) }),
         entry && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
           padding: "10px 16px",
-          borderTop: "1px solid #eaeae4",
+          borderTop: "1px solid var(--border-light)",
           display: "flex",
           alignItems: "center",
           gap: 10
         }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "#aaa", flexShrink: 0 }, children: "Tags" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0 }, children: "Tags" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(TagEditor, { tags: entryTags, onChange: handleTagsChange }) })
         ] }),
         periodEntries.length > 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
@@ -27779,7 +28316,7 @@ function EntryModal() {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "10px 16px",
-          borderTop: "1px solid #eaeae4",
+          borderTop: "1px solid var(--border-light)",
           flexShrink: 0
         }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -27788,9 +28325,9 @@ function EntryModal() {
               onClick: navigatePrev,
               disabled: !hasPrev,
               style: {
-                background: hasPrev ? "#f0f0ea" : "transparent",
-                border: "1px solid #e4e4dc",
-                color: hasPrev ? "#333" : "#ccc",
+                background: hasPrev ? "var(--bg-subtle)" : "transparent",
+                border: "1px solid var(--border)",
+                color: hasPrev ? "var(--text)" : "var(--text-4)",
                 borderRadius: 6,
                 padding: "5px 14px",
                 fontSize: 13
@@ -27798,7 +28335,7 @@ function EntryModal() {
               children: "← Prev"
             }
           ),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "#999" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-3)" }, children: [
             idx + 1,
             " / ",
             periodEntries.length
@@ -27809,9 +28346,9 @@ function EntryModal() {
               onClick: navigateNext,
               disabled: !hasNext,
               style: {
-                background: hasNext ? "#f0f0ea" : "transparent",
-                border: "1px solid #e4e4dc",
-                color: hasNext ? "#333" : "#ccc",
+                background: hasNext ? "var(--bg-subtle)" : "transparent",
+                border: "1px solid var(--border)",
+                color: hasNext ? "var(--text)" : "var(--text-4)",
                 borderRadius: 6,
                 padding: "5px 14px",
                 fontSize: 13
@@ -27824,7 +28361,7 @@ function EntryModal() {
     }
   );
 }
-const PRESET_COLORS = [
+const PRESET_COLORS$1 = [
   "#ef4444",
   "#f97316",
   "#f59e0b",
@@ -27878,7 +28415,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
           paddingTop: 5,
           paddingBottom: 5,
           borderRadius: 6,
-          background: isSelected ? "#e5e1d8" : hovered ? "#eae8e2" : "transparent",
+          background: isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
           cursor: "pointer",
           userSelect: "none"
         },
@@ -27893,7 +28430,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
               style: {
                 width: 12,
                 fontSize: 8,
-                color: "#bbb",
+                color: "var(--text-4)",
                 textAlign: "center",
                 flexShrink: 0,
                 visibility: children.length > 0 ? "visible" : "hidden",
@@ -27907,7 +28444,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 9, height: 9, borderRadius: 2, background: group.color, flexShrink: 0 } }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
             fontSize: 13,
-            color: "#333",
+            color: "var(--text)",
             flex: 1,
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -27927,7 +28464,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
                   border: "none",
                   padding: "1px 4px",
                   fontSize: 10,
-                  color: "#999",
+                  color: "var(--text-3)",
                   borderRadius: 3,
                   cursor: "pointer"
                 },
@@ -27947,7 +28484,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
                   border: "none",
                   padding: "1px 4px",
                   fontSize: 10,
-                  color: "#999",
+                  color: "var(--text-3)",
                   borderRadius: 3,
                   cursor: "pointer"
                 },
@@ -27977,7 +28514,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
 function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, onChange, onTagsChange, onSubmit, onCancel }) {
   const parentOptions = groups.filter((g) => g.parent_id === null && g.id !== editTargetId);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-    borderTop: "1px solid #e4e4dc",
+    borderTop: "1px solid var(--border)",
     paddingTop: 12,
     marginTop: 6,
     display: "flex",
@@ -27985,7 +28522,7 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
     gap: 8,
     flexShrink: 0
   }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "#aaa" }, children: mode === "create" ? "New Group" : "Edit Group" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)" }, children: mode === "create" ? "New Group" : "Edit Group" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(
       "input",
       {
@@ -28001,11 +28538,11 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
           width: "100%",
           padding: "5px 8px",
           fontSize: 13,
-          border: "1px solid #d8d8d0",
+          border: "1px solid var(--border-strong)",
           borderRadius: 5,
-          background: "#fff",
+          background: "var(--bg-input)",
           outline: "none",
-          color: "#1a1a1a"
+          color: "var(--text)"
         }
       }
     ),
@@ -28017,10 +28554,10 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
         style: {
           fontSize: 12,
           padding: "4px 6px",
-          border: "1px solid #d8d8d0",
+          border: "1px solid var(--border-strong)",
           borderRadius: 5,
-          background: "#fff",
-          color: "#444"
+          background: "var(--bg-input)",
+          color: "var(--text-2)"
         },
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "No parent (root group)" }),
@@ -28029,10 +28566,10 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
       }
     ),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "#aaa", marginBottom: 3 }, children: "Tags" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", marginBottom: 3 }, children: "Tags" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(TagEditor, { tags, onChange: onTagsChange, compact: true })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 4 }, children: PRESET_COLORS.map((c) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 4 }, children: PRESET_COLORS$1.map((c) => /* @__PURE__ */ jsxRuntimeExports.jsx(
       "div",
       {
         onClick: () => onChange(name, c, parentId),
@@ -28041,7 +28578,7 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
           borderRadius: 4,
           background: c,
           cursor: "pointer",
-          outline: color === c ? "2px solid #333" : "2px solid transparent",
+          outline: color === c ? "2px solid var(--text)" : "2px solid transparent",
           outlineOffset: 1
         }
       },
@@ -28058,8 +28595,8 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
             padding: "5px 0",
             fontSize: 12,
             fontWeight: 600,
-            background: name.trim() ? "#1a1a1a" : "#d4d4d0",
-            color: "#fff",
+            background: name.trim() ? "var(--text)" : "var(--border-strong)",
+            color: name.trim() ? "var(--bg-app)" : "var(--text-4)",
             border: "none",
             borderRadius: 5,
             cursor: name.trim() ? "pointer" : "default"
@@ -28076,9 +28613,9 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
             fontSize: 12,
             cursor: "pointer",
             background: "none",
-            border: "1px solid #d8d8d0",
+            border: "1px solid var(--border-strong)",
             borderRadius: 5,
-            color: "#666"
+            color: "var(--text-2)"
           },
           children: "Cancel"
         }
@@ -28092,7 +28629,7 @@ function GroupSidebar() {
   const [mode, setMode] = reactExports.useState("idle");
   const [editTarget, setEditTarget] = reactExports.useState(null);
   const [formName, setFormName] = reactExports.useState("");
-  const [formColor, setFormColor] = reactExports.useState(PRESET_COLORS[7]);
+  const [formColor, setFormColor] = reactExports.useState(PRESET_COLORS$1[7]);
   const [formParentId, setFormParentId] = reactExports.useState(null);
   const [formTags, setFormTags] = reactExports.useState([]);
   const [pendingTagNames, setPendingTagNames] = reactExports.useState([]);
@@ -28113,7 +28650,7 @@ function GroupSidebar() {
   }, [setGroups]);
   const openCreate = () => {
     setFormName("");
-    setFormColor(PRESET_COLORS[7]);
+    setFormColor(PRESET_COLORS$1[7]);
     setFormParentId(null);
     setEditTarget(null);
     setMode("create");
@@ -28163,15 +28700,15 @@ function GroupSidebar() {
   const tree = buildTree(groups);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { style: {
     width: 220,
-    background: "#f2f2ed",
-    borderRight: "1px solid #e4e4dc",
+    background: "var(--bg-sidebar)",
+    borderRight: "1px solid var(--border)",
     padding: "12px 8px 12px 10px",
     display: "flex",
     flexDirection: "column",
     overflow: "hidden"
   }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", marginBottom: 8, paddingLeft: 2 }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#aaa", flex: 1, margin: 0 }, children: "Groups" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "var(--text-4)", flex: 1, margin: 0 }, children: "Groups" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
@@ -28179,9 +28716,9 @@ function GroupSidebar() {
           title: "New group",
           style: {
             background: "none",
-            border: "1px solid #d8d8d0",
+            border: "1px solid var(--border-strong)",
             borderRadius: 4,
-            color: "#666",
+            color: "var(--text-2)",
             fontSize: 14,
             lineHeight: 1,
             padding: "1px 6px",
@@ -28203,20 +28740,20 @@ function GroupSidebar() {
             padding: "5px 6px",
             borderRadius: 6,
             marginBottom: 4,
-            background: selectedGroupId === null ? "#e5e1d8" : "transparent",
+            background: selectedGroupId === null ? "var(--bg-selected)" : "transparent",
             cursor: "pointer",
             userSelect: "none",
             fontSize: 13,
-            color: "#555"
+            color: "var(--text-2)"
           },
           children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 12, flexShrink: 0 } }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 9, height: 9, borderRadius: 2, background: "#c8c8c0", flexShrink: 0 } }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 9, height: 9, borderRadius: 2, background: "var(--scrollbar-thumb)", flexShrink: 0 } }),
             "All entries"
           ]
         }
       ),
-      groups.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { style: { fontSize: 12, color: "#bbb", paddingLeft: 20, marginTop: 4 }, children: "No groups yet" }) : tree.map((node) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+      groups.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { style: { fontSize: 12, color: "var(--text-4)", paddingLeft: 20, marginTop: 4 }, children: "No groups yet" }) : tree.map((node) => /* @__PURE__ */ jsxRuntimeExports.jsx(
         GroupNode,
         {
           node,
@@ -28270,13 +28807,13 @@ function TBtn({
         onPress();
       },
       style: {
-        background: active ? "#ede9e0" : "none",
+        background: active ? "var(--bg-hover)" : "none",
         border: "none",
         borderRadius: 4,
         padding: "3px 8px",
         fontSize: 13,
         cursor: "pointer",
-        color: active ? "#1a1a1a" : "#666",
+        color: active ? "var(--text)" : "var(--text-2)",
         fontWeight: active ? 700 : 400,
         lineHeight: 1.4
       },
@@ -28376,9 +28913,9 @@ function JournalModal() {
         width: 660,
         maxWidth: "92vw",
         maxHeight: "88vh",
-        background: "#fff",
+        background: "var(--bg-surface)",
         borderRadius: 12,
-        border: "1px solid #e4e4dc",
+        border: "1px solid var(--border)",
         boxShadow: "0 8px 40px rgba(0,0,0,0.14)",
         display: "flex",
         flexDirection: "column",
@@ -28389,7 +28926,7 @@ function JournalModal() {
           alignItems: "center",
           gap: 10,
           padding: "12px 16px",
-          borderBottom: "1px solid #eaeae4",
+          borderBottom: "1px solid var(--border-light)",
           flexShrink: 0
         }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
@@ -28402,12 +28939,12 @@ function JournalModal() {
             borderRadius: 4,
             padding: "2px 6px"
           }, children: "Journal" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "#444", flex: 1 }, children: isEdit ? "Edit Entry" : "New Entry" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text-2)", flex: 1 }, children: isEdit ? "Edit Entry" : "New Entry" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(
             "button",
             {
               onClick: closeJournalModal,
-              style: { background: "none", border: "none", color: "#bbb", fontSize: 18, padding: "2px 6px", borderRadius: 4, cursor: "pointer" },
+              style: { background: "none", border: "none", color: "var(--text-4)", fontSize: 18, padding: "2px 6px", borderRadius: 4, cursor: "pointer" },
               children: "✕"
             }
           )
@@ -28417,7 +28954,7 @@ function JournalModal() {
           gridTemplateColumns: "1fr auto auto",
           gap: 8,
           padding: "10px 16px",
-          borderBottom: "1px solid #f0f0ea",
+          borderBottom: "1px solid var(--border-light)",
           flexShrink: 0,
           alignItems: "center"
         }, children: [
@@ -28431,11 +28968,11 @@ function JournalModal() {
                 padding: "6px 10px",
                 fontSize: 14,
                 fontWeight: 500,
-                border: "1px solid #e4e4dc",
+                border: "1px solid var(--border)",
                 borderRadius: 6,
-                background: "#fafaf8",
+                background: "var(--bg-muted)",
                 outline: "none",
-                color: "#1a1a1a"
+                color: "var(--text)"
               }
             }
           ),
@@ -28448,11 +28985,11 @@ function JournalModal() {
               style: {
                 padding: "6px 8px",
                 fontSize: 13,
-                border: "1px solid #e4e4dc",
+                border: "1px solid var(--border)",
                 borderRadius: 6,
-                background: "#fafaf8",
+                background: "var(--bg-muted)",
                 outline: "none",
-                color: "#444"
+                color: "var(--text-2)"
               }
             }
           ),
@@ -28464,10 +29001,10 @@ function JournalModal() {
               style: {
                 padding: "6px 8px",
                 fontSize: 13,
-                border: "1px solid #e4e4dc",
+                border: "1px solid var(--border)",
                 borderRadius: 6,
-                background: "#fafaf8",
-                color: "#444"
+                background: "var(--bg-muted)",
+                color: "var(--text-2)"
               },
               children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "No group" }),
@@ -28481,20 +29018,20 @@ function JournalModal() {
           alignItems: "center",
           gap: 1,
           padding: "5px 10px",
-          borderBottom: "1px solid #f0f0ea",
+          borderBottom: "1px solid var(--border-light)",
           flexShrink: 0,
-          background: "#fafaf8"
+          background: "var(--bg-muted)"
         }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("bold"), onPress: () => editor.chain().focus().toggleBold().run(), title: "Bold", children: /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "B" }) }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("italic"), onPress: () => editor.chain().focus().toggleItalic().run(), title: "Italic", children: /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "I" }) }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("strike"), onPress: () => editor.chain().focus().toggleStrike().run(), title: "Strikethrough", children: /* @__PURE__ */ jsxRuntimeExports.jsx("s", { children: "S" }) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "#e4e4dc", margin: "2px 4px", alignSelf: "stretch" } }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "var(--border)", margin: "2px 4px", alignSelf: "stretch" } }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("heading", { level: 1 }), onPress: () => editor.chain().focus().toggleHeading({ level: 1 }).run(), title: "Heading 1", children: "H1" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("heading", { level: 2 }), onPress: () => editor.chain().focus().toggleHeading({ level: 2 }).run(), title: "Heading 2", children: "H2" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "#e4e4dc", margin: "2px 4px", alignSelf: "stretch" } }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "var(--border)", margin: "2px 4px", alignSelf: "stretch" } }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("bulletList"), onPress: () => editor.chain().focus().toggleBulletList().run(), title: "Bullet list", children: "• List" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("orderedList"), onPress: () => editor.chain().focus().toggleOrderedList().run(), title: "Numbered list", children: "1. List" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "#e4e4dc", margin: "2px 4px", alignSelf: "stretch" } }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "var(--border)", margin: "2px 4px", alignSelf: "stretch" } }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("blockquote"), onPress: () => editor.chain().focus().toggleBlockquote().run(), title: "Blockquote", children: '"' }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("code"), onPress: () => editor.chain().focus().toggleCode().run(), title: "Inline code", children: "`" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { flex: 1 } }),
@@ -28514,11 +29051,11 @@ function JournalModal() {
           alignItems: "center",
           gap: 8,
           padding: "10px 16px",
-          borderTop: "1px solid #eaeae4",
+          borderTop: "1px solid var(--border-light)",
           flexShrink: 0,
-          background: "#fafaf8"
+          background: "var(--bg-muted)"
         }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 12, color: "#ccc", marginRight: "auto" }, children: "⌘↵ to save · Esc to cancel" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 12, color: "var(--text-4)", marginRight: "auto" }, children: "⌘↵ to save · Esc to cancel" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(
             "button",
             {
@@ -28527,9 +29064,9 @@ function JournalModal() {
                 padding: "6px 16px",
                 fontSize: 13,
                 background: "none",
-                border: "1px solid #e4e4dc",
+                border: "1px solid var(--border)",
                 borderRadius: 6,
-                color: "#666",
+                color: "var(--text-2)",
                 cursor: "pointer"
               },
               children: "Cancel"
@@ -28544,10 +29081,10 @@ function JournalModal() {
                 padding: "6px 20px",
                 fontSize: 13,
                 fontWeight: 600,
-                background: saving ? "#d4d4d0" : "#1a1a1a",
+                background: saving ? "var(--border-strong)" : "var(--text)",
                 border: "none",
                 borderRadius: 6,
-                color: "#fff",
+                color: "var(--bg-app)",
                 cursor: saving ? "default" : "pointer"
               },
               children: saving ? "Saving…" : isEdit ? "Save" : "Create"
@@ -28595,14 +29132,14 @@ function ResultCard({ entry, onOpen }) {
         width: 140,
         borderRadius: 8,
         overflow: "hidden",
-        background: isSelected ? "#fffbeb" : "#fff",
-        border: `2px solid ${isSelected ? "#f59e0b" : "#e8e8e0"}`,
+        background: isSelected ? "var(--bg-entry-sel)" : "var(--bg-surface)",
+        border: `2px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
         cursor: "pointer",
         userSelect: "none",
         flexShrink: 0
       },
       children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 140, height: 110, position: "relative", overflow: "hidden", background: "#f4f4ef" }, children: thumbSrc ? /* @__PURE__ */ jsxRuntimeExports.jsx("img", { src: thumbSrc, style: { width: "100%", height: "100%", objectFit: "cover" }, draggable: false }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 140, height: 110, position: "relative", overflow: "hidden", background: "var(--bg-thumb)" }, children: thumbSrc ? /* @__PURE__ */ jsxRuntimeExports.jsx("img", { src: thumbSrc, style: { width: "100%", height: "100%", objectFit: "cover" }, draggable: false }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
           width: "100%",
           height: "100%",
           display: "flex",
@@ -28625,12 +29162,12 @@ function ResultCard({ entry, onOpen }) {
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
             fontSize: 12,
             fontWeight: 500,
-            color: "#222",
+            color: "var(--text)",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap"
           }, children: entry.title ?? entry.type }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "#999", marginTop: 2 }, children: new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) })
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-3)", marginTop: 2 }, children: new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) })
         ] })
       ]
     }
@@ -28641,8 +29178,8 @@ function SearchResults() {
   if (searchResults === null) return null;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
     height: 240,
-    borderTop: "1px solid #e4e4dc",
-    background: "#f8f8f5",
+    borderTop: "1px solid var(--border)",
+    background: "var(--bg-app)",
     display: "flex",
     flexDirection: "column",
     flexShrink: 0
@@ -28652,11 +29189,11 @@ function SearchResults() {
       alignItems: "center",
       gap: 10,
       padding: "8px 14px",
-      borderBottom: "1px solid #eaeae4",
+      borderBottom: "1px solid var(--border-light)",
       flexShrink: 0
     }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 13, fontWeight: 600, color: "#222" }, children: "Search results" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "#999" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 13, fontWeight: 600, color: "var(--text)" }, children: "Search results" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-3)" }, children: [
         searchResults.length,
         " ",
         searchResults.length === 1 ? "match" : "matches"
@@ -28669,7 +29206,7 @@ function SearchResults() {
             marginLeft: "auto",
             background: "none",
             border: "none",
-            color: "#bbb",
+            color: "var(--text-4)",
             fontSize: 16,
             lineHeight: 1,
             padding: "2px 6px",
@@ -28694,7 +29231,7 @@ function SearchResults() {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      color: "#bbb",
+      color: "var(--text-4)",
       fontSize: 13
     }, children: "No matches" }) : searchResults.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(ResultCard, { entry: e, onOpen: setActiveEntryId }, e.id)) })
   ] });
@@ -28787,17 +29324,18 @@ function SearchBar() {
     setTags(list);
     setNewTagName("");
   };
+  const isActive2 = open || activeFilterCount > 0;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { ref: wrapRef, style: { position: "relative", display: "flex", alignItems: "center", gap: 4 }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
       display: "flex",
       alignItems: "center",
-      background: "#fff",
-      border: "1px solid #e4e4dc",
+      background: "var(--bg-input)",
+      border: "1px solid var(--border)",
       borderRadius: 5,
       padding: "0 6px",
       height: 26
     }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "#bbb", fontSize: 12, marginRight: 4 }, children: "⌕" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-4)", fontSize: 12, marginRight: 4 }, children: "⌕" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "input",
         {
@@ -28814,7 +29352,7 @@ function SearchBar() {
             background: "transparent",
             fontSize: 12,
             width: 140,
-            color: "#333"
+            color: "var(--text)"
           }
         }
       ),
@@ -28826,7 +29364,7 @@ function SearchBar() {
           style: {
             background: "none",
             border: "none",
-            color: "#bbb",
+            color: "var(--text-4)",
             fontSize: 13,
             cursor: "pointer",
             padding: "0 4px",
@@ -28842,9 +29380,9 @@ function SearchBar() {
         onClick: () => setOpen((o) => !o),
         title: "Filters",
         style: {
-          background: open || activeFilterCount > 0 ? "#1a1a1a" : "none",
-          color: open || activeFilterCount > 0 ? "#fff" : "#666",
-          border: "1px solid " + (open || activeFilterCount > 0 ? "#1a1a1a" : "#e4e4dc"),
+          background: isActive2 ? "var(--text)" : "none",
+          color: isActive2 ? "var(--bg-app)" : "var(--text-2)",
+          border: "1px solid " + (isActive2 ? "var(--text)" : "var(--border)"),
           borderRadius: 5,
           padding: "3px 10px",
           fontSize: 12,
@@ -28856,8 +29394,8 @@ function SearchBar() {
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Filter" }),
           activeFilterCount > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
-            background: "#f59e0b",
-            color: "#1a1a1a",
+            background: "var(--accent)",
+            color: "var(--accent-fg)",
             borderRadius: 8,
             padding: "0 5px",
             fontSize: 10,
@@ -28877,8 +29415,8 @@ function SearchBar() {
           top: "calc(100% + 6px)",
           right: 0,
           width: 320,
-          background: "#fff",
-          border: "1px solid #e4e4dc",
+          background: "var(--bg-surface)",
+          border: "1px solid var(--border)",
           borderRadius: 8,
           boxShadow: "0 6px 24px rgba(0,0,0,0.12)",
           padding: 12,
@@ -28899,7 +29437,7 @@ function SearchBar() {
           )) }) }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(FilterSection, { label: "Date range", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 6, alignItems: "center" }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "date", value: fromDate, onChange: (e) => setFromDate(e.target.value), style: inputStyle }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "#aaa" }, children: "to" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)" }, children: "to" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "date", value: toDate, onChange: (e) => setToDate(e.target.value), style: inputStyle })
           ] }) }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(FilterSection, { label: "File name", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -28934,8 +29472,8 @@ function SearchBar() {
                   style: {
                     padding: "3px 10px",
                     fontSize: 11,
-                    background: newTagName.trim() ? "#1a1a1a" : "#d4d4d0",
-                    color: "#fff",
+                    background: newTagName.trim() ? "var(--text)" : "var(--border-strong)",
+                    color: newTagName.trim() ? "var(--bg-app)" : "var(--text-4)",
                     border: "none",
                     borderRadius: 4,
                     cursor: newTagName.trim() ? "pointer" : "default"
@@ -28958,8 +29496,8 @@ function SearchBar() {
                   padding: "5px 0",
                   fontSize: 12,
                   fontWeight: 600,
-                  background: "#1a1a1a",
-                  color: "#fff",
+                  background: "var(--text)",
+                  color: "var(--bg-app)",
                   border: "none",
                   borderRadius: 5,
                   cursor: "pointer"
@@ -28975,9 +29513,9 @@ function SearchBar() {
                   padding: "5px 12px",
                   fontSize: 12,
                   background: "none",
-                  border: "1px solid #e4e4dc",
+                  border: "1px solid var(--border)",
                   borderRadius: 5,
-                  color: "#666",
+                  color: "var(--text-2)",
                   cursor: "pointer"
                 },
                 children: "Clear"
@@ -28991,12 +29529,12 @@ function SearchBar() {
 }
 function FilterSection({ label, children }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "#aaa", marginBottom: 4 }, children: label }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", marginBottom: 4 }, children: label }),
     children
   ] });
 }
 function TagPicker({ tags, selected, onToggle }) {
-  if (tags.length === 0) return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "#bbb" }, children: "No tags yet" });
+  if (tags.length === 0) return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-4)" }, children: "No tags yet" });
   return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, maxHeight: 100, overflowY: "auto" }, children: tags.map((t2) => /* @__PURE__ */ jsxRuntimeExports.jsxs("button", { onClick: () => onToggle(t2.id), style: chipStyle(selected.has(t2.id)), children: [
     "#",
     t2.name
@@ -29006,25 +29544,1006 @@ const chipStyle = (active) => ({
   fontSize: 11,
   padding: "3px 8px",
   borderRadius: 10,
-  background: active ? "#1a1a1a" : "#f0f0ea",
-  color: active ? "#fff" : "#555",
+  background: active ? "var(--text)" : "var(--bg-subtle)",
+  color: active ? "var(--bg-app)" : "var(--text-2)",
   border: "none",
   cursor: "pointer"
 });
 const inputStyle = {
   fontSize: 12,
   padding: "3px 6px",
-  border: "1px solid #d8d8d0",
+  border: "1px solid var(--border-strong)",
   borderRadius: 4,
-  background: "#fff",
-  color: "#333",
+  background: "var(--bg-input)",
+  color: "var(--text)",
   outline: "none"
 };
+const THEMES = [
+  { name: "light", label: "Light", preview: { bg: "#f8f8f5", surface: "#ffffff", accent: "#f59e0b" } },
+  { name: "dark", label: "Dark", preview: { bg: "#111110", surface: "#1c1c1a", accent: "#f59e0b" } },
+  { name: "sepia", label: "Sepia", preview: { bg: "#f2ede3", surface: "#fdf8f0", accent: "#b87333" } },
+  { name: "midnight", label: "Midnight", preview: { bg: "#0d0f1a", surface: "#141620", accent: "#7c6bff" } },
+  { name: "sky", label: "Sky", preview: { bg: "#eef4fb", surface: "#f8fbff", accent: "#0284c7" } }
+];
+function SettingsView() {
+  const { settings, setSettings } = useStore();
+  const [pendingLibraryPath, setPendingLibraryPath] = reactExports.useState(null);
+  const [fileCount, setFileCount] = reactExports.useState(0);
+  const [migrating, setMigrating] = reactExports.useState(false);
+  const [migrateError, setMigrateError] = reactExports.useState(null);
+  const [dupScanMode, setDupScanMode] = reactExports.useState("hash");
+  const [dupScanning, setDupScanning] = reactExports.useState(false);
+  const [dupGroups, setDupGroups] = reactExports.useState(null);
+  const [pathHealth, setPathHealth] = reactExports.useState({});
+  const [resolving, setResolving] = reactExports.useState(null);
+  function pathColor(p2) {
+    const h = pathHealth[p2];
+    if (!h) return "var(--text-2)";
+    if (h.foundRatio !== null) {
+      if (h.foundRatio === 0) return "var(--text-4)";
+      if (h.foundRatio < 1) return "#d97706";
+      return "var(--text)";
+    }
+    return h.exists ? "var(--text-2)" : "var(--text-4)";
+  }
+  function needsResolve(p2) {
+    const h = pathHealth[p2];
+    if (!h) return false;
+    if (!h.exists) return true;
+    if (h.foundRatio !== null && h.foundRatio < 1) return true;
+    return false;
+  }
+  reactExports.useEffect(() => {
+    window.api.settings.get().then(async (s) => {
+      setSettings(s);
+      setDupScanMode(s.duplicateScanMode ?? "hash");
+      const check = await window.api.settings.checkPaths();
+      const next = {};
+      next[s.libraryPath] = { exists: check.libraryExists, foundRatio: null };
+      for (const { path: p2, exists } of check.watchedFolders) {
+        next[p2] = { exists, foundRatio: null };
+      }
+      setPathHealth(next);
+    });
+  }, [setSettings]);
+  if (!settings) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 32, color: "var(--text-3)", fontSize: 13 }, children: "Loading settings…" });
+  }
+  async function setMode(mode) {
+    const next = { ...settings, importMode: mode };
+    await window.api.settings.set({ importMode: mode });
+    setSettings(next);
+  }
+  async function setTheme(theme) {
+    const next = { ...settings, theme };
+    await window.api.settings.set({ theme });
+    setSettings(next);
+  }
+  async function pickLibraryPath() {
+    const chosen = await window.api.settings.pickFolder();
+    if (!chosen || chosen === settings.libraryPath) return;
+    const count = await window.api.settings.getLibraryFileCount();
+    setFileCount(count);
+    setPendingLibraryPath(chosen);
+    setMigrateError(null);
+  }
+  async function confirmMigration() {
+    if (!pendingLibraryPath) return;
+    setMigrating(true);
+    setMigrateError(null);
+    try {
+      await window.api.settings.migrateLibrary(pendingLibraryPath);
+      const next = { ...settings, libraryPath: pendingLibraryPath };
+      setSettings(next);
+      setPendingLibraryPath(null);
+    } catch (e) {
+      setMigrateError(e?.message ?? "Migration failed");
+    } finally {
+      setMigrating(false);
+    }
+  }
+  async function addWatchedFolder() {
+    const chosen = await window.api.settings.pickFolder();
+    if (!chosen) return;
+    if (settings.watchedFolders.includes(chosen)) return;
+    const next = { ...settings, watchedFolders: [...settings.watchedFolders, chosen] };
+    await window.api.settings.set({ watchedFolders: next.watchedFolders });
+    setSettings(next);
+  }
+  async function resolveWatchedFolder(oldPath) {
+    const chosen = await window.api.settings.pickFolder();
+    if (!chosen) return;
+    setResolving(oldPath);
+    try {
+      const { found: found2, total } = await window.api.settings.resolveWatchedFolder(oldPath, chosen);
+      const foundRatio = total === 0 ? 1 : found2 / total;
+      const next = { ...settings, watchedFolders: settings.watchedFolders.map((f2) => f2 === oldPath ? chosen : f2) };
+      setSettings(next);
+      setPathHealth((prev) => {
+        const copy2 = { ...prev };
+        delete copy2[oldPath];
+        copy2[chosen] = { exists: true, foundRatio };
+        return copy2;
+      });
+    } finally {
+      setResolving(null);
+    }
+  }
+  async function resolveLibraryPath() {
+    const chosen = await window.api.settings.pickFolder();
+    if (!chosen) return;
+    setResolving(settings.libraryPath);
+    try {
+      const { found: found2, total } = await window.api.settings.relocateLibrary(chosen);
+      const foundRatio = total === 0 ? 1 : found2 / total;
+      const next = { ...settings, libraryPath: chosen };
+      setSettings(next);
+      setPathHealth((prev) => {
+        const copy2 = { ...prev };
+        delete copy2[settings.libraryPath];
+        copy2[chosen] = { exists: true, foundRatio };
+        return copy2;
+      });
+    } finally {
+      setResolving(null);
+    }
+  }
+  async function changeDupScanMode(mode) {
+    setDupScanMode(mode);
+    setDupGroups(null);
+    const next = { ...settings, duplicateScanMode: mode };
+    await window.api.settings.set({ duplicateScanMode: mode });
+    setSettings(next);
+  }
+  async function runDupScan() {
+    setDupScanning(true);
+    setDupGroups(null);
+    const groups = await window.api.sync.scanDuplicates(dupScanMode);
+    setDupGroups(groups);
+    setDupScanning(false);
+  }
+  async function removeWatchedFolder(folder) {
+    const next = { ...settings, watchedFolders: settings.watchedFolders.filter((f2) => f2 !== folder) };
+    await window.api.settings.set({ watchedFolders: next.watchedFolders });
+    setSettings(next);
+  }
+  const section = { marginBottom: 36 };
+  const sectionLabel = {
+    fontSize: 11,
+    fontWeight: 700,
+    color: "var(--text-3)",
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    marginBottom: 12
+  };
+  const card = {
+    background: "var(--bg-surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    overflow: "hidden"
+  };
+  const row = {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    padding: "12px 16px",
+    borderBottom: "1px solid var(--border-light)",
+    fontSize: 13
+  };
+  const rowLast = { ...row, borderBottom: "none" };
+  const radioBtn = (active) => ({
+    width: 16,
+    height: 16,
+    borderRadius: "50%",
+    flexShrink: 0,
+    border: active ? "5px solid var(--accent)" : "2px solid var(--border-strong)",
+    background: "var(--bg-input)",
+    cursor: "pointer",
+    boxSizing: "border-box"
+  });
+  const btn = (variant) => ({
+    padding: "5px 12px",
+    fontSize: 12,
+    fontWeight: 600,
+    borderRadius: 5,
+    border: "none",
+    cursor: "pointer",
+    background: variant === "danger" ? "#fee2e2" : variant === "ghost" ? "transparent" : "var(--bg-subtle)",
+    color: variant === "danger" ? "#b91c1c" : "var(--text)"
+  });
+  const activeTheme = settings.theme ?? "light";
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "32px 40px", maxWidth: 600, overflowY: "auto", height: "100%", boxSizing: "border-box" }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: { fontSize: 18, fontWeight: 700, color: "var(--text)", marginBottom: 28, marginTop: 0 }, children: "Settings" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Appearance" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 8 }, children: THEMES.map((t2) => {
+        const active = activeTheme === t2.name;
+        return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            onClick: () => setTheme(t2.name),
+            style: {
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 8,
+              padding: "12px 10px",
+              borderRadius: 8,
+              cursor: "pointer",
+              flex: 1,
+              border: active ? "2px solid var(--accent)" : "2px solid var(--border)",
+              background: active ? "var(--bg-subtle)" : "transparent",
+              transition: "border-color 0.1s"
+            },
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 3 }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 18, height: 18, borderRadius: 4, background: t2.preview.bg, border: "1px solid var(--border)" } }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 18, height: 18, borderRadius: 4, background: t2.preview.surface, border: "1px solid var(--border)" } }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 18, height: 18, borderRadius: 4, background: t2.preview.accent } })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, fontWeight: active ? 700 : 400, color: active ? "var(--text)" : "var(--text-2)" }, children: t2.label })
+            ]
+          },
+          t2.name
+        );
+      }) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Import mode" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            style: row,
+            onClick: () => setMode("copy"),
+            role: "radio",
+            "aria-checked": settings.importMode === "copy",
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: radioBtn(settings.importMode === "copy") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Copy files into library" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Files are duplicated into the managed library. Safe and portable — the library is self-contained." })
+              ] })
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            style: rowLast,
+            onClick: () => setMode("reference"),
+            role: "radio",
+            "aria-checked": settings.importMode === "reference",
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: radioBtn(settings.importMode === "reference") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Reference files in place" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Original files are not copied. No extra disk usage, but the app depends on files staying at their current paths." })
+              ] })
+            ]
+          }
+        )
+      ] })
+    ] }),
+    settings.importMode === "copy" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Library location" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: row, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { flex: 1, fontFamily: "monospace", fontSize: 12, wordBreak: "break-all", color: pathColor(settings.libraryPath) }, children: [
+            settings.libraryPath,
+            pathHealth[settings.libraryPath] && !pathHealth[settings.libraryPath].exists && pathHealth[settings.libraryPath].foundRatio === null && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, fontSize: 11, color: "var(--text-4)" }, children: "— folder not found" }),
+            pathHealth[settings.libraryPath]?.foundRatio !== null && pathHealth[settings.libraryPath]?.foundRatio < 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: 8, fontSize: 11, color: "#d97706" }, children: [
+              "— ",
+              Math.round(pathHealth[settings.libraryPath].foundRatio * 100),
+              "% of files found"
+            ] })
+          ] }),
+          needsResolve(settings.libraryPath) ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              style: btn("default"),
+              onClick: resolveLibraryPath,
+              disabled: resolving === settings.libraryPath || migrating,
+              children: resolving === settings.libraryPath ? "Resolving…" : "Resolve…"
+            }
+          ) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              style: btn("default"),
+              onClick: pickLibraryPath,
+              disabled: migrating,
+              children: "Change…"
+            }
+          )
+        ] }),
+        pendingLibraryPath && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          ...rowLast,
+          flexDirection: "column",
+          alignItems: "flex-start",
+          gap: 10,
+          background: "#fffbeb",
+          borderTop: "1px solid #fde68a"
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "flex-start", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 16, lineHeight: 1, marginTop: 1 }, children: "⚠️" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, fontSize: 13, color: "#92400e", marginBottom: 4 }, children: "Move library to new location?" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "#78350f", lineHeight: 1.5 }, children: [
+                "This will move",
+                " ",
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("strong", { children: [
+                  fileCount,
+                  " file",
+                  fileCount !== 1 ? "s" : ""
+                ] }),
+                " and all thumbnails from the current location to:",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("br", {}),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontFamily: "monospace" }, children: pendingLibraryPath }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("br", {}),
+                "The app will be unavailable during the move. This cannot be undone."
+              ] })
+            ] })
+          ] }),
+          migrateError && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "#b91c1c", background: "#fee2e2", padding: "6px 10px", borderRadius: 4, width: "100%", boxSizing: "border-box" }, children: migrateError }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: { ...btn("danger"), background: "#b91c1c", color: "#fff", opacity: migrating ? 0.6 : 1 },
+                onClick: confirmMigration,
+                disabled: migrating,
+                children: migrating ? "Moving…" : "Move library"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: btn("ghost"),
+                onClick: () => {
+                  setPendingLibraryPath(null);
+                  setMigrateError(null);
+                },
+                disabled: migrating,
+                children: "Cancel"
+              }
+            )
+          ] })
+        ] })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Duplicate detection" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: row, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { flex: 1, fontSize: 13 }, children: "Detection method" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "select",
+            {
+              value: dupScanMode,
+              onChange: (e) => changeDupScanMode(e.target.value),
+              style: { fontSize: 12, padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg-input)", color: "var(--text)" },
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "hash", children: "Content hash (thorough, slower for large files)" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "name_size", children: "Filename match (fast)" })
+              ]
+            }
+          )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, flexDirection: "column", alignItems: "flex-start", gap: 10 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-3)" }, children: "Automatically, imports use content hash for files under 100 MB and filename match for larger files. Run a manual scan to find duplicates already in your library." }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: { ...btn("default"), padding: "7px 14px", opacity: dupScanning ? 0.6 : 1 },
+                onClick: runDupScan,
+                disabled: dupScanning,
+                children: dupScanning ? "Scanning…" : "Scan for duplicates"
+              }
+            ),
+            dupGroups !== null && !dupScanning && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 12, color: dupGroups.length === 0 ? "#16a34a" : "#b45309" }, children: dupGroups.length === 0 ? "No duplicates found." : `${dupGroups.length} duplicate group${dupGroups.length === 1 ? "" : "s"} found (${dupGroups.reduce((s, g) => s + g.count, 0) - dupGroups.length} extra). Review in Files view.` })
+          ] })
+        ] })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Histogram size" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: card, children: [
+        [320, "Small", "Compact — leaves most of the screen for content below"],
+        [420, "Medium", "Balanced default height"],
+        [520, "Large", "Taller bars for denser timelines"],
+        [null, "Fullscreen", "Histogram fills the entire window"]
+      ].map(([value, title, description], i, arr) => {
+        const isLast = i === arr.length - 1;
+        const active = (settings.histogramHeight ?? 420) === value;
+        return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            style: isLast ? rowLast : row,
+            onClick: async () => {
+              const next = { ...settings, histogramHeight: value };
+              await window.api.settings.set({ histogramHeight: value });
+              setSettings(next);
+            },
+            role: "radio",
+            "aria-checked": active,
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: radioBtn(active) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: title }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: description })
+              ] })
+            ]
+          },
+          String(value)
+        );
+      }) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Calendar heatmap" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            style: row,
+            onClick: async () => {
+              const next = { ...settings, heatmapScale: "log" };
+              await window.api.settings.set({ heatmapScale: "log" });
+              setSettings(next);
+            },
+            role: "radio",
+            "aria-checked": (settings.heatmapScale ?? "log") === "log",
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: radioBtn((settings.heatmapScale ?? "log") === "log") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Logarithmic scale" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Spreads color more evenly when some days have far more entries than others. Best for most libraries." })
+              ] })
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            style: row,
+            onClick: async () => {
+              const next = { ...settings, heatmapScale: "linear" };
+              await window.api.settings.set({ heatmapScale: "linear" });
+              setSettings(next);
+            },
+            role: "radio",
+            "aria-checked": settings.heatmapScale === "linear",
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: radioBtn(settings.heatmapScale === "linear") }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Linear scale" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Each additional file adds the same amount of color. 1 file = coolest heat." })
+              ] })
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: rowLast, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 4 }, children: "Max count threshold" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Days with this many or more entries show the warmest color. Leave blank to use each year's actual maximum." })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              type: "number",
+              min: 1,
+              placeholder: "Auto",
+              value: settings.heatmapMaxCount ?? "",
+              onChange: async (e) => {
+                const raw = e.target.value.trim();
+                const val = raw === "" ? null : Math.max(1, parseInt(raw, 10));
+                const next = { ...settings, heatmapMaxCount: val };
+                await window.api.settings.set({ heatmapMaxCount: val });
+                setSettings(next);
+              },
+              style: {
+                width: 72,
+                fontSize: 13,
+                padding: "5px 8px",
+                textAlign: "center",
+                borderRadius: 5,
+                border: "1px solid var(--border-strong)",
+                background: "var(--bg-input)",
+                color: "var(--text)",
+                flexShrink: 0
+              }
+            }
+          )
+        ] })
+      ] })
+    ] }),
+    settings.importMode === "reference" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Watched folders" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: card, children: settings.watchedFolders.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...rowLast, color: "var(--text-3)", fontStyle: "italic" }, children: "No folders added yet." }) : settings.watchedFolders.map((folder, i) => {
+        const isLast = i === settings.watchedFolders.length - 1;
+        const health = pathHealth[folder];
+        return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: isLast ? rowLast : row, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 0 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontFamily: "monospace", fontSize: 12, wordBreak: "break-all", color: pathColor(folder) }, children: folder }),
+            health && !health.exists && health.foundRatio === null && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, fontSize: 11, color: "var(--text-4)" }, children: "— folder not found" }),
+            health?.foundRatio !== null && health?.foundRatio !== void 0 && health.foundRatio < 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: 8, fontSize: 11, color: health.foundRatio === 0 ? "var(--text-4)" : "#d97706" }, children: [
+              "— ",
+              health.foundRatio === 0 ? "no files found" : `${Math.round(health.foundRatio * 100)}% of files found`
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 6, flexShrink: 0 }, children: [
+            needsResolve(folder) && /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: btn("default"),
+                onClick: () => resolveWatchedFolder(folder),
+                disabled: resolving === folder,
+                children: resolving === folder ? "Resolving…" : "Resolve…"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: btn("danger"), onClick: () => removeWatchedFolder(folder), children: "Remove" })
+          ] })
+        ] }, folder);
+      }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            style: { ...btn("default"), padding: "7px 14px" },
+            onClick: addWatchedFolder,
+            children: "+ Add folder"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)" }, children: "Thumbnails are always stored in your library." })
+      ] })
+    ] })
+  ] });
+}
+function ImportTagModal({ fileCount, onConfirm, onCancel }) {
+  const [allTags, setAllTags] = reactExports.useState([]);
+  const [selected, setSelected] = reactExports.useState(/* @__PURE__ */ new Set());
+  const [input, setInput] = reactExports.useState("");
+  const inputRef = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    window.api.tags.list().then(setAllTags);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }, []);
+  function toggleTag(name) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+  function addInputTag() {
+    const name = input.trim();
+    if (!name) return;
+    if (!allTags.find((t2) => t2.name.toLowerCase() === name.toLowerCase())) {
+      setAllTags((prev) => [...prev, { id: -1, name }]);
+    }
+    setSelected((prev) => /* @__PURE__ */ new Set([...prev, name]));
+    setInput("");
+  }
+  function handleKeyDown2(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addInputTag();
+    }
+    if (e.key === "Escape") onCancel();
+  }
+  const overlay = {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1e3
+  };
+  const modal = {
+    background: "var(--bg-surface)",
+    borderRadius: 10,
+    border: "1px solid var(--border)",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.24)",
+    padding: "28px 28px 24px",
+    width: 480,
+    maxWidth: "90vw",
+    display: "flex",
+    flexDirection: "column",
+    gap: 20
+  };
+  const pill = (active, isNew) => ({
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    padding: "4px 12px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+    userSelect: "none",
+    border: active ? isNew ? "2px solid #059669" : "2px solid var(--accent)" : "2px solid var(--border)",
+    background: active ? isNew ? "#d1fae5" : "var(--bg-subtle)" : "var(--bg-subtle)",
+    color: active ? isNew ? "#065f46" : "var(--text)" : "var(--text-2)",
+    transition: "all 80ms"
+  });
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: overlay, onClick: (e) => {
+    if (e.target === e.currentTarget) onCancel();
+  }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: modal, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 15, fontWeight: 700, color: "var(--text)", marginBottom: 4 }, children: "Tag this import" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-3)" }, children: [
+        fileCount,
+        " file",
+        fileCount !== 1 ? "s" : "",
+        " selected — tags are optional"
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, fontWeight: 700, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }, children: "Tags" }),
+      allTags.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-4)", fontStyle: "italic" }, children: "No tags yet — create one below." }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 }, children: allTags.map((tag) => {
+        const isNew = tag.id === -1;
+        const active = selected.has(tag.name);
+        return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "span",
+          {
+            style: pill(active, isNew),
+            onClick: () => toggleTag(tag.name),
+            children: [
+              isNew && !active && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { opacity: 0.5 }, children: "+" }),
+              tag.name,
+              isNew && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, opacity: 0.7 }, children: "new" })
+            ]
+          },
+          tag.name
+        );
+      }) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, fontWeight: 700, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }, children: "Create new tag" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            ref: inputRef,
+            value: input,
+            onChange: (e) => setInput(e.target.value),
+            onKeyDown: handleKeyDown2,
+            placeholder: "Tag name…",
+            style: {
+              flex: 1,
+              padding: "7px 10px",
+              fontSize: 13,
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              outline: "none",
+              background: "var(--bg-input)",
+              color: "var(--text)"
+            }
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            onClick: addInputTag,
+            disabled: !input.trim(),
+            style: {
+              padding: "7px 14px",
+              fontSize: 12,
+              fontWeight: 600,
+              background: input.trim() ? "var(--accent)" : "var(--bg-subtle)",
+              color: input.trim() ? "var(--accent-fg)" : "var(--text-4)",
+              border: "none",
+              borderRadius: 6,
+              cursor: input.trim() ? "pointer" : "default"
+            },
+            children: "+ Add"
+          }
+        )
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }, children: [
+      selected.size > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-3)", alignSelf: "center", marginRight: "auto" }, children: [
+        selected.size,
+        " tag",
+        selected.size !== 1 ? "s" : "",
+        " selected"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: onCancel,
+          style: {
+            padding: "7px 16px",
+            fontSize: 13,
+            fontWeight: 600,
+            background: "transparent",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            cursor: "pointer",
+            color: "var(--text-2)"
+          },
+          children: "Skip"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "button",
+        {
+          onClick: () => onConfirm(Array.from(selected)),
+          style: {
+            padding: "7px 20px",
+            fontSize: 13,
+            fontWeight: 600,
+            background: "var(--accent)",
+            border: "none",
+            borderRadius: 6,
+            cursor: "pointer",
+            color: "var(--accent-fg)"
+          },
+          children: [
+            "Import ",
+            fileCount,
+            " file",
+            fileCount !== 1 ? "s" : ""
+          ]
+        }
+      )
+    ] })
+  ] }) });
+}
+const PRESET_COLORS = [
+  "#ef4444",
+  "#f97316",
+  "#f59e0b",
+  "#84cc16",
+  "#22c55e",
+  "#10b981",
+  "#06b6d4",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ec4899",
+  "#6b7280",
+  "#78716c"
+];
+function fmtDate(ts) {
+  return new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+function DateRangeGroupModal() {
+  const { pendingDateRange, setPendingDateRange, setGroups, bumpRefreshKey } = useStore();
+  const [name, setName] = reactExports.useState("");
+  const [description, setDescription] = reactExports.useState("");
+  const [color, setColor] = reactExports.useState(PRESET_COLORS[7]);
+  const [entryCount, setEntryCount] = reactExports.useState(null);
+  const [saving, setSaving] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    if (!pendingDateRange) {
+      setName("");
+      setDescription("");
+      setColor(PRESET_COLORS[7]);
+      setEntryCount(null);
+      return;
+    }
+    const [from22, to2] = pendingDateRange;
+    window.api.entries.forPeriod(from22, to2).then((entries) => setEntryCount(entries.length));
+  }, [pendingDateRange]);
+  reactExports.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") setPendingDateRange(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setPendingDateRange]);
+  if (!pendingDateRange) return null;
+  const [from2, to] = pendingDateRange;
+  const handleCreate = async () => {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    try {
+      const group = await window.api.groups.create({
+        name: name.trim(),
+        parent_id: null,
+        color,
+        description: description.trim() || null,
+        date_from: from2,
+        date_to: to
+      });
+      await window.api.groups.assignEntriesForPeriod(group.id, from2, to);
+      const groups = await window.api.groups.list();
+      setGroups(groups);
+      bumpRefreshKey();
+      setPendingDateRange(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        zIndex: 1e3,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+      },
+      onClick: (e) => {
+        if (e.target === e.currentTarget) setPendingDateRange(null);
+      },
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        background: "var(--bg-surface)",
+        borderRadius: 10,
+        padding: 24,
+        width: 380,
+        border: "1px solid var(--border)",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 16
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: { margin: 0, fontSize: 16, fontWeight: 700, color: "var(--text)" }, children: "New Date Range Group" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { style: { margin: "4px 0 0", fontSize: 12, color: "var(--text-3)" }, children: [
+            fmtDate(from2),
+            " — ",
+            fmtDate(to - 1),
+            entryCount !== null && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: 6, color: "var(--text-4)" }, children: [
+              "· ",
+              entryCount,
+              " ",
+              entryCount === 1 ? "entry" : "entries",
+              " will be assigned"
+            ] })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 8 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              autoFocus: true,
+              value: name,
+              onChange: (e) => setName(e.target.value),
+              onKeyDown: (e) => {
+                if (e.key === "Enter") handleCreate();
+              },
+              placeholder: "Title (required)",
+              style: {
+                width: "100%",
+                padding: "8px 10px",
+                fontSize: 14,
+                border: "1px solid var(--border-strong)",
+                borderRadius: 6,
+                background: "var(--bg-input)",
+                outline: "none",
+                color: "var(--text)",
+                boxSizing: "border-box"
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "textarea",
+            {
+              value: description,
+              onChange: (e) => setDescription(e.target.value),
+              placeholder: "Description (optional)",
+              rows: 3,
+              style: {
+                width: "100%",
+                padding: "8px 10px",
+                fontSize: 13,
+                border: "1px solid var(--border-strong)",
+                borderRadius: 6,
+                background: "var(--bg-input)",
+                outline: "none",
+                color: "var(--text)",
+                resize: "vertical",
+                fontFamily: "inherit",
+                boxSizing: "border-box"
+              }
+            }
+          )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 0.8,
+            textTransform: "uppercase",
+            color: "var(--text-4)",
+            marginBottom: 6
+          }, children: "Color" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6 }, children: PRESET_COLORS.map((c) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "div",
+            {
+              onClick: () => setColor(c),
+              style: {
+                aspectRatio: "1",
+                borderRadius: 5,
+                background: c,
+                cursor: "pointer",
+                outline: color === c ? "2px solid var(--text)" : "2px solid transparent",
+                outlineOffset: 1
+              }
+            },
+            c
+          )) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              onClick: handleCreate,
+              disabled: !name.trim() || saving,
+              style: {
+                flex: 1,
+                padding: "8px 0",
+                fontSize: 13,
+                fontWeight: 600,
+                background: name.trim() && !saving ? color : "var(--border-strong)",
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                cursor: name.trim() && !saving ? "pointer" : "default",
+                transition: "background 0.15s"
+              },
+              children: saving ? "Creating…" : "Create Group"
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              onClick: () => setPendingDateRange(null),
+              style: {
+                padding: "8px 16px",
+                fontSize: 13,
+                background: "none",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                color: "var(--text-2)",
+                cursor: "pointer"
+              },
+              children: "Cancel"
+            }
+          )
+        ] })
+      ] })
+    }
+  );
+}
+function ResizeDivider({ onMouseDown }) {
+  const [hovered, setHovered] = reactExports.useState(false);
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      onMouseDown,
+      onMouseEnter: () => setHovered(true),
+      onMouseLeave: () => setHovered(false),
+      style: {
+        height: 5,
+        flexShrink: 0,
+        cursor: "ns-resize",
+        userSelect: "none",
+        background: hovered ? "var(--bg-hover)" : "var(--bg-subtle)",
+        borderTop: "1px solid var(--border)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+      },
+      children: hovered && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 32, height: 2, borderRadius: 1, background: "var(--scrollbar-thumb)" } })
+    }
+  );
+}
 function App() {
-  const { setGroups, setDataExtent, setVisibleRange, setIngestProgress, bumpRefreshKey } = useStore();
+  const { setGroups, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings } = useStore();
   reactExports.useEffect(() => {
     window.api.groups.list().then(setGroups);
-  }, [setGroups]);
+    window.api.settings.get().then(setSettings);
+  }, [setGroups, setSettings]);
+  reactExports.useEffect(() => {
+    document.documentElement.setAttribute("data-theme", settings?.theme ?? "light");
+  }, [settings?.theme]);
   const refreshExtent = React$2.useCallback(() => {
     return window.api.entries.extent().then((ext) => {
       if (!ext) return;
@@ -29056,15 +30575,71 @@ function App() {
     });
     return off;
   }, [setIngestProgress, bumpRefreshKey, refreshExtent]);
+  reactExports.useEffect(() => {
+    const offProgress = window.api.sync.onProgress((evt) => {
+      setSyncProgress(evt);
+      if (evt.phase === "done") {
+        setTimeout(() => {
+          setSyncProgress(null);
+          refreshExtent();
+          bumpRefreshKey();
+        }, 1200);
+      }
+    });
+    const offWatcher = window.api.sync.onWatcherIngest(() => {
+      refreshExtent();
+      bumpRefreshKey();
+    });
+    return () => {
+      offProgress();
+      offWatcher();
+    };
+  }, [setSyncProgress, refreshExtent, bumpRefreshKey]);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", height: "100vh" }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx(GroupSidebar, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(Main, {})
   ] });
 }
-async function handleImport() {
-  const paths = await window.api.ingest.pickFiles();
-  if (!paths.length) return;
-  await window.api.ingest.start(paths);
+function SyncProgressBar() {
+  const syncProgress = useStore((s) => s.syncProgress);
+  if (!syncProgress) return null;
+  const { phase, checked, total, missing, recovered, found: found2, ingested, current } = syncProgress;
+  const isDone = phase === "done";
+  let label = "";
+  let pct = 0;
+  if (phase === "checking") {
+    label = `Checking files… ${checked}/${total}`;
+    pct = total > 0 ? checked / total * 100 : 0;
+  } else if (phase === "scanning") {
+    label = "Scanning for new files…";
+    pct = 100;
+  } else if (phase === "ingesting") {
+    label = `Ingesting ${ingested}/${found2}`;
+    pct = found2 > 0 ? ingested / found2 * 100 : 0;
+  } else {
+    label = `Sync complete — ${missing} missing, ${recovered} recovered, ${found2} new`;
+    pct = 100;
+  }
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+    padding: "8px 16px",
+    background: "#f0f4ff",
+    borderBottom: "1px solid #c7d2fe",
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    flexShrink: 0
+  }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: "#1a1a1a" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 600 }, children: label }),
+      !isDone && current && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "#666", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }, children: current })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 6, background: "#c7d2fe", borderRadius: 3, overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+      width: `${pct}%`,
+      height: "100%",
+      background: isDone ? "#6366f1" : "#818cf8",
+      transition: "width 120ms ease-out"
+    } }) })
+  ] });
 }
 function IngestProgressBar() {
   const ingestProgress = useStore((s) => s.ingestProgress);
@@ -29108,14 +30683,47 @@ function IngestProgressBar() {
   ] });
 }
 function Main() {
-  const { ingestProgress, selectedPeriod, openJournalModal, activeView, setActiveView, searchResults } = useStore();
+  const { ingestProgress, syncProgress, selectedPeriod, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore();
   const bottomOpen = selectedPeriod !== null || searchResults !== null;
+  const isSyncing = syncProgress !== null && syncProgress.phase !== "done";
+  const [importPending, setImportPending] = reactExports.useState(null);
+  const histH = settings?.histogramHeight;
+  const isFixedHistogram = histH !== null && histH !== void 0;
+  const onResizeMouseDown = React$2.useCallback((e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = settings?.histogramHeight;
+    const snap = { ...settings };
+    const onMove = (ev) => {
+      const newH = Math.max(100, startH + ev.clientY - startY);
+      setSettings({ ...snap, histogramHeight: newH });
+    };
+    const onUp = (ev) => {
+      const newH = Math.max(100, startH + ev.clientY - startY);
+      setSettings({ ...snap, histogramHeight: newH });
+      window.api.settings.set({ histogramHeight: newH });
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [settings, setSettings]);
+  async function handleImport() {
+    const paths = await window.api.ingest.pickFiles();
+    if (!paths.length) return;
+    setImportPending(paths);
+  }
+  async function confirmImport(tagNames) {
+    const paths = importPending;
+    setImportPending(null);
+    await window.api.ingest.start(paths, tagNames);
+  }
   const tabStyle = (active) => ({
     padding: "4px 14px",
     fontSize: 12,
     cursor: "pointer",
-    background: active ? "#fff" : "transparent",
-    color: active ? "#1a1a1a" : "#888",
+    background: active ? "var(--bg-surface)" : "transparent",
+    color: active ? "var(--text)" : "var(--text-3)",
     border: "none",
     borderRadius: 5,
     fontWeight: active ? 600 : 400,
@@ -29124,26 +30732,27 @@ function Main() {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("main", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
       padding: "8px 16px",
-      borderBottom: "1px solid #e4e4dc",
+      borderBottom: "1px solid var(--border)",
       display: "flex",
       alignItems: "center",
       gap: 12,
-      background: "#fff",
+      background: "var(--bg-surface)",
       flexShrink: 0
     }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { style: { fontSize: 15, fontWeight: 600, color: "#1a1a1a" }, children: "Timeline" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { style: { fontSize: 15, fontWeight: 600, color: "var(--text)" }, children: "Timeline" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
         display: "flex",
-        background: "#f0f0ea",
+        background: "var(--bg-subtle)",
         borderRadius: 7,
         padding: 2,
         gap: 1
       }, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "timeline"), onClick: () => setActiveView("timeline"), children: "Timeline" }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "calendar"), onClick: () => setActiveView("calendar"), children: "Calendar" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "files"), onClick: () => setActiveView("files"), children: "Files" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "files"), onClick: () => setActiveView("files"), children: "Files" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "settings"), onClick: () => setActiveView("settings"), children: "Settings" })
       ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }, children: [
+      activeView !== "settings" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(SearchBar, {}),
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
@@ -29156,14 +30765,32 @@ function Main() {
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
           {
-            onClick: handleImport,
-            disabled: !!ingestProgress,
+            onClick: () => window.api.sync.run(),
+            disabled: isSyncing || !!ingestProgress,
             style: {
               padding: "6px 14px",
-              background: ingestProgress ? "#e4e4dc" : "#f59e0b",
+              background: isSyncing ? "var(--bg-subtle)" : "#e0e7ff",
               border: "none",
               borderRadius: 4,
-              color: "#1a1a1a",
+              color: isSyncing ? "var(--text-3)" : "#3730a3",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: isSyncing ? "not-allowed" : "pointer"
+            },
+            children: isSyncing ? "Syncing…" : "Sync"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            onClick: handleImport,
+            disabled: !!ingestProgress || isSyncing,
+            style: {
+              padding: "6px 14px",
+              background: ingestProgress ? "var(--bg-subtle)" : "var(--accent)",
+              border: "none",
+              borderRadius: 4,
+              color: ingestProgress ? "var(--text-3)" : "var(--accent-fg)",
               fontSize: 13,
               fontWeight: 600,
               cursor: ingestProgress ? "not-allowed" : "pointer"
@@ -29174,18 +30801,29 @@ function Main() {
       ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(IngestProgressBar, {}),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(SyncProgressBar, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      flex: bottomOpen ? "0 0 auto" : 1,
-      height: bottomOpen ? "calc(100% - 240px - 41px)" : void 0,
+      flex: bottomOpen || activeView === "timeline" && isFixedHistogram ? "0 0 auto" : 1,
+      height: bottomOpen ? "calc(100% - 240px - 41px)" : activeView === "timeline" && isFixedHistogram ? histH : void 0,
       minHeight: bottomOpen ? 140 : void 0,
       display: "flex",
       flexDirection: "column",
       overflow: "hidden"
-    }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
+    }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
+    activeView === "timeline" && !bottomOpen && isFixedHistogram && /* @__PURE__ */ jsxRuntimeExports.jsx(ResizeDivider, { onMouseDown: onResizeMouseDown }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(SearchResults, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(DayView, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(EntryModal, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(JournalModal, {})
+    /* @__PURE__ */ jsxRuntimeExports.jsx(JournalModal, {}),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(DateRangeGroupModal, {}),
+    importPending && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      ImportTagModal,
+      {
+        fileCount: importPending.length,
+        onConfirm: confirmImport,
+        onCancel: () => setImportPending(null)
+      }
+    )
   ] });
 }
 client.createRoot(document.getElementById("root")).render(

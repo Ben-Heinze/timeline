@@ -53,8 +53,8 @@ function AssignDropdown({ selectedIds, groups, onAssign }: {
         onClick={() => setOpen(o => !o)}
         style={{
           fontSize: 12, padding: '4px 10px',
-          background: '#f59e0b', border: 'none', borderRadius: 5,
-          color: '#1a1a1a', fontWeight: 600, cursor: 'pointer',
+          background: 'var(--accent)', border: 'none', borderRadius: 5,
+          color: 'var(--accent-fg)', fontWeight: 600, cursor: 'pointer',
         }}
       >
         Assign ({selectedIds.size}) ▾
@@ -62,12 +62,12 @@ function AssignDropdown({ selectedIds, groups, onAssign }: {
       {open && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 4px)', right: 0,
-          background: '#fff', border: '1px solid #e4e4dc', borderRadius: 8,
+          background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 8,
           boxShadow: '0 4px 16px rgba(0,0,0,0.10)',
           minWidth: 180, zIndex: 50, overflow: 'hidden',
         }}>
           {groups.length === 0 && (
-            <div style={{ padding: '10px 12px', fontSize: 12, color: '#bbb' }}>No groups yet</div>
+            <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-4)' }}>No groups yet</div>
           )}
           {groups.map(g => (
             <div
@@ -75,9 +75,9 @@ function AssignDropdown({ selectedIds, groups, onAssign }: {
               onClick={() => { onAssign(g.id); setOpen(false) }}
               style={{
                 display: 'flex', alignItems: 'center', gap: 8,
-                padding: '8px 12px', cursor: 'pointer', fontSize: 13, color: '#333',
+                padding: '8px 12px', cursor: 'pointer', fontSize: 13, color: 'var(--text)',
               }}
-              onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#f5f5f0' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-subtle)' }}
               onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = '' }}
             >
               <span style={{ width: 10, height: 10, borderRadius: 2, background: g.color, flexShrink: 0 }} />
@@ -87,10 +87,10 @@ function AssignDropdown({ selectedIds, groups, onAssign }: {
           <div
             onClick={() => { onAssign(null); setOpen(false) }}
             style={{
-              padding: '8px 12px', cursor: 'pointer', fontSize: 13, color: '#888',
-              borderTop: groups.length > 0 ? '1px solid #eaeae4' : 'none',
+              padding: '8px 12px', cursor: 'pointer', fontSize: 13, color: 'var(--text-3)',
+              borderTop: groups.length > 0 ? '1px solid var(--border-light)' : 'none',
             }}
-            onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#f5f5f0' }}
+            onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-subtle)' }}
             onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = '' }}
           >
             Remove from group
@@ -126,15 +126,15 @@ function EntryCard({ entry, onOpen }: { entry: Entry; onOpen: (id: number) => vo
         width: 140,
         borderRadius: 8,
         overflow: 'hidden',
-        background: isSelected ? '#fffbeb' : '#fff',
-        border: `2px solid ${isSelected ? '#f59e0b' : '#e8e8e0'}`,
+        background: isSelected ? 'var(--bg-entry-sel)' : 'var(--bg-surface)',
+        border: `2px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
         cursor: 'pointer',
         userSelect: 'none',
         transition: 'border-color 0.1s',
         flexShrink: 0,
       }}
     >
-      <div style={{ width: 140, height: 110, position: 'relative', overflow: 'hidden', background: '#f4f4ef' }}>
+      <div style={{ width: 140, height: 110, position: 'relative', overflow: 'hidden', background: 'var(--bg-thumb)' }}>
         {thumbSrc ? (
           <img
             src={thumbSrc}
@@ -161,19 +161,19 @@ function EntryCard({ entry, onOpen }: { entry: Entry; onOpen: (id: number) => vo
           <div style={{
             position: 'absolute', top: 6, right: 6,
             width: 18, height: 18, borderRadius: 9,
-            background: '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 11, color: '#fff',
+            background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 11, color: 'var(--accent-fg)',
           }}>✓</div>
         )}
       </div>
       <div style={{ padding: '7px 8px 8px' }}>
         <div style={{
-          fontSize: 12, fontWeight: 500, color: '#222',
+          fontSize: 12, fontWeight: 500, color: 'var(--text)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {entry.title ?? entry.type}
         </div>
-        <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
           {new Date(entry.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
         </div>
       </div>
@@ -216,8 +216,8 @@ export default function DayView() {
   return (
     <div style={{
       height: 240,
-      borderTop: '1px solid #e4e4dc',
-      background: '#f8f8f5',
+      borderTop: '1px solid var(--border)',
+      background: 'var(--bg-app)',
       display: 'flex',
       flexDirection: 'column',
       flexShrink: 0,
@@ -225,11 +225,11 @@ export default function DayView() {
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '8px 14px',
-        borderBottom: '1px solid #eaeae4',
+        borderBottom: '1px solid var(--border-light)',
         flexShrink: 0,
       }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: '#222' }}>{label}</span>
-        <span style={{ fontSize: 12, color: '#999', marginLeft: 2 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{label}</span>
+        <span style={{ fontSize: 12, color: 'var(--text-3)', marginLeft: 2 }}>
           {count} {count === 1 ? 'item' : 'items'}
         </span>
         {selectedIds.size > 0 && (
@@ -239,7 +239,7 @@ export default function DayView() {
           onClick={() => { setSelectedPeriod(null); setActiveEntryId(null) }}
           style={{
             marginLeft: 'auto', background: 'none', border: 'none',
-            color: '#bbb', fontSize: 16, lineHeight: 1, padding: '2px 6px',
+            color: 'var(--text-4)', fontSize: 16, lineHeight: 1, padding: '2px 6px',
             borderRadius: 4,
           }}
         >✕</button>
@@ -253,7 +253,7 @@ export default function DayView() {
           <div style={{
             width: '100%', height: '100%',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#bbb', fontSize: 13,
+            color: 'var(--text-4)', fontSize: 13,
           }}>
             No entries for this period
           </div>

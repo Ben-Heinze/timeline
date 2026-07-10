@@ -61,14 +61,14 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
           paddingLeft: 6 + depth * 14, paddingRight: 6,
           paddingTop: 5, paddingBottom: 5,
           borderRadius: 6,
-          background: isSelected ? '#e5e1d8' : hovered ? '#eae8e2' : 'transparent',
+          background: isSelected ? 'var(--bg-selected)' : hovered ? 'var(--bg-hover)' : 'transparent',
           cursor: 'pointer', userSelect: 'none',
         }}
       >
         <span
           onClick={e => { e.stopPropagation(); if (children.length) onToggle(group.id) }}
           style={{
-            width: 12, fontSize: 8, color: '#bbb', textAlign: 'center', flexShrink: 0,
+            width: 12, fontSize: 8, color: 'var(--text-4)', textAlign: 'center', flexShrink: 0,
             visibility: children.length > 0 ? 'visible' : 'hidden',
             display: 'inline-block',
             transform: isExpanded ? 'rotate(90deg)' : 'none',
@@ -77,7 +77,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
         >▶</span>
         <span style={{ width: 9, height: 9, borderRadius: 2, background: group.color, flexShrink: 0 }} />
         <span style={{
-          fontSize: 13, color: '#333', flex: 1,
+          fontSize: 13, color: 'var(--text)', flex: 1,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {group.name}
@@ -89,7 +89,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
               title="Edit"
               style={{
                 background: 'none', border: 'none', padding: '1px 4px',
-                fontSize: 10, color: '#999', borderRadius: 3, cursor: 'pointer',
+                fontSize: 10, color: 'var(--text-3)', borderRadius: 3, cursor: 'pointer',
               }}
             >✏</button>
             <button
@@ -97,7 +97,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
               title="Delete"
               style={{
                 background: 'none', border: 'none', padding: '1px 4px',
-                fontSize: 10, color: '#999', borderRadius: 3, cursor: 'pointer',
+                fontSize: 10, color: 'var(--text-3)', borderRadius: 3, cursor: 'pointer',
               }}
             >✕</button>
           </div>
@@ -141,10 +141,10 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
 
   return (
     <div style={{
-      borderTop: '1px solid #e4e4dc', paddingTop: 12, marginTop: 6,
+      borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 6,
       display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0,
     }}>
-      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: '#aaa' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--text-4)' }}>
         {mode === 'create' ? 'New Group' : 'Edit Group'}
       </div>
       <input
@@ -155,8 +155,8 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
         placeholder="Group name"
         style={{
           width: '100%', padding: '5px 8px', fontSize: 13,
-          border: '1px solid #d8d8d0', borderRadius: 5,
-          background: '#fff', outline: 'none', color: '#1a1a1a',
+          border: '1px solid var(--border-strong)', borderRadius: 5,
+          background: 'var(--bg-input)', outline: 'none', color: 'var(--text)',
         }}
       />
       {parentOptions.length > 0 && (
@@ -165,8 +165,8 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
           onChange={e => onChange(name, color, e.target.value ? Number(e.target.value) : null)}
           style={{
             fontSize: 12, padding: '4px 6px',
-            border: '1px solid #d8d8d0', borderRadius: 5,
-            background: '#fff', color: '#444',
+            border: '1px solid var(--border-strong)', borderRadius: 5,
+            background: 'var(--bg-input)', color: 'var(--text-2)',
           }}
         >
           <option value="">No parent (root group)</option>
@@ -174,7 +174,7 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
         </select>
       )}
       <div>
-        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: '#aaa', marginBottom: 3 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--text-4)', marginBottom: 3 }}>
           Tags
         </div>
         <TagEditor tags={tags} onChange={onTagsChange} compact />
@@ -186,7 +186,7 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
             onClick={() => onChange(name, c, parentId)}
             style={{
               aspectRatio: '1', borderRadius: 4, background: c, cursor: 'pointer',
-              outline: color === c ? '2px solid #333' : '2px solid transparent',
+              outline: color === c ? '2px solid var(--text)' : '2px solid transparent',
               outlineOffset: 1,
             }}
           />
@@ -198,15 +198,16 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
           disabled={!name.trim()}
           style={{
             flex: 1, padding: '5px 0', fontSize: 12, fontWeight: 600,
-            background: name.trim() ? '#1a1a1a' : '#d4d4d0',
-            color: '#fff', border: 'none', borderRadius: 5, cursor: name.trim() ? 'pointer' : 'default',
+            background: name.trim() ? 'var(--text)' : 'var(--border-strong)',
+            color: name.trim() ? 'var(--bg-app)' : 'var(--text-4)',
+            border: 'none', borderRadius: 5, cursor: name.trim() ? 'pointer' : 'default',
           }}
         >{mode === 'create' ? 'Create' : 'Save'}</button>
         <button
           onClick={onCancel}
           style={{
             padding: '5px 10px', fontSize: 12, cursor: 'pointer',
-            background: 'none', border: '1px solid #d8d8d0', borderRadius: 5, color: '#666',
+            background: 'none', border: '1px solid var(--border-strong)', borderRadius: 5, color: 'var(--text-2)',
           }}
         >Cancel</button>
       </div>
@@ -294,8 +295,8 @@ export default function GroupSidebar() {
   return (
     <aside style={{
       width: 220,
-      background: '#f2f2ed',
-      borderRight: '1px solid #e4e4dc',
+      background: 'var(--bg-sidebar)',
+      borderRight: '1px solid var(--border)',
       padding: '12px 8px 12px 10px',
       display: 'flex',
       flexDirection: 'column',
@@ -303,15 +304,15 @@ export default function GroupSidebar() {
     }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, paddingLeft: 2 }}>
-        <h2 style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, color: '#aaa', flex: 1, margin: 0 }}>
+        <h2 style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-4)', flex: 1, margin: 0 }}>
           Groups
         </h2>
         <button
           onClick={openCreate}
           title="New group"
           style={{
-            background: 'none', border: '1px solid #d8d8d0', borderRadius: 4,
-            color: '#666', fontSize: 14, lineHeight: 1, padding: '1px 6px', cursor: 'pointer',
+            background: 'none', border: '1px solid var(--border-strong)', borderRadius: 4,
+            color: 'var(--text-2)', fontSize: 14, lineHeight: 1, padding: '1px 6px', cursor: 'pointer',
           }}
         >+</button>
       </div>
@@ -324,17 +325,17 @@ export default function GroupSidebar() {
           style={{
             display: 'flex', alignItems: 'center', gap: 5,
             padding: '5px 6px', borderRadius: 6, marginBottom: 4,
-            background: selectedGroupId === null ? '#e5e1d8' : 'transparent',
-            cursor: 'pointer', userSelect: 'none', fontSize: 13, color: '#555',
+            background: selectedGroupId === null ? 'var(--bg-selected)' : 'transparent',
+            cursor: 'pointer', userSelect: 'none', fontSize: 13, color: 'var(--text-2)',
           }}
         >
           <span style={{ width: 12, flexShrink: 0 }} />
-          <span style={{ width: 9, height: 9, borderRadius: 2, background: '#c8c8c0', flexShrink: 0 }} />
+          <span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--scrollbar-thumb)', flexShrink: 0 }} />
           All entries
         </div>
 
         {groups.length === 0 ? (
-          <p style={{ fontSize: 12, color: '#bbb', paddingLeft: 20, marginTop: 4 }}>No groups yet</p>
+          <p style={{ fontSize: 12, color: 'var(--text-4)', paddingLeft: 20, marginTop: 4 }}>No groups yet</p>
         ) : (
           tree.map(node => (
             <GroupNode

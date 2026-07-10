@@ -18,10 +18,10 @@ function TBtn({
       title={title}
       onMouseDown={e => { e.preventDefault(); onPress() }}
       style={{
-        background: active ? '#ede9e0' : 'none',
+        background: active ? 'var(--bg-hover)' : 'none',
         border: 'none', borderRadius: 4,
         padding: '3px 8px', fontSize: 13, cursor: 'pointer',
-        color: active ? '#1a1a1a' : '#666',
+        color: active ? 'var(--text)' : 'var(--text-2)',
         fontWeight: active ? 700 : 400,
         lineHeight: 1.4,
       }}
@@ -46,7 +46,6 @@ export default function JournalModal() {
     content: '',
   })
 
-  // Populate form when modal opens
   useEffect(() => {
     if (!journalModalOpen || !editor) return
     const e = journalEditEntry
@@ -117,8 +116,8 @@ export default function JournalModal() {
     >
       <div style={{
         width: 660, maxWidth: '92vw', maxHeight: '88vh',
-        background: '#fff',
-        borderRadius: 12, border: '1px solid #e4e4dc',
+        background: 'var(--bg-surface)',
+        borderRadius: 12, border: '1px solid var(--border)',
         boxShadow: '0 8px 40px rgba(0,0,0,0.14)',
         display: 'flex', flexDirection: 'column',
         overflow: 'hidden',
@@ -126,25 +125,25 @@ export default function JournalModal() {
         {/* Header */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10,
-          padding: '12px 16px', borderBottom: '1px solid #eaeae4', flexShrink: 0,
+          padding: '12px 16px', borderBottom: '1px solid var(--border-light)', flexShrink: 0,
         }}>
           <span style={{
             fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase',
             background: '#ec4899', color: '#fff', borderRadius: 4, padding: '2px 6px',
           }}>Journal</span>
-          <span style={{ fontSize: 14, fontWeight: 600, color: '#444', flex: 1 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-2)', flex: 1 }}>
             {isEdit ? 'Edit Entry' : 'New Entry'}
           </span>
           <button
             onClick={closeJournalModal}
-            style={{ background: 'none', border: 'none', color: '#bbb', fontSize: 18, padding: '2px 6px', borderRadius: 4, cursor: 'pointer' }}
+            style={{ background: 'none', border: 'none', color: 'var(--text-4)', fontSize: 18, padding: '2px 6px', borderRadius: 4, cursor: 'pointer' }}
           >✕</button>
         </div>
 
         {/* Meta row: title / date / group */}
         <div style={{
           display: 'grid', gridTemplateColumns: '1fr auto auto',
-          gap: 8, padding: '10px 16px', borderBottom: '1px solid #f0f0ea', flexShrink: 0,
+          gap: 8, padding: '10px 16px', borderBottom: '1px solid var(--border-light)', flexShrink: 0,
           alignItems: 'center',
         }}>
           <input
@@ -153,8 +152,8 @@ export default function JournalModal() {
             placeholder="Title (optional)"
             style={{
               padding: '6px 10px', fontSize: 14, fontWeight: 500,
-              border: '1px solid #e4e4dc', borderRadius: 6,
-              background: '#fafaf8', outline: 'none', color: '#1a1a1a',
+              border: '1px solid var(--border)', borderRadius: 6,
+              background: 'var(--bg-muted)', outline: 'none', color: 'var(--text)',
             }}
           />
           <input
@@ -163,8 +162,8 @@ export default function JournalModal() {
             onChange={e => setDateStr(e.target.value)}
             style={{
               padding: '6px 8px', fontSize: 13,
-              border: '1px solid #e4e4dc', borderRadius: 6,
-              background: '#fafaf8', outline: 'none', color: '#444',
+              border: '1px solid var(--border)', borderRadius: 6,
+              background: 'var(--bg-muted)', outline: 'none', color: 'var(--text-2)',
             }}
           />
           <select
@@ -172,8 +171,8 @@ export default function JournalModal() {
             onChange={e => setGroupId(e.target.value ? Number(e.target.value) : null)}
             style={{
               padding: '6px 8px', fontSize: 13,
-              border: '1px solid #e4e4dc', borderRadius: 6,
-              background: '#fafaf8', color: '#444',
+              border: '1px solid var(--border)', borderRadius: 6,
+              background: 'var(--bg-muted)', color: 'var(--text-2)',
             }}
           >
             <option value="">No group</option>
@@ -185,19 +184,19 @@ export default function JournalModal() {
         {editor && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 1,
-            padding: '5px 10px', borderBottom: '1px solid #f0f0ea', flexShrink: 0,
-            background: '#fafaf8',
+            padding: '5px 10px', borderBottom: '1px solid var(--border-light)', flexShrink: 0,
+            background: 'var(--bg-muted)',
           }}>
             <TBtn active={editor.isActive('bold')} onPress={() => editor.chain().focus().toggleBold().run()} title="Bold"><strong>B</strong></TBtn>
             <TBtn active={editor.isActive('italic')} onPress={() => editor.chain().focus().toggleItalic().run()} title="Italic"><em>I</em></TBtn>
             <TBtn active={editor.isActive('strike')} onPress={() => editor.chain().focus().toggleStrike().run()} title="Strikethrough"><s>S</s></TBtn>
-            <span style={{ width: 1, background: '#e4e4dc', margin: '2px 4px', alignSelf: 'stretch' }} />
+            <span style={{ width: 1, background: 'var(--border)', margin: '2px 4px', alignSelf: 'stretch' }} />
             <TBtn active={editor.isActive('heading', { level: 1 })} onPress={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} title="Heading 1">H1</TBtn>
             <TBtn active={editor.isActive('heading', { level: 2 })} onPress={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} title="Heading 2">H2</TBtn>
-            <span style={{ width: 1, background: '#e4e4dc', margin: '2px 4px', alignSelf: 'stretch' }} />
+            <span style={{ width: 1, background: 'var(--border)', margin: '2px 4px', alignSelf: 'stretch' }} />
             <TBtn active={editor.isActive('bulletList')} onPress={() => editor.chain().focus().toggleBulletList().run()} title="Bullet list">• List</TBtn>
             <TBtn active={editor.isActive('orderedList')} onPress={() => editor.chain().focus().toggleOrderedList().run()} title="Numbered list">1. List</TBtn>
-            <span style={{ width: 1, background: '#e4e4dc', margin: '2px 4px', alignSelf: 'stretch' }} />
+            <span style={{ width: 1, background: 'var(--border)', margin: '2px 4px', alignSelf: 'stretch' }} />
             <TBtn active={editor.isActive('blockquote')} onPress={() => editor.chain().focus().toggleBlockquote().run()} title="Blockquote">"</TBtn>
             <TBtn active={editor.isActive('code')} onPress={() => editor.chain().focus().toggleCode().run()} title="Inline code">`</TBtn>
             <span style={{ flex: 1 }} />
@@ -217,16 +216,16 @@ export default function JournalModal() {
         {/* Footer */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
-          padding: '10px 16px', borderTop: '1px solid #eaeae4', flexShrink: 0,
-          background: '#fafaf8',
+          padding: '10px 16px', borderTop: '1px solid var(--border-light)', flexShrink: 0,
+          background: 'var(--bg-muted)',
         }}>
-          <span style={{ fontSize: 12, color: '#ccc', marginRight: 'auto' }}>⌘↵ to save · Esc to cancel</span>
+          <span style={{ fontSize: 12, color: 'var(--text-4)', marginRight: 'auto' }}>⌘↵ to save · Esc to cancel</span>
           <button
             onClick={closeJournalModal}
             style={{
               padding: '6px 16px', fontSize: 13,
-              background: 'none', border: '1px solid #e4e4dc',
-              borderRadius: 6, color: '#666', cursor: 'pointer',
+              background: 'none', border: '1px solid var(--border)',
+              borderRadius: 6, color: 'var(--text-2)', cursor: 'pointer',
             }}
           >Cancel</button>
           <button
@@ -234,8 +233,8 @@ export default function JournalModal() {
             disabled={saving}
             style={{
               padding: '6px 20px', fontSize: 13, fontWeight: 600,
-              background: saving ? '#d4d4d0' : '#1a1a1a',
-              border: 'none', borderRadius: 6, color: '#fff',
+              background: saving ? 'var(--border-strong)' : 'var(--text)',
+              border: 'none', borderRadius: 6, color: 'var(--bg-app)',
               cursor: saving ? 'default' : 'pointer',
             }}
           >{saving ? 'Saving…' : isEdit ? 'Save' : 'Create'}</button>

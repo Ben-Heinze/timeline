@@ -8,9 +8,17 @@ export function listGroups(): Group[] {
 export function createGroup(data: NewGroup): Group {
   const db = getDb()
   const result = db.prepare(`
-    INSERT INTO groups (name, parent_id, color, created_at)
-    VALUES (@name, @parent_id, @color, @created_at)
-  `).run({ ...data, created_at: Date.now() })
+    INSERT INTO groups (name, parent_id, color, description, date_from, date_to, created_at)
+    VALUES (@name, @parent_id, @color, @description, @date_from, @date_to, @created_at)
+  `).run({
+    name: data.name,
+    parent_id: data.parent_id,
+    color: data.color,
+    description: data.description ?? null,
+    date_from: data.date_from ?? null,
+    date_to: data.date_to ?? null,
+    created_at: Date.now(),
+  })
   return db.prepare('SELECT * FROM groups WHERE id = ?').get(result.lastInsertRowid) as Group
 }
 
@@ -32,4 +40,11 @@ export function assignEntriesToGroup(groupId: number | null, entryIds: number[])
   db.transaction((ids: number[]) => {
     for (const id of ids) stmt.run(groupId, id)
   })(entryIds)
+}
+
+export function assignEntriesForPeriod(groupId: number, from: number, to: number): number {
+  const result = getDb()
+    .prepare(`UPDATE entries SET group_id = ? WHERE timestamp >= ? AND timestamp < ?`)
+    .run(groupId, from, to)
+  return result.changes as number
 }

@@ -1,14 +1,9 @@
-import { app } from 'electron'
 import path from 'path'
 import fs from 'fs'
-
-let libraryPath: string | null = null
+import { getSettings } from './settings'
 
 export function getLibraryPath(): string {
-  if (!libraryPath) {
-    libraryPath = path.join(app.getPath('userData'), 'library')
-  }
-  return libraryPath
+  return getSettings().libraryPath
 }
 
 export function getFilesPath(): string {

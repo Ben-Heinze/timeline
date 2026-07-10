@@ -49,14 +49,14 @@ export default function TagEditor({ tags, onChange, compact }: Props) {
         {current.map(t => (
           <span key={t.id} style={{
             fontSize: compact ? 10 : 11, padding: '2px 6px 2px 8px', borderRadius: 10,
-            background: '#f0f0ea', color: '#333',
+            background: 'var(--bg-subtle)', color: 'var(--text)',
             display: 'inline-flex', alignItems: 'center', gap: 3,
           }}>
             #{t.name}
             <button
               onClick={() => remove(t.id)}
               style={{
-                background: 'none', border: 'none', color: '#999',
+                background: 'none', border: 'none', color: 'var(--text-4)',
                 fontSize: 11, padding: '0 2px', cursor: 'pointer', lineHeight: 1,
               }}
             >×</button>
@@ -74,7 +74,7 @@ export default function TagEditor({ tags, onChange, compact }: Props) {
           placeholder={current.length ? '' : 'Add tag…'}
           style={{
             border: 'none', outline: 'none', background: 'transparent',
-            fontSize: compact ? 11 : 12, color: '#333',
+            fontSize: compact ? 11 : 12, color: 'var(--text)',
             minWidth: 80, flex: 1, padding: '2px 0',
           }}
         />
@@ -82,7 +82,7 @@ export default function TagEditor({ tags, onChange, compact }: Props) {
       {suggestOpen && suggestions.length > 0 && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0,
-          background: '#fff', border: '1px solid #e4e4dc', borderRadius: 6,
+          background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 6,
           boxShadow: '0 4px 12px rgba(0,0,0,0.08)', zIndex: 20,
           maxHeight: 140, overflowY: 'auto',
         }}>
@@ -90,8 +90,8 @@ export default function TagEditor({ tags, onChange, compact }: Props) {
             <div
               key={t.id}
               onMouseDown={e => { e.preventDefault(); addByName(t.name) }}
-              style={{ fontSize: 12, padding: '5px 8px', cursor: 'pointer', color: '#333' }}
-              onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = '#f5f5f0'}
+              style={{ fontSize: 12, padding: '5px 8px', cursor: 'pointer', color: 'var(--text)' }}
+              onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)'}
               onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = ''}
             >#{t.name}</div>
           ))}

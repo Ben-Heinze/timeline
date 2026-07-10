@@ -8,4 +8,6 @@ export function registerGroupHandlers(): void {
   ipcMain.handle('groups:delete', (_, id) => q.deleteGroup(id))
   ipcMain.handle('groups:assignEntries', (_, groupId, entryIds) =>
     q.assignEntriesToGroup(groupId, entryIds))
+  ipcMain.handle('groups:assignEntriesForPeriod', (_, groupId, from, to) =>
+    q.assignEntriesForPeriod(groupId, from, to))
 }

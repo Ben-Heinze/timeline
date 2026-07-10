@@ -23,6 +23,9 @@ export function initSchema(db: Database.Database): void {
       rich_text_json    TEXT,
       group_id          INTEGER REFERENCES groups(id) ON DELETE SET NULL,
       needs_date_review INTEGER NOT NULL DEFAULT 0,
+      is_missing        INTEGER NOT NULL DEFAULT 0,
+      content_hash      TEXT,
+      import_mode       TEXT    NOT NULL DEFAULT 'copy',
       created_at        INTEGER NOT NULL
     );
 
@@ -49,4 +52,23 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag_id);
     CREATE INDEX IF NOT EXISTS idx_group_tags_tag ON group_tags(tag_id);
   `)
+
+  applyMigrations(db)
+}
+
+function applyMigrations(db: Database.Database): void {
+  const entryCols = new Set(
+    (db.prepare('PRAGMA table_info(entries)').all() as { name: string }[]).map(r => r.name)
+  )
+  if (!entryCols.has('is_missing'))   db.exec(`ALTER TABLE entries ADD COLUMN is_missing  INTEGER NOT NULL DEFAULT 0`)
+  if (!entryCols.has('content_hash')) db.exec(`ALTER TABLE entries ADD COLUMN content_hash TEXT`)
+  if (!entryCols.has('import_mode'))  db.exec(`ALTER TABLE entries ADD COLUMN import_mode  TEXT NOT NULL DEFAULT 'copy'`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_entries_content_hash ON entries(content_hash)`)
+
+  const groupCols = new Set(
+    (db.prepare('PRAGMA table_info(groups)').all() as { name: string }[]).map(r => r.name)
+  )
+  if (!groupCols.has('description')) db.exec(`ALTER TABLE groups ADD COLUMN description TEXT`)
+  if (!groupCols.has('date_from'))   db.exec(`ALTER TABLE groups ADD COLUMN date_from INTEGER`)
+  if (!groupCols.has('date_to'))     db.exec(`ALTER TABLE groups ADD COLUMN date_to INTEGER`)
 }

@@ -1,18 +1,32 @@
 import { getDb } from '../index'
-import type { Entry, Bucket, SearchFilters } from '../../../shared/types'
+import type { Entry, Bucket, SearchFilters, DuplicateGroup } from '../../../shared/types'
 
-export function getHistogram(from: number, to: number, bucketMs: number, groupId?: number): Bucket[] {
+export function getHistogram(from: number, to: number, zoomLevel: string, groupId?: number): Bucket[] {
+  // All expressions bucket by LOCAL calendar date and return the LOCAL midnight as a UTC ms
+  // timestamp (using the 'utc' modifier so the result matches new Date(y,m,d).getTime() in JS).
+  let bucketExpr: string
+  if (zoomLevel === 'year') {
+    bucketExpr = `CAST(strftime('%s', strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01-01', 'utc') AS INTEGER) * 1000`
+  } else if (zoomLevel === 'month') {
+    bucketExpr = `CAST(strftime('%s', strftime('%Y-%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01', 'utc') AS INTEGER) * 1000`
+  } else if (zoomLevel === 'week') {
+    // Snap to the Sunday that starts the week in local time
+    bucketExpr = `CAST(strftime('%s', date(datetime(timestamp/1000, 'unixepoch', 'localtime'), '-' || CAST(strftime('%w', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) || ' days'), 'utc') AS INTEGER) * 1000`
+  } else {
+    bucketExpr = `CAST(strftime('%s', date(datetime(timestamp/1000, 'unixepoch', 'localtime')), 'utc') AS INTEGER) * 1000`
+  }
+
   const sql = `
     SELECT
-      CAST(timestamp / :bucket AS INTEGER) * :bucket AS bucket_start,
+      ${bucketExpr} AS bucket_start,
       group_id,
       COUNT(*) AS count
     FROM entries
-    WHERE timestamp BETWEEN :from AND :to${groupId != null ? ' AND group_id = :groupId' : ''}
+    WHERE timestamp >= :from AND timestamp < :to${groupId != null ? ' AND group_id = :groupId' : ''}
     GROUP BY bucket_start, group_id
     ORDER BY bucket_start
   `
-  const params: Record<string, number> = { bucket: bucketMs, from, to }
+  const params: Record<string, number> = { from, to }
   if (groupId != null) params.groupId = groupId
   return getDb().prepare(sql).all(params) as Bucket[]
 }
@@ -60,18 +74,36 @@ export function deleteEntries(ids: number[]): void {
 
 export function listAllEntries(opts: {
   groupId?: number
-  sortBy: 'date' | 'title' | 'type'
+  sortBy: 'date' | 'title' | 'type' | 'tag'
   sortDir: 'asc' | 'desc'
 }): Entry[] {
-  const col = opts.sortBy === 'date' ? 'timestamp' : opts.sortBy === 'title' ? 'title' : 'type'
   const dir = opts.sortDir === 'asc' ? 'ASC' : 'DESC'
-  const tie = opts.sortBy === 'date' ? '' : ', timestamp DESC'
-  const where = opts.groupId != null ? 'WHERE group_id = @groupId' : ''
+  const where = opts.groupId != null ? 'WHERE e.group_id = @groupId' : ''
   const params: Record<string, unknown> = {}
   if (opts.groupId != null) params.groupId = opts.groupId
+
+  if (opts.sortBy === 'tag') {
+    // Sort by the alphabetically-first tag on each entry; entries with no tags always go last
+    return getDb().prepare(`
+      SELECT e.*
+      FROM entries e
+      LEFT JOIN entry_tags et ON et.entry_id = e.id
+      LEFT JOIN tags t ON t.id = et.tag_id
+      ${where}
+      GROUP BY e.id
+      ORDER BY
+        CASE WHEN MIN(t.name) IS NULL THEN 1 ELSE 0 END ASC,
+        MIN(t.name) ${dir},
+        e.timestamp DESC
+    `).all(params) as Entry[]
+  }
+
+  const col = opts.sortBy === 'date' ? 'timestamp' : opts.sortBy === 'title' ? 'title' : 'type'
+  const tie = opts.sortBy === 'date' ? '' : ', timestamp DESC'
+  const simpleWhere = opts.groupId != null ? 'WHERE group_id = @groupId' : ''
   return getDb().prepare(`
     SELECT * FROM entries
-    ${where}
+    ${simpleWhere}
     ORDER BY ${col} ${dir}${tie}
   `).all(params) as Entry[]
 }
@@ -106,7 +138,6 @@ export function searchEntries(filters: SearchFilters): Entry[] {
   if (filters.tagIds && filters.tagIds.length > 0) {
     const keys = filters.tagIds.map((_, i) => `@tag${i}`)
     filters.tagIds.forEach((id, i) => { params[`tag${i}`] = id })
-    // Match entries whose own tags include any specified tag, OR whose group carries any specified tag
     tagJoin = `
       LEFT JOIN entry_tags et ON et.entry_id = e.id AND et.tag_id IN (${keys.join(', ')})
       LEFT JOIN group_tags gt ON gt.group_id = e.group_id AND gt.tag_id IN (${keys.join(', ')})
@@ -130,10 +161,64 @@ export function insertEntry(entry: Omit<Entry, 'id'>): number {
   const result = getDb().prepare(`
     INSERT INTO entries
       (type, timestamp, title, file_path, thumbnail_small, thumbnail_medium,
-       thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review, created_at)
+       thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review,
+       is_missing, content_hash, import_mode, created_at)
     VALUES
       (@type, @timestamp, @title, @file_path, @thumbnail_small, @thumbnail_medium,
-       @thumbnail_large, @duration_seconds, @rich_text_json, @group_id, @needs_date_review, @created_at)
+       @thumbnail_large, @duration_seconds, @rich_text_json, @group_id, @needs_date_review,
+       @is_missing, @content_hash, @import_mode, @created_at)
   `).run(entry)
   return result.lastInsertRowid as number
+}
+
+export function getEntriesWithFilePathPrefix(prefix: string): Entry[] {
+  return getDb().prepare(
+    `SELECT * FROM entries WHERE file_path LIKE ? AND import_mode = 'reference'`
+  ).all(`${prefix}%`) as Entry[]
+}
+
+export function findEntryByHash(hash: string): Entry | null {
+  return getDb().prepare('SELECT * FROM entries WHERE content_hash = ? LIMIT 1').get(hash) as Entry | null
+}
+
+export function findEntryByTitle(title: string): Entry | null {
+  return getDb().prepare('SELECT * FROM entries WHERE title = ? LIMIT 1').get(title) as Entry | null
+}
+
+export function getAllEntriesWithFilePaths(): Entry[] {
+  return getDb().prepare('SELECT * FROM entries WHERE file_path IS NOT NULL').all() as Entry[]
+}
+
+export function markEntriesMissing(ids: number[]): void {
+  if (ids.length === 0) return
+  const placeholders = ids.map(() => '?').join(', ')
+  getDb().prepare(`UPDATE entries SET is_missing = 1 WHERE id IN (${placeholders})`).run(...ids)
+}
+
+export function markEntriesFound(ids: number[]): void {
+  if (ids.length === 0) return
+  const placeholders = ids.map(() => '?').join(', ')
+  getDb().prepare(`UPDATE entries SET is_missing = 0 WHERE id IN (${placeholders})`).run(...ids)
+}
+
+export function findDuplicatesByHash(): DuplicateGroup[] {
+  const rows = getDb().prepare(`
+    SELECT content_hash AS key, COUNT(*) AS count, GROUP_CONCAT(id) AS ids
+    FROM entries
+    WHERE content_hash IS NOT NULL
+    GROUP BY content_hash
+    HAVING COUNT(*) > 1
+  `).all() as { key: string; count: number; ids: string }[]
+  return rows.map(r => ({ key: r.key, count: r.count, entryIds: r.ids.split(',').map(Number) }))
+}
+
+export function findDuplicatesByNameSize(): DuplicateGroup[] {
+  const rows = getDb().prepare(`
+    SELECT title AS key, COUNT(*) AS count, GROUP_CONCAT(id) AS ids
+    FROM entries
+    WHERE title IS NOT NULL
+    GROUP BY title
+    HAVING COUNT(*) > 1
+  `).all() as { key: string; count: number; ids: string }[]
+  return rows.map(r => ({ key: r.key, count: r.count, entryIds: r.ids.split(',').map(Number) }))
 }
