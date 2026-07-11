@@ -102,6 +102,21 @@ export function registerSettingsHandlers(): void {
     return { found: foundIds.length, total: entries.length }
   })
 
+  ipcMain.handle('settings:resetLibrary', async () => {
+    closeDb()
+    const libPath = getLibraryPath()
+
+    await fs.rm(path.join(libPath, 'timeline.db'), { force: true })
+    await fs.rm(path.join(libPath, 'timeline.db-wal'), { force: true })
+    await fs.rm(path.join(libPath, 'timeline.db-shm'), { force: true })
+    await fs.rm(getFilesPath(), { recursive: true, force: true })
+    await fs.rm(path.join(libPath, 'thumbnails'), { recursive: true, force: true })
+
+    ensureLibraryDirs()
+    restartWatcher()
+    return { success: true }
+  })
+
   ipcMain.handle('settings:migrateLibrary', async (_, newPath: string) => {
     const current = getSettings()
     const oldPath = current.libraryPath

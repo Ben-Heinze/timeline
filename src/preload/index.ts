@@ -1,6 +1,6 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
-  IngestProgressEvent, SyncProgressEvent, NewGroup, Group,
+  IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, NewGroup, Group,
   EntryType, SearchFilters, AppSettings, DuplicateGroup,
 } from '../shared/types'
 
@@ -8,12 +8,21 @@ contextBridge.exposeInMainWorld('api', {
   ingest: {
     pickFiles: (): Promise<string[]> =>
       ipcRenderer.invoke('ingest:pickFiles'),
+    countFiles: (paths: string[]): Promise<number> =>
+      ipcRenderer.invoke('ingest:countFiles', paths),
     start: (filePaths: string[], tagNames?: string[]) =>
       ipcRenderer.invoke('ingest:start', filePaths, tagNames ?? []),
+    getPathForFile: (file: File): string =>
+      webUtils.getPathForFile(file),
     onProgress: (cb: (event: IngestProgressEvent) => void) => {
       const handler = (_: unknown, data: IngestProgressEvent) => cb(data)
       ipcRenderer.on('ingest:progress', handler)
       return () => ipcRenderer.removeListener('ingest:progress', handler)
+    },
+    onDone: (cb: (event: IngestDoneEvent) => void) => {
+      const handler = (_: unknown, data: IngestDoneEvent) => cb(data)
+      ipcRenderer.on('ingest:done', handler)
+      return () => ipcRenderer.removeListener('ingest:done', handler)
     },
   },
   sync: {
@@ -81,6 +90,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('tags:forEntry', entryId),
     setForEntry: (entryId: number, names: string[]) =>
       ipcRenderer.invoke('tags:setForEntry', entryId, names),
+    addToEntries: (entryIds: number[], names: string[]) =>
+      ipcRenderer.invoke('tags:addToEntries', entryIds, names),
     forGroup: (groupId: number) =>
       ipcRenderer.invoke('tags:forGroup', groupId),
     setForGroup: (groupId: number, names: string[]) =>
@@ -103,5 +114,7 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('settings:resolveWatchedFolder', oldPath, newPath),
     relocateLibrary: (newPath: string): Promise<{ found: number; total: number }> =>
       ipcRenderer.invoke('settings:relocateLibrary', newPath),
+    resetLibrary: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('settings:resetLibrary'),
   },
 })

@@ -23,10 +23,11 @@ function getSettings() {
       histogramHeight: parsed.histogramHeight !== void 0 ? parsed.histogramHeight : 420,
       theme: parsed.theme ?? "light",
       heatmapScale: parsed.heatmapScale ?? "log",
-      heatmapMaxCount: parsed.heatmapMaxCount ?? null
+      heatmapMaxCount: parsed.heatmapMaxCount ?? null,
+      curveTension: parsed.curveTension ?? 1
     };
   } catch {
-    cached = { importMode: "copy", libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null };
+    cached = { importMode: "copy", libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1 };
   }
   return cached;
 }
@@ -156,10 +157,11 @@ function getHistogram(from, to, zoomLevel, groupId) {
     SELECT
       ${bucketExpr} AS bucket_start,
       group_id,
+      type,
       COUNT(*) AS count
     FROM entries
     WHERE timestamp >= :from AND timestamp < :to${groupId != null ? " AND group_id = :groupId" : ""}
-    GROUP BY bucket_start, group_id
+    GROUP BY bucket_start, group_id, type
     ORDER BY bucket_start
   `;
   const params = { from, to };
@@ -357,6 +359,12 @@ function registerEntryHandlers() {
         } catch {
         }
       }
+      if (entry.import_mode === "copy" && entry.file_path) {
+        try {
+          await electron.shell.trashItem(path.join(libraryPath, entry.file_path));
+        } catch {
+        }
+      }
     }
   });
   electron.ipcMain.handle("entries:create", (_, data) => insertEntry({
@@ -511,7 +519,7 @@ async function generateImageThumbnails(sourcePath, baseName) {
     return null;
   }
 }
-async function ingestOne(sourcePath) {
+async function ingestOne(sourcePath, relDir) {
   const fileName = path.basename(sourcePath);
   const ext = path.extname(fileName);
   const type = detectType(ext);
@@ -528,9 +536,11 @@ async function ingestOne(sourcePath) {
     storedFilePath = sourcePath;
   } else {
     const destName = `${baseName}${ext}`;
-    const destPath = path.join(getFilesPath(), destName);
+    const destDir = path.join(getFilesPath(), relDir);
+    await fs$1.mkdir(destDir, { recursive: true });
+    const destPath = path.join(destDir, destName);
     await fs$1.copyFile(sourcePath, destPath);
-    storedFilePath = `files/${destName}`;
+    storedFilePath = path.join("files", relDir, destName).split(path.sep).join("/");
   }
   const stat = await fs$1.stat(sourcePath);
   const timestamp = stat.mtime.getTime() || Date.now();
@@ -560,26 +570,52 @@ async function ingestOne(sourcePath) {
   });
   return { ok: true, id };
 }
+async function walkDir(root, dir, out) {
+  const entries = await fs$1.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await walkDir(root, full, out);
+    } else if (entry.isFile()) {
+      out.push({ filePath: full, relDir: path.relative(root, dir) });
+    }
+  }
+}
+async function expandPaths(inputPaths) {
+  const out = [];
+  for (const p of inputPaths) {
+    const stat = await fs$1.stat(p);
+    if (stat.isDirectory()) {
+      await walkDir(p, p, out);
+    } else {
+      out.push({ filePath: p, relDir: "" });
+    }
+  }
+  return out;
+}
 const CONCURRENCY = 4;
 async function ingestFiles(filePaths, onProgress) {
-  const total = filePaths.length;
-  if (total === 0) return [];
+  const files = await expandPaths(filePaths);
+  const total = files.length;
+  if (total === 0) return { insertedIds: [], failures: [], total: 0 };
   let nextIndex = 0;
   let completed = 0;
   const insertedIds = [];
-  onProgress({ total, completed: 0, current: path.basename(filePaths[0]) });
+  const failures = [];
+  onProgress({ total, completed: 0, current: path.basename(files[0].filePath) });
   const worker = async () => {
     while (true) {
       const i = nextIndex++;
       if (i >= total) return;
-      const src = filePaths[i];
+      const { filePath: src, relDir } = files[i];
       const fileName = path.basename(src);
       let error;
       try {
-        const result = await ingestOne(src);
+        const result = await ingestOne(src, relDir);
         if (result.id != null) insertedIds.push(result.id);
       } catch (e) {
         error = e.message ?? String(e);
+        failures.push({ file: src, error });
       }
       completed++;
       onProgress({ total, completed, current: fileName, error });
@@ -587,7 +623,7 @@ async function ingestFiles(filePaths, onProgress) {
   };
   const workers = Array.from({ length: Math.min(CONCURRENCY, total) }, worker);
   await Promise.all(workers);
-  return insertedIds;
+  return { insertedIds, failures, total };
 }
 let isSyncing = false;
 let watcher = null;
@@ -718,10 +754,7 @@ function startWatcher() {
   });
   watcher.on("add", async (filePath) => {
     const wins = electron.BrowserWindow.getAllWindows();
-    await ingestFiles([filePath], (progress) => {
-      for (const win of wins) {
-        if (!win.webContents.isDestroyed()) win.webContents.send("ingest:progress", progress);
-      }
+    await ingestFiles([filePath], () => {
     });
     for (const win of wins) {
       if (!win.webContents.isDestroyed()) win.webContents.send("sync:watcherIngest");
@@ -801,24 +834,57 @@ function bulkSetEntryTags(entryIds, tagNames) {
     }
   })();
 }
+async function writeImportErrorLog(failures) {
+  try {
+    const logPath = path.join(electron.app.getPath("userData"), "import-errors.log");
+    const lines = [
+      `[${(/* @__PURE__ */ new Date()).toISOString()}] ${failures.length} file(s) failed to import:`,
+      ...failures.map((f) => `  ${f.file} — ${f.error}`),
+      "",
+      ""
+    ];
+    await fs$1.appendFile(logPath, lines.join("\n"), "utf8");
+    return logPath;
+  } catch {
+    return null;
+  }
+}
 function registerIngestHandlers() {
   electron.ipcMain.handle("ingest:pickFiles", async () => {
     const win = electron.BrowserWindow.getFocusedWindow() ?? electron.BrowserWindow.getAllWindows()[0];
     const result = await electron.dialog.showOpenDialog(win, {
-      title: "Import files",
-      properties: ["openFile", "multiSelections"],
+      title: "Import files or folders",
+      properties: ["openFile", "openDirectory", "multiSelections"],
       filters: [{ name: "All files", extensions: ["*"] }]
     });
     if (result.canceled) return [];
     return result.filePaths;
   });
+  electron.ipcMain.handle("ingest:countFiles", async (_, paths) => {
+    const files = await expandPaths(paths);
+    return files.length;
+  });
   electron.ipcMain.handle("ingest:start", async (event, filePaths, tagNames = []) => {
     const sender = event.sender;
-    const insertedIds = await ingestFiles(filePaths, (progress) => {
-      if (!sender.isDestroyed()) sender.send("ingest:progress", progress);
-    });
-    if (tagNames.length > 0 && insertedIds.length > 0) {
-      bulkSetEntryTags(insertedIds, tagNames);
+    const send = (channel, data) => {
+      if (!sender.isDestroyed()) sender.send(channel, data);
+    };
+    try {
+      const { insertedIds, failures, total } = await ingestFiles(filePaths, (progress) => {
+        send("ingest:progress", progress);
+      });
+      if (tagNames.length > 0 && insertedIds.length > 0) {
+        bulkSetEntryTags(insertedIds, tagNames);
+      }
+      if (total === 0) return;
+      const logPath = failures.length > 0 ? await writeImportErrorLog(failures) : null;
+      const done = { total, imported: total - failures.length, failures, logPath };
+      send("ingest:done", done);
+    } catch (e) {
+      const failures = [{ file: filePaths.join(", "), error: e.message ?? String(e) }];
+      const logPath = await writeImportErrorLog(failures);
+      const done = { total: filePaths.length, imported: 0, failures, logPath };
+      send("ingest:done", done);
     }
   });
   electron.ipcMain.handle("sync:run", async (event) => {
@@ -836,6 +902,7 @@ function registerTagHandlers() {
   electron.ipcMain.handle("tags:delete", (_, id) => deleteTag(id));
   electron.ipcMain.handle("tags:forEntry", (_, entryId) => getEntryTags(entryId));
   electron.ipcMain.handle("tags:setForEntry", (_, entryId, names) => setEntryTags(entryId, names));
+  electron.ipcMain.handle("tags:addToEntries", (_, entryIds, names) => bulkSetEntryTags(entryIds, names));
   electron.ipcMain.handle("tags:forGroup", (_, groupId) => getGroupTags(groupId));
   electron.ipcMain.handle("tags:setForGroup", (_, groupId, names) => setGroupTags(groupId, names));
 }
@@ -913,6 +980,18 @@ function registerSettingsHandlers() {
     ensureLibraryDirs();
     restartWatcher();
     return { found: foundIds.length, total: entries.length };
+  });
+  electron.ipcMain.handle("settings:resetLibrary", async () => {
+    closeDb();
+    const libPath = getLibraryPath();
+    await fs$1.rm(path.join(libPath, "timeline.db"), { force: true });
+    await fs$1.rm(path.join(libPath, "timeline.db-wal"), { force: true });
+    await fs$1.rm(path.join(libPath, "timeline.db-shm"), { force: true });
+    await fs$1.rm(getFilesPath(), { recursive: true, force: true });
+    await fs$1.rm(path.join(libPath, "thumbnails"), { recursive: true, force: true });
+    ensureLibraryDirs();
+    restartWatcher();
+    return { success: true };
   });
   electron.ipcMain.handle("settings:migrateLibrary", async (_, newPath) => {
     const current = getSettings();

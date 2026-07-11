@@ -5,7 +5,7 @@ import sharp from 'sharp'
 import { getFilesPath, getThumbnailPath } from '../library'
 import { insertEntry, findEntryByHash, findEntryByTitle } from '../db/queries/entries'
 import { getSettings } from '../settings'
-import type { EntryType, IngestProgressEvent } from '../../shared/types'
+import type { EntryType, IngestProgressEvent, IngestFailure } from '../../shared/types'
 
 const HASH_THRESHOLD = 100 * 1024 * 1024  // 100 MB
 
@@ -87,7 +87,7 @@ interface OneResult {
   error?: string
 }
 
-async function ingestOne(sourcePath: string): Promise<OneResult> {
+async function ingestOne(sourcePath: string, relDir: string): Promise<OneResult> {
   const fileName = path.basename(sourcePath)
   const ext = path.extname(fileName)
   const type = detectType(ext)
@@ -108,9 +108,11 @@ async function ingestOne(sourcePath: string): Promise<OneResult> {
     storedFilePath = sourcePath
   } else {
     const destName = `${baseName}${ext}`
-    const destPath = path.join(getFilesPath(), destName)
+    const destDir = path.join(getFilesPath(), relDir)
+    await fs.mkdir(destDir, { recursive: true })
+    const destPath = path.join(destDir, destName)
     await fs.copyFile(sourcePath, destPath)
-    storedFilePath = `files/${destName}`
+    storedFilePath = path.join('files', relDir, destName).split(path.sep).join('/')
   }
 
   const stat = await fs.stat(sourcePath)
@@ -146,33 +148,72 @@ async function ingestOne(sourcePath: string): Promise<OneResult> {
   return { ok: true, id }
 }
 
+interface PendingFile {
+  filePath: string
+  relDir: string
+}
+
+async function walkDir(root: string, dir: string, out: PendingFile[]): Promise<void> {
+  const entries = await fs.readdir(dir, { withFileTypes: true })
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      await walkDir(root, full, out)
+    } else if (entry.isFile()) {
+      out.push({ filePath: full, relDir: path.relative(root, dir) })
+    }
+  }
+}
+
+export async function expandPaths(inputPaths: string[]): Promise<PendingFile[]> {
+  const out: PendingFile[] = []
+  for (const p of inputPaths) {
+    const stat = await fs.stat(p)
+    if (stat.isDirectory()) {
+      await walkDir(p, p, out)
+    } else {
+      out.push({ filePath: p, relDir: '' })
+    }
+  }
+  return out
+}
+
 const CONCURRENCY = 4
+
+export interface IngestResult {
+  insertedIds: number[]
+  failures: IngestFailure[]
+  total: number
+}
 
 export async function ingestFiles(
   filePaths: string[],
   onProgress: (event: IngestProgressEvent) => void,
-): Promise<number[]> {
-  const total = filePaths.length
-  if (total === 0) return []
+): Promise<IngestResult> {
+  const files = await expandPaths(filePaths)
+  const total = files.length
+  if (total === 0) return { insertedIds: [], failures: [], total: 0 }
 
   let nextIndex = 0
   let completed = 0
   const insertedIds: number[] = []
+  const failures: IngestFailure[] = []
 
-  onProgress({ total, completed: 0, current: path.basename(filePaths[0]) })
+  onProgress({ total, completed: 0, current: path.basename(files[0].filePath) })
 
   const worker = async () => {
     while (true) {
       const i = nextIndex++
       if (i >= total) return
-      const src = filePaths[i]
+      const { filePath: src, relDir } = files[i]
       const fileName = path.basename(src)
       let error: string | undefined
       try {
-        const result = await ingestOne(src)
+        const result = await ingestOne(src, relDir)
         if (result.id != null) insertedIds.push(result.id)
       } catch (e) {
         error = (e as Error).message ?? String(e)
+        failures.push({ file: src, error })
       }
       completed++
       onProgress({ total, completed, current: fileName, error })
@@ -181,5 +222,5 @@ export async function ingestFiles(
 
   const workers = Array.from({ length: Math.min(CONCURRENCY, total) }, worker)
   await Promise.all(workers)
-  return insertedIds
+  return { insertedIds, failures, total }
 }

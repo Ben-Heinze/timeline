@@ -1,6 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
-import { ipcMain } from 'electron'
+import { ipcMain, shell } from 'electron'
 import * as q from '../db/queries/entries'
 import { getLibraryPath } from '../library'
 
@@ -32,6 +32,12 @@ export function registerEntryHandlers(): void {
         const rel = entry![key]
         if (!rel) continue
         try { await fs.unlink(path.join(libraryPath, rel)) } catch {}
+      }
+      // Copy-mode files live inside the library; move them to the OS trash so the
+      // user can recover them. Reference-mode entries point at the user's original
+      // file, which we never touch.
+      if (entry!.import_mode === 'copy' && entry!.file_path) {
+        try { await shell.trashItem(path.join(libraryPath, entry!.file_path)) } catch {}
       }
     }
   })

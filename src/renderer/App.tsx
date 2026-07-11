@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useStore } from './store/useStore'
+import type { IngestFailure } from '../shared/types'
 import TimelineCanvas from './components/TimelineCanvas'
 import CalendarHeatmap from './components/CalendarHeatmap'
 import FilesView from './components/FilesView'
@@ -57,24 +58,32 @@ export default function App() {
   useEffect(() => { refreshExtent() }, [refreshExtent])
 
   useEffect(() => {
-    const errors: string[] = []
-    const off = window.api.ingest.onProgress(evt => {
-      if (evt.error) errors.push(`${evt.current}: ${evt.error}`)
+    let errors: IngestFailure[] = []
+    const offProgress = window.api.ingest.onProgress(evt => {
+      if (evt.completed === 0) errors = []  // a new import starts; overwrite any previous banner
+      if (evt.error) errors.push({ file: evt.current, error: evt.error })
       setIngestProgress({
         total: evt.total,
         completed: evt.completed,
         current: evt.current,
         errors: [...errors],
+        done: false,
+        logPath: null,
       })
-      if (evt.completed >= evt.total) {
-        setTimeout(() => {
-          setIngestProgress(null)
-          refreshExtent()
-          bumpRefreshKey()
-        }, 800)
-      }
     })
-    return off
+    const offDone = window.api.ingest.onDone(evt => {
+      setIngestProgress({
+        total: evt.total,
+        completed: evt.total,
+        current: '',
+        errors: evt.failures,
+        done: true,
+        logPath: evt.logPath,
+      })
+      refreshExtent()
+      bumpRefreshKey()
+    })
+    return () => { offProgress(); offDone() }
   }, [setIngestProgress, bumpRefreshKey, refreshExtent])
 
   useEffect(() => {
@@ -157,39 +166,77 @@ function SyncProgressBar() {
 
 function IngestProgressBar() {
   const ingestProgress = useStore(s => s.ingestProgress)
+  const setIngestProgress = useStore(s => s.setIngestProgress)
   if (!ingestProgress) return null
-  const { total, completed, current, errors } = ingestProgress
+  const { total, completed, current, errors, done, logPath } = ingestProgress
+  const failed = errors.length
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0
-  const done = completed >= total
+  const state: 'active' | 'success' | 'error' = !done ? 'active' : failed > 0 ? 'error' : 'success'
+
+  const palette = {
+    active:  { bg: '#fffbe6', border: '#f0e6b8', track: '#f0e6b8', fill: '#f59e0b', text: '#1a1a1a' },
+    success: { bg: '#f0fdf4', border: '#bbf7d0', track: '#bbf7d0', fill: '#22c55e', text: '#166534' },
+    error:   { bg: '#fef2f2', border: '#fecaca', track: '#fecaca', fill: '#ef4444', text: '#b91c1c' },
+  }[state]
+
+  const label = !done
+    ? `Importing ${completed}/${total} files`
+    : failed > 0
+      ? `${total - failed}/${total} files imported — ${failed} failed`
+      : `✓ ${total}/${total} files imported`
+
   return (
     <div style={{
       padding: '8px 16px',
-      background: '#fffbe6',
-      borderBottom: '1px solid #f0e6b8',
+      background: palette.bg,
+      borderBottom: `1px solid ${palette.border}`,
       display: 'flex', flexDirection: 'column', gap: 6,
       flexShrink: 0,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12, color: '#1a1a1a' }}>
-        <span style={{ fontWeight: 600 }}>
-          {done ? 'Import complete' : 'Importing'} — {completed}/{total} ({pct}%)
-        </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12, color: palette.text }}>
+        <span style={{ fontWeight: 600 }}>{label}</span>
         {!done && (
           <span style={{ color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
             {current}
           </span>
         )}
-        {errors.length > 0 && (
-          <span style={{ color: '#b91c1c', marginLeft: 'auto' }}>{errors.length} error{errors.length === 1 ? '' : 's'}</span>
+        {!done && failed > 0 && (
+          <span style={{ color: '#b91c1c' }}>{failed} error{failed === 1 ? '' : 's'}</span>
         )}
+        <span style={{ marginLeft: 'auto', fontWeight: 600 }}>{done ? '' : `${pct}%`}</span>
+        <button
+          onClick={() => setIngestProgress(null)}
+          title="Dismiss"
+          style={{
+            border: 'none', background: 'transparent', cursor: 'pointer',
+            fontSize: 15, lineHeight: 1, padding: '0 2px', color: palette.text,
+          }}
+        >×</button>
       </div>
-      <div style={{ height: 6, background: '#f0e6b8', borderRadius: 3, overflow: 'hidden' }}>
+      <div style={{ height: 6, background: palette.track, borderRadius: 3, overflow: 'hidden' }}>
         <div style={{
-          width: `${pct}%`,
+          width: `${done ? 100 : pct}%`,
           height: '100%',
-          background: done ? '#22c55e' : '#f59e0b',
+          background: palette.fill,
           transition: 'width 120ms ease-out',
         }} />
       </div>
+      {done && failed > 0 && (
+        <div style={{ fontSize: 11, color: palette.text }}>
+          <div style={{ maxHeight: 110, overflowY: 'auto', fontFamily: 'monospace' }}>
+            {errors.map((f, i) => (
+              <div key={i} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {f.file} — {f.error}
+              </div>
+            ))}
+          </div>
+          {logPath && (
+            <div style={{ marginTop: 4, fontWeight: 600 }}>
+              Failed files written to {logPath}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -198,7 +245,11 @@ function Main() {
   const { ingestProgress, syncProgress, selectedPeriod, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore()
   const bottomOpen = selectedPeriod !== null || searchResults !== null
   const isSyncing = syncProgress !== null && syncProgress.phase !== 'done'
-  const [importPending, setImportPending] = useState<string[] | null>(null)
+  const isImporting = ingestProgress !== null && !ingestProgress.done
+  const [importPending, setImportPending] = useState<{ paths: string[]; count: number } | null>(null)
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false)
+  const dragCounterRef = React.useRef(0)
+  const importBusy = isImporting || isSyncing
 
   const histH = settings?.histogramHeight  // number | null | undefined; null = fullscreen
   const isFixedHistogram = histH !== null && histH !== undefined
@@ -223,14 +274,51 @@ function Main() {
     window.addEventListener('mouseup', onUp)
   }, [settings, setSettings])
 
-  async function handleImport() {
-    const paths = await window.api.ingest.pickFiles()
+  async function startImportFlow(paths: string[]) {
     if (!paths.length) return
-    setImportPending(paths)
+    const count = await window.api.ingest.countFiles(paths)
+    setImportPending({ paths, count })
   }
 
+  async function handleImport() {
+    const paths = await window.api.ingest.pickFiles()
+    await startImportFlow(paths)
+  }
+
+  const handleDragEnter = React.useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    if (importBusy) return
+    dragCounterRef.current++
+    setIsDraggingFiles(true)
+  }, [importBusy])
+
+  const handleDragOver = React.useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = importBusy ? 'none' : 'copy'
+  }, [importBusy])
+
+  const handleDragLeave = React.useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1)
+    if (dragCounterRef.current === 0) setIsDraggingFiles(false)
+  }, [])
+
+  const handleDrop = React.useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current = 0
+    setIsDraggingFiles(false)
+    if (importBusy) return
+    const paths = Array.from(e.dataTransfer.files)
+      .map(f => window.api.ingest.getPathForFile(f))
+      .filter(Boolean)
+    await startImportFlow(paths)
+  }, [importBusy])
+
   async function confirmImport(tagNames: string[]) {
-    const paths = importPending!
+    const paths = importPending!.paths
     setImportPending(null)
     await window.api.ingest.start(paths, tagNames)
   }
@@ -245,7 +333,31 @@ function Main() {
   })
 
   return (
-    <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+    <main
+      style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDraggingFiles && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 500,
+          background: 'rgba(59, 130, 246, 0.10)',
+          border: '3px dashed var(--accent)',
+          borderRadius: 8,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            background: 'var(--bg-surface)', border: '1px solid var(--border)',
+            borderRadius: 10, padding: '20px 32px', boxShadow: '0 8px 32px rgba(0,0,0,0.24)',
+            fontSize: 15, fontWeight: 600, color: 'var(--text)',
+          }}>
+            Drop files or folders to import
+          </div>
+        </div>
+      )}
       <header style={{
         padding: '8px 16px',
         borderBottom: '1px solid var(--border)',
@@ -281,7 +393,7 @@ function Main() {
             >+ Journal</button>
             <button
               onClick={() => window.api.sync.run()}
-              disabled={isSyncing || !!ingestProgress}
+              disabled={isSyncing || isImporting}
               style={{
                 padding: '6px 14px',
                 background: isSyncing ? 'var(--bg-subtle)' : '#e0e7ff',
@@ -292,13 +404,13 @@ function Main() {
             >{isSyncing ? 'Syncing…' : 'Sync'}</button>
             <button
               onClick={handleImport}
-              disabled={!!ingestProgress || isSyncing}
+              disabled={importBusy}
               style={{
                 padding: '6px 14px',
-                background: ingestProgress ? 'var(--bg-subtle)' : 'var(--accent)',
+                background: isImporting ? 'var(--bg-subtle)' : 'var(--accent)',
                 border: 'none', borderRadius: 4,
-                color: ingestProgress ? 'var(--text-3)' : 'var(--accent-fg)', fontSize: 13, fontWeight: 600,
-                cursor: ingestProgress ? 'not-allowed' : 'pointer',
+                color: isImporting ? 'var(--text-3)' : 'var(--accent-fg)', fontSize: 13, fontWeight: 600,
+                cursor: isImporting ? 'not-allowed' : 'pointer',
               }}
             >+ Import</button>
           </div>
@@ -332,7 +444,7 @@ function Main() {
       <DateRangeGroupModal />
       {importPending && (
         <ImportTagModal
-          fileCount={importPending.length}
+          fileCount={importPending.count}
           onConfirm={confirmImport}
           onCancel={() => setImportPending(null)}
         />

@@ -172,11 +172,10 @@ export function startWatcher(): void {
 
   watcher.on('add', async (filePath) => {
     const wins = BrowserWindow.getAllWindows()
-    await ingestFiles([filePath], (progress) => {
-      for (const win of wins) {
-        if (!win.webContents.isDestroyed()) win.webContents.send('ingest:progress', progress)
-      }
-    })
+    // Ingest silently: emitting ingest:progress here would fight with the
+    // import banner (each file the importer copies into the library re-fires
+    // this handler as a 1-file "import").
+    await ingestFiles([filePath], () => {})
     for (const win of wins) {
       if (!win.webContents.isDestroyed()) win.webContents.send('sync:watcherIngest')
     }

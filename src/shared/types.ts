@@ -34,6 +34,7 @@ export interface Group {
 export interface Bucket {
   bucket_start: number         // Unix ms
   group_id: number | null
+  type: EntryType
   count: number
 }
 
@@ -72,11 +73,18 @@ export interface AppSettings {
   curveTension: number             // 0 = angular, 1 = fully smooth (quadratic bezier midpoint)
 }
 
+export interface IngestFailure {
+  file: string
+  error: string
+}
+
 export interface IngestProgress {
   total: number
   completed: number
   current: string
-  errors: string[]
+  errors: IngestFailure[]
+  done: boolean
+  logPath: string | null
 }
 
 export interface IngestProgressEvent {
@@ -84,6 +92,13 @@ export interface IngestProgressEvent {
   completed: number
   current: string
   error?: string
+}
+
+export interface IngestDoneEvent {
+  total: number
+  imported: number
+  failures: IngestFailure[]
+  logPath: string | null
 }
 
 export interface SyncProgressEvent {

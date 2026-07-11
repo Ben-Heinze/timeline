@@ -12,6 +12,9 @@ export default function SettingsView() {
   const [dupScanMode, setDupScanMode] = useState<'hash' | 'name_size'>('hash')
   const [dupScanning, setDupScanning] = useState(false)
   const [dupGroups, setDupGroups] = useState<DuplicateGroup[] | null>(null)
+  const [resetPending, setResetPending] = useState(false)
+  const [resetConfirmText, setResetConfirmText] = useState('')
+  const [resetting, setResetting] = useState(false)
 
   type PathHealth = { exists: boolean; foundRatio: number | null }
   const [pathHealth, setPathHealth] = useState<Record<string, PathHealth>>({})
@@ -160,6 +163,16 @@ export default function SettingsView() {
     const next = { ...settings!, watchedFolders: settings!.watchedFolders.filter(f => f !== folder) }
     await window.api.settings.set({ watchedFolders: next.watchedFolders })
     setSettings(next)
+  }
+
+  async function confirmReset() {
+    setResetting(true)
+    try {
+      await window.api.settings.resetLibrary()
+      window.location.reload()
+    } catch {
+      setResetting(false)
+    }
   }
 
   const section: React.CSSProperties = { marginBottom: 36 }
@@ -590,6 +603,75 @@ export default function SettingsView() {
           </div>
         </div>
       )}
+
+      {/* Danger zone */}
+      <div style={section}>
+        <div style={{ ...sectionLabel, color: '#b91c1c' }}>Danger zone</div>
+        <div style={{ ...card, border: '1px solid #fecaca' }}>
+          <div style={{ ...rowLast, flexDirection: 'column', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Clear entire database</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                Permanently deletes every entry, group, and tag, plus all copied files and thumbnails in your library.
+                Files imported in "Reference in place" mode are not touched at their original location — only the app's
+                record of them is removed. This cannot be undone.
+              </div>
+            </div>
+            {!resetPending ? (
+              <button
+                style={{ ...btn('danger'), padding: '7px 14px' }}
+                onClick={() => { setResetPending(true); setResetConfirmText('') }}
+              >
+                ⚠ Clear everything
+              </button>
+            ) : (
+              <div style={{
+                width: '100%', boxSizing: 'border-box',
+                background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6,
+                padding: 14, display: 'flex', flexDirection: 'column', gap: 10,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <span style={{ fontSize: 16, lineHeight: 1, marginTop: 1 }}>⚠️</span>
+                  <div style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.5 }}>
+                    This will permanently delete all entries, groups, tags, and copied library files. There is no undo.
+                    Type <strong>DELETE</strong> to confirm.
+                  </div>
+                </div>
+                <input
+                  autoFocus
+                  value={resetConfirmText}
+                  onChange={e => setResetConfirmText(e.target.value)}
+                  placeholder="Type DELETE"
+                  style={{
+                    padding: '7px 10px', fontSize: 13, borderRadius: 5,
+                    border: '1px solid #fca5a5', outline: 'none',
+                    background: '#fff', color: '#7f1d1d',
+                  }}
+                />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    style={{
+                      ...btn('danger'), background: '#b91c1c', color: '#fff',
+                      opacity: resetConfirmText === 'DELETE' && !resetting ? 1 : 0.5,
+                    }}
+                    onClick={confirmReset}
+                    disabled={resetConfirmText !== 'DELETE' || resetting}
+                  >
+                    {resetting ? 'Clearing…' : 'Yes, delete everything'}
+                  </button>
+                  <button
+                    style={btn('ghost')}
+                    onClick={() => { setResetPending(false); setResetConfirmText('') }}
+                    disabled={resetting}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

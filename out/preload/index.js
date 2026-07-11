@@ -3,11 +3,18 @@ const electron = require("electron");
 electron.contextBridge.exposeInMainWorld("api", {
   ingest: {
     pickFiles: () => electron.ipcRenderer.invoke("ingest:pickFiles"),
+    countFiles: (paths) => electron.ipcRenderer.invoke("ingest:countFiles", paths),
     start: (filePaths, tagNames) => electron.ipcRenderer.invoke("ingest:start", filePaths, tagNames ?? []),
+    getPathForFile: (file) => electron.webUtils.getPathForFile(file),
     onProgress: (cb) => {
       const handler = (_, data) => cb(data);
       electron.ipcRenderer.on("ingest:progress", handler);
       return () => electron.ipcRenderer.removeListener("ingest:progress", handler);
+    },
+    onDone: (cb) => {
+      const handler = (_, data) => cb(data);
+      electron.ipcRenderer.on("ingest:done", handler);
+      return () => electron.ipcRenderer.removeListener("ingest:done", handler);
     }
   },
   sync: {
@@ -51,6 +58,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     delete: (id) => electron.ipcRenderer.invoke("tags:delete", id),
     forEntry: (entryId) => electron.ipcRenderer.invoke("tags:forEntry", entryId),
     setForEntry: (entryId, names) => electron.ipcRenderer.invoke("tags:setForEntry", entryId, names),
+    addToEntries: (entryIds, names) => electron.ipcRenderer.invoke("tags:addToEntries", entryIds, names),
     forGroup: (groupId) => electron.ipcRenderer.invoke("tags:forGroup", groupId),
     setForGroup: (groupId, names) => electron.ipcRenderer.invoke("tags:setForGroup", groupId, names)
   },
@@ -62,6 +70,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     migrateLibrary: (newPath) => electron.ipcRenderer.invoke("settings:migrateLibrary", newPath),
     checkPaths: () => electron.ipcRenderer.invoke("settings:checkPaths"),
     resolveWatchedFolder: (oldPath, newPath) => electron.ipcRenderer.invoke("settings:resolveWatchedFolder", oldPath, newPath),
-    relocateLibrary: (newPath) => electron.ipcRenderer.invoke("settings:relocateLibrary", newPath)
+    relocateLibrary: (newPath) => electron.ipcRenderer.invoke("settings:relocateLibrary", newPath),
+    resetLibrary: () => electron.ipcRenderer.invoke("settings:resetLibrary")
   }
 });

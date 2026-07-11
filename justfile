@@ -11,7 +11,7 @@ build:
     {{nix}} "npm run build"
 
 install:
-    nix-shell shell.nix --run "npm install"
+    nix-shell shell.nix --run "npm install && npm run rebuild:sharp"
 
 rebuild:
     nix-shell shell.nix --run "npm run rebuild"

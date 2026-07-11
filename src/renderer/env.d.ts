@@ -1,15 +1,18 @@
 /// <reference types="vite/client" />
 
 import type {
-  IngestProgressEvent, SyncProgressEvent, Bucket, Group, Entry, NewGroup,
+  IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, Bucket, Group, Entry, NewGroup,
   EntryType, Tag, SearchFilters, AppSettings, DuplicateGroup,
 } from '../shared/types'
 
 interface Api {
   ingest: {
     pickFiles: () => Promise<string[]>
+    countFiles: (paths: string[]) => Promise<number>
     start: (filePaths: string[], tagNames?: string[]) => Promise<void>
+    getPathForFile: (file: File) => string
     onProgress: (cb: (event: IngestProgressEvent) => void) => () => void
+    onDone: (cb: (event: IngestDoneEvent) => void) => () => void
   }
   sync: {
     run: () => Promise<void>
@@ -44,6 +47,7 @@ interface Api {
     delete: (id: number) => Promise<void>
     forEntry: (entryId: number) => Promise<Tag[]>
     setForEntry: (entryId: number, names: string[]) => Promise<Tag[]>
+    addToEntries: (entryIds: number[], names: string[]) => Promise<void>
     forGroup: (groupId: number) => Promise<Tag[]>
     setForGroup: (groupId: number, names: string[]) => Promise<Tag[]>
   }
@@ -56,6 +60,7 @@ interface Api {
     checkPaths: () => Promise<{ libraryExists: boolean; watchedFolders: { path: string; exists: boolean }[] }>
     resolveWatchedFolder: (oldPath: string, newPath: string) => Promise<{ found: number; total: number }>
     relocateLibrary: (newPath: string) => Promise<{ found: number; total: number }>
+    resetLibrary: () => Promise<{ success: boolean }>
   }
 }
 

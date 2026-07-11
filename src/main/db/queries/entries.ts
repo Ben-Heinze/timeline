@@ -20,10 +20,11 @@ export function getHistogram(from: number, to: number, zoomLevel: string, groupI
     SELECT
       ${bucketExpr} AS bucket_start,
       group_id,
+      type,
       COUNT(*) AS count
     FROM entries
     WHERE timestamp >= :from AND timestamp < :to${groupId != null ? ' AND group_id = :groupId' : ''}
-    GROUP BY bucket_start, group_id
+    GROUP BY bucket_start, group_id, type
     ORDER BY bucket_start
   `
   const params: Record<string, number> = { from, to }

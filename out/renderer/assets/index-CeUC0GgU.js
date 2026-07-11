@@ -7414,12 +7414,6 @@ const BAND_H = 14;
 const BAR_FILL = 0.55;
 const YAXIS_W = 40;
 const cv = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const BUCKET_MS = {
-  year: 365.25 * MS_DAY$2,
-  month: 30.44 * MS_DAY$2,
-  week: 7 * MS_DAY$2,
-  day: MS_DAY$2
-};
 const WINDOW_MS = {
   year: 20 * 365.25 * MS_DAY$2,
   month: 24 * 30.44 * MS_DAY$2,
@@ -7431,6 +7425,28 @@ const NEXT_LEVEL = {
   month: "week",
   week: "day",
   day: "day"
+};
+const bucketEndMs = (bs, level) => {
+  if (level === "year") return new Date(new Date(bs).getFullYear() + 1, 0, 1).getTime();
+  if (level === "month") {
+    const d = new Date(bs);
+    return new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
+  }
+  if (level === "week") return bs + 7 * MS_DAY$2;
+  return bs + MS_DAY$2;
+};
+const TYPE_LABELS$3 = {
+  photo: ["photo", "photos"],
+  video: ["video", "videos"],
+  audio: ["audio file", "audio files"],
+  document: ["document", "documents"],
+  journal: ["journal entry", "journal entries"]
+};
+const HOVER_DATE_FMT = {
+  year: (bs) => `${new Date(bs).getFullYear()}`,
+  month: (bs) => new Date(bs).toLocaleString("en-US", { month: "long", year: "numeric" }),
+  week: (bs) => `${new Date(bs).toLocaleString("en-US", { month: "short", day: "numeric" })} – ${new Date(bs + 6 * MS_DAY$2).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
+  day: (bs) => new Date(bs).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })
 };
 const TICK_CONFIG = {
   year: { iv: timeYear, fmt: (d) => `${d.getFullYear()}` },
@@ -7535,6 +7551,7 @@ function TimelineCanvas() {
     settings
   } = useStore();
   const theme = settings?.theme ?? "light";
+  const curveTension = settings?.curveTension ?? 1;
   const [selectedYear, setSelectedYear] = reactExports.useState((/* @__PURE__ */ new Date()).getFullYear());
   const [selectedMonthStart, setSelectedMonthStart] = reactExports.useState(() => {
     const now2 = /* @__PURE__ */ new Date();
@@ -7544,6 +7561,7 @@ function TimelineCanvas() {
     const now2 = /* @__PURE__ */ new Date();
     return new Date(now2.getFullYear(), now2.getMonth(), now2.getDate() - now2.getDay()).getTime();
   });
+  const [curveMode, setCurveMode] = reactExports.useState(false);
   const rangeRef = reactExports.useRef(visibleRange);
   const extentRef = reactExports.useRef(dataExtent);
   const zoomRef = reactExports.useRef(zoomLevel);
@@ -7618,7 +7636,10 @@ function TimelineCanvas() {
     const byStart = /* @__PURE__ */ new Map();
     for (const b of histogramBuckets) {
       if (!byStart.has(b.bucket_start)) byStart.set(b.bucket_start, []);
-      byStart.get(b.bucket_start).push({ group_id: b.group_id, count: b.count });
+      const segs = byStart.get(b.bucket_start);
+      const seg = segs.find((s) => s.group_id === b.group_id);
+      if (seg) seg.count += b.count;
+      else segs.push({ group_id: b.group_id, count: b.count });
     }
     let maxCount = 1;
     for (const segs of byStart.values()) {
@@ -7644,24 +7665,12 @@ function TimelineCanvas() {
       ctx.lineTo(w2, y2);
       ctx.stroke();
     }
-    const bMs = BUCKET_MS[zoomLevel];
-    const slotW = bMs / rangeMs * chartW;
     const groupColors = new Map(groups.map((g) => [g.id, g.color]));
     const defaultBarColor = cv("--accent");
     if (!curveMode) {
       for (const [bucketStart, segs] of byStart) {
         const slotX = tsToX(bucketStart);
-        let effectiveSlotW;
-        if (zoomLevel === "year") {
-          effectiveSlotW = tsToX(new Date(new Date(bucketStart).getFullYear() + 1, 0, 1).getTime()) - slotX;
-        } else if (zoomLevel === "month") {
-          const d = new Date(bucketStart);
-          effectiveSlotW = tsToX(new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime()) - slotX;
-        } else if (zoomLevel === "week") {
-          effectiveSlotW = tsToX(bucketStart + 7 * MS_DAY$2) - slotX;
-        } else {
-          effectiveSlotW = slotW;
-        }
+        const effectiveSlotW = tsToX(bucketEndMs(bucketStart, zoomLevel)) - slotX;
         const barW = Math.max(2, effectiveSlotW * BAR_FILL);
         const barOX = (effectiveSlotW - barW) / 2;
         if (slotX + effectiveSlotW < YAXIS_W || slotX > w2) continue;
@@ -7685,17 +7694,7 @@ function TimelineCanvas() {
       const sorted = [...byStart.entries()].sort(([a], [b]) => a - b);
       const pts = sorted.map(([bs, segs]) => {
         const total = segs.reduce((s, sg2) => s + sg2.count, 0);
-        let cx;
-        if (zoomLevel === "year") {
-          cx = tsToX((bs + new Date(new Date(bs).getFullYear() + 1, 0, 1).getTime()) / 2);
-        } else if (zoomLevel === "month") {
-          const d = new Date(bs);
-          cx = tsToX((bs + new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime()) / 2);
-        } else if (zoomLevel === "week") {
-          cx = tsToX(bs + 3.5 * MS_DAY$2);
-        } else {
-          cx = tsToX(bs + MS_DAY$2 / 2);
-        }
+        const cx = tsToX((bs + bucketEndMs(bs, zoomLevel)) / 2);
         return { x: cx, y: barsH - Math.max(2, total * barScale) };
       });
       if (pts.length > 0) {
@@ -7706,7 +7705,9 @@ function TimelineCanvas() {
           for (let i = 1; i < pts.length - 1; i++) {
             const mx = (pts[i].x + pts[i + 1].x) / 2;
             const my = (pts[i].y + pts[i + 1].y) / 2;
-            ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+            const cpx = mx + curveTension * (pts[i].x - mx);
+            const cpy = my + curveTension * (pts[i].y - my);
+            ctx.quadraticCurveTo(cpx, cpy, mx, my);
           }
           ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
           if (close2) {
@@ -7805,7 +7806,7 @@ function TimelineCanvas() {
     ctx.moveTo(YAXIS_W - 0.5, 0);
     ctx.lineTo(YAXIS_W - 0.5, chartH);
     ctx.stroke();
-  }, [visibleRange, histogramBuckets, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode]);
+  }, [visibleRange, histogramBuckets, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension]);
   const handleWheel = reactExports.useCallback((e) => {
     e.preventDefault();
     if (zoomRef.current === "month") {
@@ -7903,9 +7904,9 @@ function TimelineCanvas() {
     setSelectedWeekStart(weekStart);
     setVisibleRange([weekStart, weekStart + 7 * MS_DAY$2]);
   }, [setVisibleRange]);
-  const [curveMode, setCurveMode] = reactExports.useState(false);
   const drag = reactExports.useRef(null);
   const [grabbing, setGrabbing] = reactExports.useState(false);
+  const [hover, setHover] = reactExports.useState(null);
   const onMouseDown = reactExports.useCallback((e) => {
     if (rangeSelectMode) {
       const canvas = canvasRef.current;
@@ -7923,31 +7924,52 @@ function TimelineCanvas() {
   }, [rangeSelectMode, setDateRangeSelection]);
   const onMouseMove = reactExports.useCallback((e) => {
     if (rangeSelectMode) {
+      setHover(null);
       if (selAnchorRef.current === null) return;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const cx = e.clientX - rect.left;
+      const canvas2 = canvasRef.current;
+      if (!canvas2) return;
+      const rect2 = canvas2.getBoundingClientRect();
+      const cx2 = e.clientX - rect2.left;
       const [from2, to] = rangeRef.current;
-      const ts = from2 + cx / rect.width * (to - from2);
+      const ts = from2 + cx2 / rect2.width * (to - from2);
       const anchor = selAnchorRef.current;
       setDateRangeSelection([Math.min(anchor, ts), Math.max(anchor, ts)]);
-    } else {
-      const d = drag.current;
-      if (!d) return;
-      if (zoomRef.current === "month" || zoomRef.current === "week" || zoomRef.current === "day") return;
+      return;
+    }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const d = drag.current;
+    if (d && zoomRef.current !== "month" && zoomRef.current !== "week" && zoomRef.current !== "day") {
       const dx = e.clientX - d.startX;
       if (Math.abs(dx) > 4) {
         d.moved = true;
         setGrabbing(true);
       }
-      if (!d.moved) return;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const shift2 = -(dx / canvas.getBoundingClientRect().width) * (d.toMs - d.fromMs);
-      setVisibleRange([d.fromMs + shift2, d.toMs + shift2]);
+      if (d.moved) {
+        setHover(null);
+        const shift2 = -(dx / canvas.getBoundingClientRect().width) * (d.toMs - d.fromMs);
+        setVisibleRange([d.fromMs + shift2, d.toMs + shift2]);
+        return;
+      }
     }
-  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange]);
+    const rect = canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const chartW = rect.width - YAXIS_W;
+    const barsBottom = rect.height - AXIS_H - BAND_H;
+    let found2 = null;
+    if (cx >= YAXIS_W && cy <= barsBottom) {
+      const [from2, to] = rangeRef.current;
+      const tsToX = (ts) => YAXIS_W + (ts - from2) / (to - from2) * chartW;
+      for (const b of histogramBuckets) {
+        if (cx >= tsToX(b.bucket_start) && cx < tsToX(bucketEndMs(b.bucket_start, zoomLevel))) {
+          found2 = b.bucket_start;
+          break;
+        }
+      }
+    }
+    setHover(found2 !== null ? { x: cx, y: cy, bucketStart: found2 } : null);
+  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, histogramBuckets, zoomLevel]);
   const onMouseUp = reactExports.useCallback((e) => {
     if (rangeSelectMode) return;
     const d = drag.current;
@@ -7987,6 +8009,7 @@ function TimelineCanvas() {
     }
   }, [rangeSelectMode, setSelectedPeriod, setZoomLevel, setVisibleRange, setYearRange, setMonthRange, setWeekRange]);
   const onMouseLeave = reactExports.useCallback(() => {
+    setHover(null);
     if (!rangeSelectMode) {
       drag.current = null;
       setGrabbing(false);
@@ -8095,6 +8118,18 @@ function TimelineCanvas() {
     if (ext) newTo = Math.min(newTo, ext[1] + (ext[1] - ext[0]) * 0.04);
     setVisibleRange([newTo - w2, newTo]);
   }, [setVisibleRange, setYearRange, setMonthRange, setWeekRange]);
+  const hoverInfo = reactExports.useMemo(() => {
+    if (!hover) return null;
+    let total = 0;
+    const typeCounts = /* @__PURE__ */ new Map();
+    for (const b of histogramBuckets) {
+      if (b.bucket_start !== hover.bucketStart) continue;
+      total += b.count;
+      typeCounts.set(b.type, (typeCounts.get(b.type) ?? 0) + b.count);
+    }
+    if (total === 0) return null;
+    return { total, types: [...typeCounts.entries()].sort((a, b) => b[1] - a[1]) };
+  }, [hover, histogramBuckets]);
   const btnStyle = (active) => ({
     background: active ? "var(--text)" : "none",
     color: active ? "var(--bg-app)" : "var(--text-2)",
@@ -8253,22 +8288,53 @@ function TimelineCanvas() {
         }
       )
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: containerRef, style: { flex: 1, position: "relative", overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
-      "canvas",
-      {
-        ref: canvasRef,
-        style: {
-          display: "block",
-          width: "100%",
-          height: "100%",
-          cursor: rangeSelectMode ? "crosshair" : grabbing ? "grabbing" : "default"
-        },
-        onMouseDown,
-        onMouseMove,
-        onMouseUp,
-        onMouseLeave
-      }
-    ) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { ref: containerRef, style: { flex: 1, position: "relative", overflow: "hidden" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "canvas",
+        {
+          ref: canvasRef,
+          style: {
+            display: "block",
+            width: "100%",
+            height: "100%",
+            cursor: rangeSelectMode ? "crosshair" : grabbing ? "grabbing" : "default"
+          },
+          onMouseDown,
+          onMouseMove,
+          onMouseUp,
+          onMouseLeave
+        }
+      ),
+      hover && hoverInfo && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        position: "absolute",
+        left: hover.x > size.w - 200 ? hover.x - 12 : hover.x + 12,
+        top: hover.y > size.h - 150 ? hover.y - 10 : hover.y + 14,
+        transform: `${hover.x > size.w - 200 ? "translateX(-100%)" : ""} ${hover.y > size.h - 150 ? "translateY(-100%)" : ""}`,
+        pointerEvents: "none",
+        background: "var(--bg-app)",
+        border: "1px solid var(--border)",
+        borderRadius: 6,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+        padding: "6px 10px",
+        fontSize: 12,
+        lineHeight: 1.5,
+        whiteSpace: "nowrap",
+        zIndex: 10
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, color: "var(--text)" }, children: HOVER_DATE_FMT[zoomLevel](hover.bucketStart) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontWeight: 600, color: "var(--text)" }, children: [
+          hoverInfo.total,
+          " ",
+          hoverInfo.total === 1 ? "file" : "files",
+          " total"
+        ] }),
+        hoverInfo.types.map(([type, count]) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { color: "var(--text-2)" }, children: [
+          count,
+          " ",
+          (TYPE_LABELS$3[type] ?? [type, type])[count === 1 ? 0 : 1]
+        ] }, type))
+      ] })
+    ] }),
     dataExtent && zoomLevel !== "month" && zoomLevel !== "week" && zoomLevel !== "day" && /* @__PURE__ */ jsxRuntimeExports.jsx(Scrollbar, { dataExtent, visibleRange, onPan: setVisibleRange })
   ] });
 }
@@ -8305,18 +8371,44 @@ function textColor(count, effectiveMax, scale) {
   if (count === 0) return "var(--text-4)";
   return computeF(count, effectiveMax, scale) > 0.6 ? "var(--accent-fg)" : "var(--text-2)";
 }
-function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateRangeGroups, onDayClick, onDayMouseDown, onDayMouseEnter }) {
+function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateRangeGroups, onDayClick, onDayMouseDown, onDayMouseEnter, onMonthClick, cellSize = 22 }) {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const startDOW = new Date(year, month, 1).getDay();
   const cells = [];
   for (let i = 0; i < startDOW; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const isExpanded = cellSize > 30;
+  const dayFont = isExpanded ? 13 : 9;
+  const dowFont = isExpanded ? 11 : 9;
+  const dowH = isExpanded ? 20 : 14;
+  const gap = isExpanded ? 4 : 2;
+  const radius = isExpanded ? 6 : 3;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "10px 12px", background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border-light)" }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 8 }, children: MONTH_NAMES[month] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }, children: [
-      DOW.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 9, textAlign: "center", color: "var(--text-4)", lineHeight: "14px", height: 14 }, children: d }, d)),
+    !isExpanded && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "div",
+      {
+        style: {
+          fontSize: 12,
+          fontWeight: 600,
+          color: "var(--text)",
+          marginBottom: 8,
+          cursor: onMonthClick ? "pointer" : "default",
+          display: "flex",
+          alignItems: "center",
+          gap: 4
+        },
+        onClick: onMonthClick,
+        title: onMonthClick ? `View ${MONTH_NAMES[month]} in full` : void 0,
+        children: [
+          MONTH_NAMES[month],
+          onMonthClick && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 9, color: "var(--text-4)" }, children: "↗" })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap }, children: [
+      DOW.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: dowFont, textAlign: "center", color: "var(--text-4)", lineHeight: `${dowH}px`, height: dowH }, children: d }, d)),
       cells.map((day, i) => {
-        if (day === null) return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 22 } }, i);
+        if (day === null) return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: cellSize } }, i);
         const key = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
         const count = countMap.get(key) ?? 0;
         const dayTs = new Date(year, month, day).getTime();
@@ -8332,14 +8424,14 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
             onMouseEnter: () => onDayMouseEnter(dayTs),
             title: groupForDay ? `${key}: ${count} entr${count === 1 ? "y" : "ies"} · ${groupForDay.name}` : count > 0 ? `${key}: ${count} entr${count === 1 ? "y" : "ies"}` : key,
             style: {
-              height: 22,
-              borderRadius: 3,
+              height: cellSize,
+              borderRadius: radius,
               background: bg2,
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 9,
+              fontSize: dayFont,
               color: fg2,
               fontWeight: 500,
               transition: inSel ? "none" : "background 0.1s",
@@ -8359,6 +8451,7 @@ function CalendarHeatmap() {
   const [countMap, setCM] = reactExports.useState(/* @__PURE__ */ new Map());
   const [dataMax, setMax] = reactExports.useState(0);
   const [totalYear, setTotal] = reactExports.useState(0);
+  const [zoomedMonth, setZoomedMonth] = reactExports.useState(null);
   const scale = settings?.heatmapScale ?? "log";
   const effectiveMax = (settings?.heatmapMaxCount ?? null) !== null ? settings.heatmapMaxCount : dataMax;
   const [selRange, setSelRange] = reactExports.useState(null);
@@ -8427,17 +8520,73 @@ function CalendarHeatmap() {
     }
     setSelectedPeriod([ts, ts + MS_DAY$1]);
   }, [setSelectedPeriod]);
+  const goToPrevMonth = reactExports.useCallback(() => {
+    if (zoomedMonth === 0) {
+      setYear((y2) => y2 - 1);
+      setZoomedMonth(11);
+    } else {
+      setZoomedMonth(zoomedMonth - 1);
+    }
+  }, [zoomedMonth]);
+  const goToNextMonth = reactExports.useCallback(() => {
+    if (zoomedMonth === 11) {
+      setYear((y2) => y2 + 1);
+      setZoomedMonth(0);
+    } else {
+      setZoomedMonth(zoomedMonth + 1);
+    }
+  }, [zoomedMonth]);
   const dateRangeGroups = groups.filter(
     (g) => g.date_from != null && g.date_to != null
   );
   const legendFs = [0, 0.2, 0.45, 0.7, 1];
+  const navBtnStyle = {
+    background: "none",
+    border: "1px solid var(--border)",
+    borderRadius: 5,
+    padding: "4px 10px",
+    cursor: "pointer",
+    fontSize: 13,
+    color: "var(--text-2)"
+  };
+  if (zoomedMonth !== null) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, overflowY: "auto", padding: "16px 20px", background: "var(--bg-app)" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: navBtnStyle, onClick: () => setZoomedMonth(null), children: "← Back" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 1, height: 18, background: "var(--border)", marginLeft: 2, marginRight: 2 } }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: navBtnStyle, onClick: goToPrevMonth, children: "←" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 18, fontWeight: 700, color: "var(--text)", minWidth: 180, textAlign: "center" }, children: [
+          MONTH_NAMES[zoomedMonth],
+          " ",
+          year
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: navBtnStyle, onClick: goToNextMonth, children: "→" })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", justifyContent: "center" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 480 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+        MonthGrid,
+        {
+          year,
+          month: zoomedMonth,
+          countMap,
+          effectiveMax,
+          scale,
+          selRange,
+          dateRangeGroups,
+          onDayClick: handleDayClick,
+          onDayMouseDown: handleDayMouseDown,
+          onDayMouseEnter: handleDayMouseEnter,
+          cellSize: 48
+        }
+      ) }) })
+    ] });
+  }
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, overflowY: "auto", padding: "16px 20px", background: "var(--bg-app)" }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
           onClick: () => setYear((y2) => y2 - 1),
-          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 13, color: "var(--text-2)" },
+          style: navBtnStyle,
           children: "←"
         }
       ),
@@ -8446,7 +8595,7 @@ function CalendarHeatmap() {
         "button",
         {
           onClick: () => setYear((y2) => y2 + 1),
-          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "4px 10px", cursor: "pointer", fontSize: 13, color: "var(--text-2)" },
+          style: navBtnStyle,
           children: "→"
         }
       ),
@@ -8481,9 +8630,132 @@ function CalendarHeatmap() {
         dateRangeGroups,
         onDayClick: handleDayClick,
         onDayMouseDown: handleDayMouseDown,
-        onDayMouseEnter: handleDayMouseEnter
+        onDayMouseEnter: handleDayMouseEnter,
+        onMonthClick: () => setZoomedMonth(m2)
       },
       m2
+    )) })
+  ] });
+}
+function TagEditor({ tags, onChange, compact }) {
+  const { tags: allTags, setTags: setAllTags } = useStore();
+  const [current, setCurrent] = reactExports.useState(tags);
+  const [input, setInput] = reactExports.useState("");
+  const [suggestOpen, setSuggestOpen] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    setCurrent(tags);
+  }, [tags]);
+  const commit = reactExports.useCallback((next) => {
+    setCurrent(next);
+    onChange(next.map((t2) => t2.name));
+  }, [onChange]);
+  const addByName = reactExports.useCallback(async (rawName) => {
+    const name = rawName.trim();
+    if (!name) return;
+    if (current.some((t2) => t2.name.toLowerCase() === name.toLowerCase())) {
+      setInput("");
+      return;
+    }
+    let existing = allTags.find((t2) => t2.name.toLowerCase() === name.toLowerCase());
+    if (!existing) {
+      existing = await window.api.tags.create(name);
+      const list = await window.api.tags.list();
+      setAllTags(list);
+    }
+    commit([...current, existing]);
+    setInput("");
+  }, [current, allTags, setAllTags, commit]);
+  const remove = (id2) => commit(current.filter((t2) => t2.id !== id2));
+  const currentIds = new Set(current.map((t2) => t2.id));
+  const inputLower = input.trim().toLowerCase();
+  const suggestions = inputLower ? allTags.filter((t2) => !currentIds.has(t2.id) && t2.name.toLowerCase().includes(inputLower)).slice(0, 6) : allTags.filter((t2) => !currentIds.has(t2.id)).slice(0, 6);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { position: "relative" }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }, children: [
+      current.map((t2) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: {
+        fontSize: compact ? 10 : 11,
+        padding: "2px 6px 2px 8px",
+        borderRadius: 10,
+        background: "var(--bg-subtle)",
+        color: "var(--text)",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3
+      }, children: [
+        "#",
+        t2.name,
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            onClick: () => remove(t2.id),
+            style: {
+              background: "none",
+              border: "none",
+              color: "var(--text-4)",
+              fontSize: 11,
+              padding: "0 2px",
+              cursor: "pointer",
+              lineHeight: 1
+            },
+            children: "×"
+          }
+        )
+      ] }, t2.id)),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          value: input,
+          onChange: (e) => setInput(e.target.value),
+          onFocus: () => setSuggestOpen(true),
+          onBlur: () => setTimeout(() => setSuggestOpen(false), 150),
+          onKeyDown: (e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addByName(input);
+            }
+            if (e.key === "Backspace" && !input && current.length) remove(current[current.length - 1].id);
+          },
+          placeholder: current.length ? "" : "Add tag…",
+          style: {
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            fontSize: compact ? 11 : 12,
+            color: "var(--text)",
+            minWidth: 80,
+            flex: 1,
+            padding: "2px 0"
+          }
+        }
+      )
+    ] }),
+    suggestOpen && suggestions.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+      position: "absolute",
+      top: "calc(100% + 2px)",
+      left: 0,
+      right: 0,
+      background: "var(--bg-surface)",
+      border: "1px solid var(--border)",
+      borderRadius: 6,
+      boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+      zIndex: 20,
+      maxHeight: 140,
+      overflowY: "auto"
+    }, children: suggestions.map((t2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "div",
+      {
+        onMouseDown: (e) => {
+          e.preventDefault();
+          addByName(t2.name);
+        },
+        style: { fontSize: 12, padding: "5px 8px", cursor: "pointer", color: "var(--text)" },
+        onMouseEnter: (e) => e.currentTarget.style.background = "var(--bg-hover)",
+        onMouseLeave: (e) => e.currentTarget.style.background = "",
+        children: [
+          "#",
+          t2.name
+        ]
+      },
+      t2.id
     )) })
   ] });
 }
@@ -8548,12 +8820,13 @@ function Thumb({ entry, size }) {
     letterSpacing: 0.5
   }, children: TYPE_LABELS$2[entry.type] ?? "?" }) });
 }
-function GridCell({ entry, selected, onClick, onDoubleClick, size }) {
+function GridCell({ entry, selected, onClick, onDoubleClick, onContextMenu, size }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "div",
     {
       onClick,
       onDoubleClick,
+      onContextMenu,
       style: {
         display: "flex",
         flexDirection: "column",
@@ -8583,12 +8856,13 @@ function GridCell({ entry, selected, onClick, onDoubleClick, size }) {
     }
   );
 }
-function ListRow({ entry, selected, onClick, onDoubleClick }) {
+function ListRow({ entry, selected, onClick, onDoubleClick, onContextMenu }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "div",
     {
       onClick,
       onDoubleClick,
+      onContextMenu,
       style: {
         display: "grid",
         gridTemplateColumns: "32px 1fr 90px 180px",
@@ -8635,15 +8909,50 @@ function FilesView() {
   const {
     selectedGroupId,
     refreshKey,
+    bumpRefreshKey,
     setActiveEntryId,
     selectedIds,
     setSelection,
-    lastSelectedId
+    lastSelectedId,
+    groups,
+    tags: allTags,
+    setTags: setAllTags
   } = useStore();
   const [entries, setEntries] = reactExports.useState([]);
   const [viewMode, setViewMode] = reactExports.useState("medium");
   const [sortBy, setSortBy] = reactExports.useState("date");
   const [sortDir, setSortDir] = reactExports.useState("desc");
+  const [menu, setMenu] = reactExports.useState(null);
+  const [groupSubOpen, setGroupSubOpen] = reactExports.useState(false);
+  const [tagModalIds, setTagModalIds] = reactExports.useState(null);
+  const [pendingTagNames, setPendingTagNames] = reactExports.useState([]);
+  const [existingTags, setExistingTags] = reactExports.useState([]);
+  reactExports.useEffect(() => {
+    if (tagModalIds === null) {
+      setExistingTags([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all(tagModalIds.map((id2) => window.api.tags.forEntry(id2))).then((perEntry) => {
+      if (cancelled) return;
+      const counts = /* @__PURE__ */ new Map();
+      for (const tags of perEntry) {
+        for (const t2 of tags) {
+          const cur = counts.get(t2.id);
+          if (cur) cur.count += 1;
+          else counts.set(t2.id, { tag: t2, count: 1 });
+        }
+      }
+      setExistingTags([...counts.values()].sort((a, b) => a.tag.name.localeCompare(b.tag.name)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tagModalIds]);
+  const pendingTags = reactExports.useMemo(
+    () => pendingTagNames.map((n2) => allTags.find((t2) => t2.name.toLowerCase() === n2.toLowerCase())).filter((t2) => t2 != null),
+    [pendingTagNames, allTags]
+  );
   reactExports.useEffect(() => {
     window.api.entries.listAll({
       groupId: selectedGroupId ?? void 0,
@@ -8671,6 +8980,67 @@ function FilesView() {
       setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
     }
   }, [selectedIds, lastSelectedId, entries, setSelection]);
+  const handleContextMenu = reactExports.useCallback((entry) => (e) => {
+    e.preventDefault();
+    let ids;
+    if (selectedIds.has(entry.id)) {
+      ids = [...selectedIds];
+    } else {
+      ids = [entry.id];
+      setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
+    }
+    setGroupSubOpen(false);
+    setMenu({ x: e.clientX, y: e.clientY, ids });
+  }, [selectedIds, setSelection]);
+  const closeMenu = reactExports.useCallback(() => {
+    setMenu(null);
+    setGroupSubOpen(false);
+  }, []);
+  reactExports.useEffect(() => {
+    if (!menu && tagModalIds === null) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setMenu(null);
+        setGroupSubOpen(false);
+        setTagModalIds(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menu, tagModalIds]);
+  const openTagModal = reactExports.useCallback(() => {
+    if (!menu) return;
+    setPendingTagNames([]);
+    setTagModalIds(menu.ids);
+    closeMenu();
+  }, [menu, closeMenu]);
+  const applyTags = reactExports.useCallback(async () => {
+    if (!tagModalIds || pendingTagNames.length === 0) {
+      setTagModalIds(null);
+      return;
+    }
+    await window.api.tags.addToEntries(tagModalIds, pendingTagNames);
+    setAllTags(await window.api.tags.list());
+    setTagModalIds(null);
+    bumpRefreshKey();
+  }, [tagModalIds, pendingTagNames, setAllTags, bumpRefreshKey]);
+  const assignToGroup = reactExports.useCallback(async (groupId) => {
+    if (!menu) return;
+    await window.api.groups.assignEntries(groupId, menu.ids);
+    closeMenu();
+    bumpRefreshKey();
+  }, [menu, closeMenu, bumpRefreshKey]);
+  const deleteSelected = reactExports.useCallback(async () => {
+    if (!menu) return;
+    const ids = menu.ids;
+    closeMenu();
+    const hasCopied = entries.some((e) => ids.includes(e.id) && e.import_mode === "copy" && e.file_path);
+    const msg = `Delete ${ids.length} ${ids.length === 1 ? "item" : "items"} from the database?` + (hasCopied ? " Files copied into the library will be moved to the trash." : "");
+    if (!window.confirm(msg)) return;
+    await window.api.entries.delete(ids);
+    setSelection(/* @__PURE__ */ new Set(), null);
+    bumpRefreshKey();
+  }, [menu, entries, closeMenu, setSelection, bumpRefreshKey]);
   const groupedByMonth = reactExports.useMemo(() => {
     if (sortBy !== "date") return null;
     const out = [];
@@ -8691,7 +9061,8 @@ function FilesView() {
       entry,
       selected,
       onClick: handleClickEntry(entry),
-      onDoubleClick: () => setActiveEntryId(entry.id)
+      onDoubleClick: () => setActiveEntryId(entry.id),
+      onContextMenu: handleContextMenu(entry)
     };
     if (viewMode === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx(ListRow, { ...common }, entry.id);
     return /* @__PURE__ */ jsxRuntimeExports.jsx(GridCell, { ...common, size: THUMB_SIZE[viewMode] }, entry.id);
@@ -8778,9 +9149,247 @@ function FilesView() {
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "var(--text-4)", fontWeight: 400 }, children: section.items.length })
       ] }),
       renderItems(section.items)
-    ] }, section.key)) : renderItems(entries) })
+    ] }, section.key)) : renderItems(entries) }),
+    menu && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "div",
+        {
+          style: { position: "fixed", inset: 0, zIndex: 100 },
+          onMouseDown: closeMenu,
+          onContextMenu: (e) => {
+            e.preventDefault();
+            closeMenu();
+          }
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        position: "fixed",
+        zIndex: 101,
+        left: Math.min(menu.x, window.innerWidth - 210),
+        top: Math.min(menu.y, window.innerHeight - 140),
+        minWidth: 190,
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+        padding: 4,
+        fontSize: 13,
+        color: "var(--text)"
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          padding: "4px 10px 6px",
+          fontSize: 11,
+          color: "var(--text-4)",
+          borderBottom: "1px solid var(--border-light)",
+          marginBottom: 4
+        }, children: [
+          menu.ids.length,
+          " ",
+          menu.ids.length === 1 ? "item" : "items"
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Add tags…", onClick: openTagModal }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            style: { position: "relative" },
+            onMouseEnter: () => setGroupSubOpen(true),
+            onMouseLeave: () => setGroupSubOpen(false),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Add to group", trailing: "›", onClick: () => setGroupSubOpen((o) => !o) }),
+              groupSubOpen && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+                position: "absolute",
+                left: "100%",
+                top: -4,
+                zIndex: 102,
+                minWidth: 170,
+                maxHeight: 260,
+                overflowY: "auto",
+                background: "var(--bg-surface)",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                padding: 4
+              }, children: [
+                groups.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "6px 10px", color: "var(--text-4)", fontSize: 12 }, children: "No groups" }),
+                groups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  MenuItem,
+                  {
+                    label: g.name,
+                    swatch: g.color,
+                    onClick: () => assignToGroup(g.id)
+                  },
+                  g.id
+                )),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "var(--border-light)", margin: "4px 0" } }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Remove from group", onClick: () => assignToGroup(null) })
+              ] })
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "var(--border-light)", margin: "4px 0" } }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Delete…", danger: true, onClick: deleteSelected })
+      ] })
+    ] }),
+    tagModalIds !== null && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        style: {
+          position: "fixed",
+          inset: 0,
+          zIndex: 110,
+          background: "rgba(0,0,0,0.35)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        },
+        onMouseDown: (e) => {
+          if (e.target === e.currentTarget) setTagModalIds(null);
+        },
+        children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          width: 380,
+          maxWidth: "90vw",
+          background: "var(--bg-surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+          padding: 16
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 14, fontWeight: 700, color: "var(--text)", marginBottom: 4 }, children: "Add tags" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-3)", marginBottom: 12 }, children: [
+            "Tags will be added to ",
+            tagModalIds.length,
+            " ",
+            tagModalIds.length === 1 ? "item" : "items",
+            ". Existing tags are kept."
+          ] }),
+          existingTags.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 12 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              color: "var(--text-4)",
+              marginBottom: 6
+            }, children: "Already assigned" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, maxHeight: 80, overflowY: "auto" }, children: existingTags.map(({ tag, count }) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: {
+              fontSize: 11,
+              padding: "3px 8px",
+              borderRadius: 10,
+              background: "var(--bg-entry-sel)",
+              color: "var(--text-2)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4
+            }, children: [
+              "#",
+              tag.name,
+              tagModalIds.length > 1 && count < tagModalIds.length && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { color: "var(--text-4)", fontSize: 10 }, children: [
+                count,
+                "/",
+                tagModalIds.length
+              ] })
+            ] }, tag.id)) })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            padding: "6px 8px",
+            background: "var(--bg-input)",
+            marginBottom: 12
+          }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(TagEditor, { tags: pendingTags, onChange: setPendingTagNames }) }),
+          allTags.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 14 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              color: "var(--text-4)",
+              marginBottom: 6
+            }, children: "All tags" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 4,
+              maxHeight: 120,
+              overflowY: "auto"
+            }, children: allTags.map((t2) => {
+              const added = pendingTagNames.some((n2) => n2.toLowerCase() === t2.name.toLowerCase());
+              return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "button",
+                {
+                  disabled: added,
+                  onClick: () => setPendingTagNames((prev) => [...prev, t2.name]),
+                  style: {
+                    fontSize: 11,
+                    padding: "3px 8px",
+                    borderRadius: 10,
+                    border: "1px solid var(--border)",
+                    cursor: added ? "default" : "pointer",
+                    background: added ? "var(--bg-entry-sel)" : "var(--bg-subtle)",
+                    color: added ? "var(--text-4)" : "var(--text)",
+                    opacity: added ? 0.6 : 1
+                  },
+                  children: [
+                    "#",
+                    t2.name
+                  ]
+                },
+                t2.id
+              );
+            }) })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setTagModalIds(null), style: modalBtn(false), children: "Cancel" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: applyTags,
+                disabled: pendingTagNames.length === 0,
+                style: { ...modalBtn(true), opacity: pendingTagNames.length === 0 ? 0.5 : 1 },
+                children: "Add tags"
+              }
+            )
+          ] })
+        ] })
+      }
+    )
   ] });
 }
+function MenuItem({ label, onClick, danger, trailing, swatch }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      onClick,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 10px",
+        borderRadius: 5,
+        cursor: "pointer",
+        color: danger ? "var(--danger, #e5484d)" : "var(--text)",
+        whiteSpace: "nowrap",
+        userSelect: "none"
+      },
+      onMouseEnter: (e) => e.currentTarget.style.background = "var(--bg-hover)",
+      onMouseLeave: (e) => e.currentTarget.style.background = "",
+      children: [
+        swatch && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 10, height: 10, borderRadius: 3, background: swatch, flexShrink: 0 } }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis" }, children: label }),
+        trailing && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-4)" }, children: trailing })
+      ]
+    }
+  );
+}
+const modalBtn = (primary) => ({
+  fontSize: 13,
+  padding: "6px 14px",
+  borderRadius: 6,
+  cursor: "pointer",
+  border: primary ? "none" : "1px solid var(--border)",
+  background: primary ? "var(--accent)" : "transparent",
+  color: primary ? "#fff" : "var(--text)"
+});
 function iconFor(m2) {
   if (m2 === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { letterSpacing: 1 }, children: "≡" });
   if (m2 === "small") return /* @__PURE__ */ jsxRuntimeExports.jsx(IconGrid, { n: 3 });
@@ -27977,128 +28586,6 @@ const StarterKit = Extension.create({
     return extensions;
   }
 });
-function TagEditor({ tags, onChange, compact }) {
-  const { tags: allTags, setTags: setAllTags } = useStore();
-  const [current, setCurrent] = reactExports.useState(tags);
-  const [input, setInput] = reactExports.useState("");
-  const [suggestOpen, setSuggestOpen] = reactExports.useState(false);
-  reactExports.useEffect(() => {
-    setCurrent(tags);
-  }, [tags]);
-  const commit = reactExports.useCallback((next) => {
-    setCurrent(next);
-    onChange(next.map((t2) => t2.name));
-  }, [onChange]);
-  const addByName = reactExports.useCallback(async (rawName) => {
-    const name = rawName.trim();
-    if (!name) return;
-    if (current.some((t2) => t2.name.toLowerCase() === name.toLowerCase())) {
-      setInput("");
-      return;
-    }
-    let existing = allTags.find((t2) => t2.name.toLowerCase() === name.toLowerCase());
-    if (!existing) {
-      existing = await window.api.tags.create(name);
-      const list = await window.api.tags.list();
-      setAllTags(list);
-    }
-    commit([...current, existing]);
-    setInput("");
-  }, [current, allTags, setAllTags, commit]);
-  const remove = (id2) => commit(current.filter((t2) => t2.id !== id2));
-  const currentIds = new Set(current.map((t2) => t2.id));
-  const inputLower = input.trim().toLowerCase();
-  const suggestions = inputLower ? allTags.filter((t2) => !currentIds.has(t2.id) && t2.name.toLowerCase().includes(inputLower)).slice(0, 6) : allTags.filter((t2) => !currentIds.has(t2.id)).slice(0, 6);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { position: "relative" }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }, children: [
-      current.map((t2) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: {
-        fontSize: compact ? 10 : 11,
-        padding: "2px 6px 2px 8px",
-        borderRadius: 10,
-        background: "var(--bg-subtle)",
-        color: "var(--text)",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 3
-      }, children: [
-        "#",
-        t2.name,
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
-          {
-            onClick: () => remove(t2.id),
-            style: {
-              background: "none",
-              border: "none",
-              color: "var(--text-4)",
-              fontSize: 11,
-              padding: "0 2px",
-              cursor: "pointer",
-              lineHeight: 1
-            },
-            children: "×"
-          }
-        )
-      ] }, t2.id)),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "input",
-        {
-          value: input,
-          onChange: (e) => setInput(e.target.value),
-          onFocus: () => setSuggestOpen(true),
-          onBlur: () => setTimeout(() => setSuggestOpen(false), 150),
-          onKeyDown: (e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              addByName(input);
-            }
-            if (e.key === "Backspace" && !input && current.length) remove(current[current.length - 1].id);
-          },
-          placeholder: current.length ? "" : "Add tag…",
-          style: {
-            border: "none",
-            outline: "none",
-            background: "transparent",
-            fontSize: compact ? 11 : 12,
-            color: "var(--text)",
-            minWidth: 80,
-            flex: 1,
-            padding: "2px 0"
-          }
-        }
-      )
-    ] }),
-    suggestOpen && suggestions.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      position: "absolute",
-      top: "calc(100% + 2px)",
-      left: 0,
-      right: 0,
-      background: "var(--bg-surface)",
-      border: "1px solid var(--border)",
-      borderRadius: 6,
-      boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-      zIndex: 20,
-      maxHeight: 140,
-      overflowY: "auto"
-    }, children: suggestions.map((t2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "div",
-      {
-        onMouseDown: (e) => {
-          e.preventDefault();
-          addByName(t2.name);
-        },
-        style: { fontSize: 12, padding: "5px 8px", cursor: "pointer", color: "var(--text)" },
-        onMouseEnter: (e) => e.currentTarget.style.background = "var(--bg-hover)",
-        onMouseLeave: (e) => e.currentTarget.style.background = "",
-        children: [
-          "#",
-          t2.name
-        ]
-      },
-      t2.id
-    )) })
-  ] });
-}
 const TYPE_COLORS$1 = {
   photo: "#3b82f6",
   video: "#8b5cf6",
@@ -29574,6 +30061,9 @@ function SettingsView() {
   const [dupScanMode, setDupScanMode] = reactExports.useState("hash");
   const [dupScanning, setDupScanning] = reactExports.useState(false);
   const [dupGroups, setDupGroups] = reactExports.useState(null);
+  const [resetPending, setResetPending] = reactExports.useState(false);
+  const [resetConfirmText, setResetConfirmText] = reactExports.useState("");
+  const [resetting, setResetting] = reactExports.useState(false);
   const [pathHealth, setPathHealth] = reactExports.useState({});
   const [resolving, setResolving] = reactExports.useState(null);
   function pathColor(p2) {
@@ -29706,6 +30196,15 @@ function SettingsView() {
     const next = { ...settings, watchedFolders: settings.watchedFolders.filter((f2) => f2 !== folder) };
     await window.api.settings.set({ watchedFolders: next.watchedFolders });
     setSettings(next);
+  }
+  async function confirmReset() {
+    setResetting(true);
+    try {
+      await window.api.settings.resetLibrary();
+      window.location.reload();
+    } catch {
+      setResetting(false);
+    }
   }
   const section = { marginBottom: 36 };
   const sectionLabel = {
@@ -29980,6 +30479,35 @@ function SettingsView() {
       }) })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Timeline" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: card, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: rowLast, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 4 }, children: "Curve smoothness" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Controls how tightly the smooth curve bends toward each data point. Only visible in Curve mode." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0, marginLeft: 16 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              type: "range",
+              min: 0,
+              max: 1,
+              step: 0.05,
+              value: settings.curveTension ?? 1,
+              onChange: async (e) => {
+                const val = parseFloat(e.target.value);
+                const next = { ...settings, curveTension: val };
+                await window.api.settings.set({ curveTension: val });
+                setSettings(next);
+              },
+              style: { width: 120, accentColor: "var(--accent)" }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-3)", minWidth: 80, textAlign: "right" }, children: settings.curveTension === 0 || settings.curveTension === void 0 ? "Angular" : settings.curveTension >= 1 ? "Fully smooth" : `${Math.round((settings.curveTension ?? 1) * 100)}%` })
+        ] })
+      ] }) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Calendar heatmap" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs(
@@ -30096,6 +30624,91 @@ function SettingsView() {
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)" }, children: "Thumbnails are always stored in your library." })
       ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...sectionLabel, color: "#b91c1c" }, children: "Danger zone" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...card, border: "1px solid #fecaca" }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, flexDirection: "column", alignItems: "flex-start", gap: 12 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 4 }, children: "Clear entire database" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: `Permanently deletes every entry, group, and tag, plus all copied files and thumbnails in your library. Files imported in "Reference in place" mode are not touched at their original location — only the app's record of them is removed. This cannot be undone.` })
+        ] }),
+        !resetPending ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            style: { ...btn("danger"), padding: "7px 14px" },
+            onClick: () => {
+              setResetPending(true);
+              setResetConfirmText("");
+            },
+            children: "⚠ Clear everything"
+          }
+        ) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          width: "100%",
+          boxSizing: "border-box",
+          background: "#fef2f2",
+          border: "1px solid #fecaca",
+          borderRadius: 6,
+          padding: 14,
+          display: "flex",
+          flexDirection: "column",
+          gap: 10
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "flex-start", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 16, lineHeight: 1, marginTop: 1 }, children: "⚠️" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "#7f1d1d", lineHeight: 1.5 }, children: [
+              "This will permanently delete all entries, groups, tags, and copied library files. There is no undo. Type ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "DELETE" }),
+              " to confirm."
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              autoFocus: true,
+              value: resetConfirmText,
+              onChange: (e) => setResetConfirmText(e.target.value),
+              placeholder: "Type DELETE",
+              style: {
+                padding: "7px 10px",
+                fontSize: 13,
+                borderRadius: 5,
+                border: "1px solid #fca5a5",
+                outline: "none",
+                background: "#fff",
+                color: "#7f1d1d"
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: {
+                  ...btn("danger"),
+                  background: "#b91c1c",
+                  color: "#fff",
+                  opacity: resetConfirmText === "DELETE" && !resetting ? 1 : 0.5
+                },
+                onClick: confirmReset,
+                disabled: resetConfirmText !== "DELETE" || resetting,
+                children: resetting ? "Clearing…" : "Yes, delete everything"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: btn("ghost"),
+                onClick: () => {
+                  setResetPending(false);
+                  setResetConfirmText("");
+                },
+                disabled: resetting,
+                children: "Cancel"
+              }
+            )
+          ] })
+        ] })
+      ] }) })
     ] })
   ] });
 }
@@ -30556,24 +31169,35 @@ function App() {
     refreshExtent();
   }, [refreshExtent]);
   reactExports.useEffect(() => {
-    const errors = [];
-    const off = window.api.ingest.onProgress((evt) => {
-      if (evt.error) errors.push(`${evt.current}: ${evt.error}`);
+    let errors = [];
+    const offProgress = window.api.ingest.onProgress((evt) => {
+      if (evt.completed === 0) errors = [];
+      if (evt.error) errors.push({ file: evt.current, error: evt.error });
       setIngestProgress({
         total: evt.total,
         completed: evt.completed,
         current: evt.current,
-        errors: [...errors]
+        errors: [...errors],
+        done: false,
+        logPath: null
       });
-      if (evt.completed >= evt.total) {
-        setTimeout(() => {
-          setIngestProgress(null);
-          refreshExtent();
-          bumpRefreshKey();
-        }, 800);
-      }
     });
-    return off;
+    const offDone = window.api.ingest.onDone((evt) => {
+      setIngestProgress({
+        total: evt.total,
+        completed: evt.total,
+        current: "",
+        errors: evt.failures,
+        done: true,
+        logPath: evt.logPath
+      });
+      refreshExtent();
+      bumpRefreshKey();
+    });
+    return () => {
+      offProgress();
+      offDone();
+    };
   }, [setIngestProgress, bumpRefreshKey, refreshExtent]);
   reactExports.useEffect(() => {
     const offProgress = window.api.sync.onProgress((evt) => {
@@ -30643,50 +31267,82 @@ function SyncProgressBar() {
 }
 function IngestProgressBar() {
   const ingestProgress = useStore((s) => s.ingestProgress);
+  const setIngestProgress = useStore((s) => s.setIngestProgress);
   if (!ingestProgress) return null;
-  const { total, completed, current, errors } = ingestProgress;
+  const { total, completed, current, errors, done, logPath } = ingestProgress;
+  const failed = errors.length;
   const pct = total > 0 ? Math.round(completed / total * 100) : 0;
-  const done = completed >= total;
+  const state = !done ? "active" : failed > 0 ? "error" : "success";
+  const palette = {
+    active: { bg: "#fffbe6", border: "#f0e6b8", track: "#f0e6b8", fill: "#f59e0b", text: "#1a1a1a" },
+    success: { bg: "#f0fdf4", border: "#bbf7d0", track: "#bbf7d0", fill: "#22c55e", text: "#166534" },
+    error: { bg: "#fef2f2", border: "#fecaca", track: "#fecaca", fill: "#ef4444", text: "#b91c1c" }
+  }[state];
+  const label = !done ? `Importing ${completed}/${total} files` : failed > 0 ? `${total - failed}/${total} files imported — ${failed} failed` : `✓ ${total}/${total} files imported`;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
     padding: "8px 16px",
-    background: "#fffbe6",
-    borderBottom: "1px solid #f0e6b8",
+    background: palette.bg,
+    borderBottom: `1px solid ${palette.border}`,
     display: "flex",
     flexDirection: "column",
     gap: 6,
     flexShrink: 0
   }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: "#1a1a1a" }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontWeight: 600 }, children: [
-        done ? "Import complete" : "Importing",
-        " — ",
-        completed,
-        "/",
-        total,
-        " (",
-        pct,
-        "%)"
-      ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: palette.text }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 600 }, children: label }),
       !done && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "#666", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }, children: current }),
-      errors.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { color: "#b91c1c", marginLeft: "auto" }, children: [
-        errors.length,
+      !done && failed > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { color: "#b91c1c" }, children: [
+        failed,
         " error",
-        errors.length === 1 ? "" : "s"
-      ] })
+        failed === 1 ? "" : "s"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: "auto", fontWeight: 600 }, children: done ? "" : `${pct}%` }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => setIngestProgress(null),
+          title: "Dismiss",
+          style: {
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            fontSize: 15,
+            lineHeight: 1,
+            padding: "0 2px",
+            color: palette.text
+          },
+          children: "×"
+        }
+      )
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 6, background: "#f0e6b8", borderRadius: 3, overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      width: `${pct}%`,
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 6, background: palette.track, borderRadius: 3, overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+      width: `${done ? 100 : pct}%`,
       height: "100%",
-      background: done ? "#22c55e" : "#f59e0b",
+      background: palette.fill,
       transition: "width 120ms ease-out"
-    } }) })
+    } }) }),
+    done && failed > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 11, color: palette.text }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { maxHeight: 110, overflowY: "auto", fontFamily: "monospace" }, children: errors.map((f2, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: [
+        f2.file,
+        " — ",
+        f2.error
+      ] }, i)) }),
+      logPath && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: 4, fontWeight: 600 }, children: [
+        "Failed files written to ",
+        logPath
+      ] })
+    ] })
   ] });
 }
 function Main() {
   const { ingestProgress, syncProgress, selectedPeriod, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore();
   const bottomOpen = selectedPeriod !== null || searchResults !== null;
   const isSyncing = syncProgress !== null && syncProgress.phase !== "done";
+  const isImporting = ingestProgress !== null && !ingestProgress.done;
   const [importPending, setImportPending] = reactExports.useState(null);
+  const [isDraggingFiles, setIsDraggingFiles] = reactExports.useState(false);
+  const dragCounterRef = React$2.useRef(0);
+  const importBusy = isImporting || isSyncing;
   const histH = settings?.histogramHeight;
   const isFixedHistogram = histH !== null && histH !== void 0;
   const onResizeMouseDown = React$2.useCallback((e) => {
@@ -30708,13 +31364,43 @@ function Main() {
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }, [settings, setSettings]);
+  async function startImportFlow(paths) {
+    if (!paths.length) return;
+    const count = await window.api.ingest.countFiles(paths);
+    setImportPending({ paths, count });
+  }
   async function handleImport() {
     const paths = await window.api.ingest.pickFiles();
-    if (!paths.length) return;
-    setImportPending(paths);
+    await startImportFlow(paths);
   }
+  const handleDragEnter = React$2.useCallback((e) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    if (importBusy) return;
+    dragCounterRef.current++;
+    setIsDraggingFiles(true);
+  }, [importBusy]);
+  const handleDragOver = React$2.useCallback((e) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = importBusy ? "none" : "copy";
+  }, [importBusy]);
+  const handleDragLeave = React$2.useCallback((e) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) setIsDraggingFiles(false);
+  }, []);
+  const handleDrop2 = React$2.useCallback(async (e) => {
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setIsDraggingFiles(false);
+    if (importBusy) return;
+    const paths = Array.from(e.dataTransfer.files).map((f2) => window.api.ingest.getPathForFile(f2)).filter(Boolean);
+    await startImportFlow(paths);
+  }, [importBusy]);
   async function confirmImport(tagNames) {
-    const paths = importPending;
+    const paths = importPending.paths;
     setImportPending(null);
     await window.api.ingest.start(paths, tagNames);
   }
@@ -30729,102 +31415,133 @@ function Main() {
     fontWeight: active ? 600 : 400,
     boxShadow: active ? "0 1px 3px rgba(0,0,0,0.10)" : "none"
   });
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("main", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
-      padding: "8px 16px",
-      borderBottom: "1px solid var(--border)",
-      display: "flex",
-      alignItems: "center",
-      gap: 12,
-      background: "var(--bg-surface)",
-      flexShrink: 0
-    }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { style: { fontSize: 15, fontWeight: 600, color: "var(--text)" }, children: "Timeline" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-        display: "flex",
-        background: "var(--bg-subtle)",
-        borderRadius: 7,
-        padding: 2,
-        gap: 1
-      }, children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "timeline"), onClick: () => setActiveView("timeline"), children: "Timeline" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "calendar"), onClick: () => setActiveView("calendar"), children: "Calendar" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "files"), onClick: () => setActiveView("files"), children: "Files" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "settings"), onClick: () => setActiveView("settings"), children: "Settings" })
-      ] }),
-      activeView !== "settings" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }, children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(SearchBar, {}),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "main",
+    {
+      style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" },
+      onDragEnter: handleDragEnter,
+      onDragOver: handleDragOver,
+      onDragLeave: handleDragLeave,
+      onDrop: handleDrop2,
+      children: [
+        isDraggingFiles && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+          position: "absolute",
+          inset: 0,
+          zIndex: 500,
+          background: "rgba(59, 130, 246, 0.10)",
+          border: "3px dashed var(--accent)",
+          borderRadius: 8,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          pointerEvents: "none"
+        }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+          background: "var(--bg-surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          padding: "20px 32px",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.24)",
+          fontSize: 15,
+          fontWeight: 600,
+          color: "var(--text)"
+        }, children: "Drop files or folders to import" }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
+          padding: "8px 16px",
+          borderBottom: "1px solid var(--border)",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          background: "var(--bg-surface)",
+          flexShrink: 0
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("h1", { style: { fontSize: 15, fontWeight: 600, color: "var(--text)" }, children: "Timeline" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            display: "flex",
+            background: "var(--bg-subtle)",
+            borderRadius: 7,
+            padding: 2,
+            gap: 1
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "timeline"), onClick: () => setActiveView("timeline"), children: "Timeline" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "calendar"), onClick: () => setActiveView("calendar"), children: "Calendar" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "files"), onClick: () => setActiveView("files"), children: "Files" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "settings"), onClick: () => setActiveView("settings"), children: "Settings" })
+          ] }),
+          activeView !== "settings" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(SearchBar, {}),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: () => openJournalModal(),
+                style: { padding: "6px 14px", background: "#ec4899", border: "none", borderRadius: 4, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" },
+                children: "+ Journal"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: () => window.api.sync.run(),
+                disabled: isSyncing || isImporting,
+                style: {
+                  padding: "6px 14px",
+                  background: isSyncing ? "var(--bg-subtle)" : "#e0e7ff",
+                  border: "none",
+                  borderRadius: 4,
+                  color: isSyncing ? "var(--text-3)" : "#3730a3",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: isSyncing ? "not-allowed" : "pointer"
+                },
+                children: isSyncing ? "Syncing…" : "Sync"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: handleImport,
+                disabled: importBusy,
+                style: {
+                  padding: "6px 14px",
+                  background: isImporting ? "var(--bg-subtle)" : "var(--accent)",
+                  border: "none",
+                  borderRadius: 4,
+                  color: isImporting ? "var(--text-3)" : "var(--accent-fg)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: isImporting ? "not-allowed" : "pointer"
+                },
+                children: "+ Import"
+              }
+            )
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(IngestProgressBar, {}),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(SyncProgressBar, {}),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+          flex: bottomOpen || activeView === "timeline" && isFixedHistogram ? "0 0 auto" : 1,
+          height: bottomOpen ? "calc(100% - 240px - 41px)" : activeView === "timeline" && isFixedHistogram ? histH : void 0,
+          minHeight: bottomOpen ? 140 : void 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden"
+        }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
+        activeView === "timeline" && !bottomOpen && isFixedHistogram && /* @__PURE__ */ jsxRuntimeExports.jsx(ResizeDivider, { onMouseDown: onResizeMouseDown }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(SearchResults, {}),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(DayView, {}),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(EntryModal, {}),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(JournalModal, {}),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(DateRangeGroupModal, {}),
+        importPending && /* @__PURE__ */ jsxRuntimeExports.jsx(
+          ImportTagModal,
           {
-            onClick: () => openJournalModal(),
-            style: { padding: "6px 14px", background: "#ec4899", border: "none", borderRadius: 4, color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" },
-            children: "+ Journal"
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
-          {
-            onClick: () => window.api.sync.run(),
-            disabled: isSyncing || !!ingestProgress,
-            style: {
-              padding: "6px 14px",
-              background: isSyncing ? "var(--bg-subtle)" : "#e0e7ff",
-              border: "none",
-              borderRadius: 4,
-              color: isSyncing ? "var(--text-3)" : "#3730a3",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: isSyncing ? "not-allowed" : "pointer"
-            },
-            children: isSyncing ? "Syncing…" : "Sync"
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
-          {
-            onClick: handleImport,
-            disabled: !!ingestProgress || isSyncing,
-            style: {
-              padding: "6px 14px",
-              background: ingestProgress ? "var(--bg-subtle)" : "var(--accent)",
-              border: "none",
-              borderRadius: 4,
-              color: ingestProgress ? "var(--text-3)" : "var(--accent-fg)",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: ingestProgress ? "not-allowed" : "pointer"
-            },
-            children: "+ Import"
+            fileCount: importPending.count,
+            onConfirm: confirmImport,
+            onCancel: () => setImportPending(null)
           }
         )
-      ] })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(IngestProgressBar, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(SyncProgressBar, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      flex: bottomOpen || activeView === "timeline" && isFixedHistogram ? "0 0 auto" : 1,
-      height: bottomOpen ? "calc(100% - 240px - 41px)" : activeView === "timeline" && isFixedHistogram ? histH : void 0,
-      minHeight: bottomOpen ? 140 : void 0,
-      display: "flex",
-      flexDirection: "column",
-      overflow: "hidden"
-    }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
-    activeView === "timeline" && !bottomOpen && isFixedHistogram && /* @__PURE__ */ jsxRuntimeExports.jsx(ResizeDivider, { onMouseDown: onResizeMouseDown }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(SearchResults, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(DayView, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(EntryModal, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(JournalModal, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(DateRangeGroupModal, {}),
-    importPending && /* @__PURE__ */ jsxRuntimeExports.jsx(
-      ImportTagModal,
-      {
-        fileCount: importPending.length,
-        onConfirm: confirmImport,
-        onCancel: () => setImportPending(null)
-      }
-    )
-  ] });
+      ]
+    }
+  );
 }
 client.createRoot(document.getElementById("root")).render(
   /* @__PURE__ */ jsxRuntimeExports.jsx(React$2.StrictMode, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(App, {}) })
