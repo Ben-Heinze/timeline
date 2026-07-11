@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { useStore } from '../store/useStore'
-import type { Entry, Tag } from '../../shared/types'
+import type { Entry, Tag, FileInfo } from '../../shared/types'
 import TagEditor from './TagEditor'
 
 const TYPE_COLORS: Record<string, string> = {
@@ -43,6 +43,35 @@ function RichTextView({ json }: { json: string }) {
   return <EditorContent editor={editor} />
 }
 
+function TypeIconBlock({ type }: { type: string }) {
+  return (
+    <div style={{
+      width: 72, height: 72, borderRadius: 16,
+      background: TYPE_COLORS[type] ?? '#555',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: 28,
+    }}>
+      {type === 'photo'    ? '📷'
+      : type === 'video'   ? '🎬'
+      : type === 'audio'   ? '🎵'
+      :                      '📄'}
+    </div>
+  )
+}
+
+function useMediaUrl(entry: Entry): string | null {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    setUrl(null)
+    if (entry.file_path && !entry.is_missing && (entry.type === 'video' || entry.type === 'audio')) {
+      window.api.files.getMediaUrl(entry.id).then(u => { if (alive) setUrl(u) })
+    }
+    return () => { alive = false }
+  }, [entry.id, entry.file_path, entry.is_missing, entry.type])
+  return url
+}
+
 function EntryContent({ entry }: { entry: Entry }) {
   const thumbSrc = entry.thumbnail_large
     ? `timeline:///${entry.thumbnail_large}`
@@ -54,6 +83,37 @@ function EntryContent({ entry }: { entry: Entry }) {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
   })
+
+  const mediaSrc = useMediaUrl(entry)
+
+  if (entry.type === 'video' && mediaSrc) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' }}>
+        <video
+          src={mediaSrc}
+          controls
+          poster={thumbSrc ?? undefined}
+          style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 6, background: '#000' }}
+        />
+        <div style={{ fontSize: 13, color: 'var(--text-3)' }}>{dateStr}</div>
+      </div>
+    )
+  }
+
+  if (entry.type === 'audio' && mediaSrc) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center', padding: '12px 0' }}>
+        <TypeIconBlock type={entry.type} />
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
+            {entry.title ?? '(untitled)'}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-3)' }}>{dateStr}</div>
+        </div>
+        <audio src={mediaSrc} controls style={{ width: '100%', maxWidth: 480 }} />
+      </div>
+    )
+  }
 
   if (thumbSrc) {
     return (
@@ -90,17 +150,7 @@ function EntryContent({ entry }: { entry: Entry }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, padding: '24px 0' }}>
-      <div style={{
-        width: 72, height: 72, borderRadius: 16,
-        background: TYPE_COLORS[entry.type] ?? '#555',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 28,
-      }}>
-        {entry.type === 'photo'    ? '📷'
-        : entry.type === 'video'   ? '🎬'
-        : entry.type === 'audio'   ? '🎵'
-        :                            '📄'}
-      </div>
+      <TypeIconBlock type={entry.type} />
       <div style={{ textAlign: 'center' }}>
         <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
           {entry.title ?? '(untitled)'}
@@ -118,6 +168,129 @@ function EntryContent({ entry }: { entry: Entry }) {
           <RichTextView json={entry.rich_text_json} />
         </div>
       )}
+    </div>
+  )
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let v = n
+  let i = -1
+  do { v /= 1024; i++ } while (v >= 1024 && i < units.length - 1)
+  return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`
+}
+
+function formatDuration(totalSeconds: number): string {
+  const s = Math.round(totalSeconds)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+    : `${m}:${String(sec).padStart(2, '0')}`
+}
+
+function formatDateTime(ms: number): string {
+  return new Date(ms).toLocaleString('en-US', {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+function MetadataPanel({ entry }: { entry: Entry }) {
+  const [info, setInfo] = useState<FileInfo | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    setInfo(null)
+    if (entry.file_path && !entry.is_missing) {
+      window.api.files.getFileInfo(entry.id).then(i => { if (alive) setInfo(i) })
+    }
+    return () => { alive = false }
+  }, [entry.id, entry.file_path, entry.is_missing])
+
+  const fileName = entry.file_path?.split(/[\\/]/).pop() ?? null
+  const ext = fileName?.includes('.') ? fileName.split('.').pop()!.toUpperCase() : null
+
+  const rows: Array<[string, React.ReactNode]> = []
+  if (fileName) rows.push(['File name', fileName])
+  rows.push(['Kind', ext ? `${entry.type} (${ext})` : entry.type])
+  if (info) rows.push(['Size', formatBytes(info.sizeBytes)])
+  if (info?.width && info?.height) rows.push(['Dimensions', `${info.width} × ${info.height}`])
+  if (entry.duration_seconds != null) rows.push(['Duration', formatDuration(entry.duration_seconds)])
+  rows.push(['Date taken', formatDateTime(entry.timestamp)])
+  if (info) rows.push(['Modified', formatDateTime(info.modifiedMs)])
+  rows.push(['Added', formatDateTime(entry.created_at)])
+  if (entry.file_path) {
+    rows.push(['Location', info?.absolutePath ?? entry.file_path])
+    rows.push(['Import mode', entry.import_mode === 'copy' ? 'Copied into library' : 'Referenced in place'])
+  }
+  if (entry.content_hash) {
+    rows.push(['SHA-256', (
+      <span title={entry.content_hash} style={{ fontFamily: 'monospace', fontSize: 11 }}>
+        {entry.content_hash.slice(0, 16)}…
+      </span>
+    )])
+  }
+  if (entry.is_missing) rows.push(['Status', <span style={{ color: '#ef4444' }}>File is missing</span>])
+  if (entry.needs_date_review) rows.push(['Date review', 'Needs review'])
+
+  return (
+    <div style={{
+      marginTop: 20, borderTop: '1px solid var(--border-light)', paddingTop: 14,
+      display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 16, rowGap: 6,
+      fontSize: 12,
+    }}>
+      {rows.map(([label, value]) => (
+        <React.Fragment key={label}>
+          <span style={{
+            color: 'var(--text-4)', fontWeight: 600, letterSpacing: 0.4,
+            textTransform: 'uppercase', fontSize: 10, alignSelf: 'baseline', paddingTop: 1,
+          }}>
+            {label}
+          </span>
+          <span style={{ color: 'var(--text-2)', wordBreak: 'break-all', alignSelf: 'baseline' }}>
+            {value}
+          </span>
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+const fileBtnStyle: React.CSSProperties = {
+  background: 'none', border: '1px solid var(--border)', color: 'var(--text-2)',
+  fontSize: 12, padding: '4px 10px', borderRadius: 5, cursor: 'pointer', lineHeight: 1.2,
+}
+
+function FileActions({ entry }: { entry: Entry }) {
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async (action: () => Promise<string | void>) => {
+    setError(null)
+    const err = await action()
+    if (err) setError(err)
+  }
+
+  return (
+    <div style={{
+      padding: '10px 16px', borderTop: '1px solid var(--border-light)',
+      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+    }}>
+      <button style={fileBtnStyle} onClick={() => run(() => window.api.files.showInFolder(entry.id))}>
+        📁 Show in Folder
+      </button>
+      <button style={fileBtnStyle} onClick={() => run(() => window.api.files.openDefault(entry.id))}>
+        Open
+      </button>
+      <button style={fileBtnStyle} onClick={() => run(() => window.api.files.openWith(entry.id))}>
+        Open With…
+      </button>
+      {entry.is_missing ? (
+        <span style={{ fontSize: 11, color: 'var(--text-4)' }}>File is missing</span>
+      ) : null}
+      {error && <span style={{ fontSize: 11, color: '#ef4444' }}>{error}</span>}
     </div>
   )
 }
@@ -181,7 +354,7 @@ export default function EntryModal() {
       }}
     >
       <div style={{
-        width: 600, maxWidth: '90vw',
+        width: 600, maxWidth: '90vw', maxHeight: '88vh',
         background: 'var(--bg-surface)',
         borderRadius: 12,
         border: '1px solid var(--border)',
@@ -214,12 +387,19 @@ export default function EntryModal() {
 
         {/* Content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px', minHeight: 220 }}>
-          {entry ? <EntryContent entry={entry} /> : (
+          {entry ? (
+            <>
+              <EntryContent entry={entry} />
+              <MetadataPanel entry={entry} />
+            </>
+          ) : (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 160, color: 'var(--text-3)' }}>
               Loading…
             </div>
           )}
         </div>
+
+        {entry?.file_path && <FileActions entry={entry} />}
 
         {entry && (
           <div style={{

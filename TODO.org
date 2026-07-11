@@ -1,11 +1,15 @@
 * Features to add
+** DONE play/view pictures/videos/audio directly in app
 ** TODO Add file count for every view
 ** TODO Right click on file --> Open in directory
-** TODO When hovering over a bar chart, it should tell you how many files are total, as well as a breakdown of all the types of files.
+** DONE When hovering over a bar chart, it should tell you how many files are total, as well as a breakdown of all the types of files.
 ** TODO Ability to save/load databases
 ** TODO If there are multiple files being tagged, all removed tags apply to every file with that tag, and all added tags are added to each file. Make sure no dupe tags exist.
+
+** TODO Let files have a description feature to them?
 
 * Known Bugs
 ** TODO When moving the copied folder, number count may be off
 ** TODO Fix flashing status bar when importing
 ** TODO Histogram looks off when there is only one year
+** TODO Tried to import one item from desktop, only let me import everything from desktop

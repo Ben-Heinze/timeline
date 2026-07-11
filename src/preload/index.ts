@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, NewGroup, Group,
-  EntryType, SearchFilters, AppSettings, DuplicateGroup,
+  EntryType, SearchFilters, AppSettings, DuplicateGroup, FileInfo,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -96,6 +96,18 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('tags:forGroup', groupId),
     setForGroup: (groupId: number, names: string[]) =>
       ipcRenderer.invoke('tags:setForGroup', groupId, names),
+  },
+  files: {
+    getMediaUrl: (entryId: number): Promise<string | null> =>
+      ipcRenderer.invoke('files:getMediaUrl', entryId),
+    getFileInfo: (entryId: number): Promise<FileInfo | null> =>
+      ipcRenderer.invoke('files:getFileInfo', entryId),
+    showInFolder: (entryId: number): Promise<void> =>
+      ipcRenderer.invoke('files:showInFolder', entryId),
+    openDefault: (entryId: number): Promise<string> =>
+      ipcRenderer.invoke('files:openDefault', entryId),
+    openWith: (entryId: number): Promise<string> =>
+      ipcRenderer.invoke('files:openWith', entryId),
   },
   settings: {
     get: (): Promise<AppSettings> =>

@@ -7435,7 +7435,7 @@ const bucketEndMs = (bs, level) => {
   if (level === "week") return bs + 7 * MS_DAY$2;
   return bs + MS_DAY$2;
 };
-const TYPE_LABELS$3 = {
+const TYPE_LABELS$2 = {
   photo: ["photo", "photos"],
   video: ["video", "videos"],
   audio: ["audio file", "audio files"],
@@ -7984,8 +7984,10 @@ function TimelineCanvas() {
     const ts = from2 + cx / rect.width * (to - from2);
     const level = zoomRef.current;
     if (level === "day") {
-      const dayStart = Math.floor(ts / MS_DAY$2) * MS_DAY$2;
-      setSelectedPeriod([dayStart, dayStart + MS_DAY$2]);
+      const c = new Date(ts);
+      const dayStart = new Date(c.getFullYear(), c.getMonth(), c.getDate()).getTime();
+      const dayEnd = new Date(c.getFullYear(), c.getMonth(), c.getDate() + 1).getTime();
+      setSelectedPeriod([dayStart, dayEnd]);
       return;
     }
     const next = NEXT_LEVEL[level];
@@ -8331,7 +8333,7 @@ function TimelineCanvas() {
         hoverInfo.types.map(([type, count]) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { color: "var(--text-2)" }, children: [
           count,
           " ",
-          (TYPE_LABELS$3[type] ?? [type, type])[count === 1 ? 0 : 1]
+          (TYPE_LABELS$2[type] ?? [type, type])[count === 1 ? 0 : 1]
         ] }, type))
       ] })
     ] }),
@@ -8518,7 +8520,8 @@ function CalendarHeatmap() {
       didSelectRef.current = false;
       return;
     }
-    setSelectedPeriod([ts, ts + MS_DAY$1]);
+    const d = new Date(ts);
+    setSelectedPeriod([ts, new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()]);
   }, [setSelectedPeriod]);
   const goToPrevMonth = reactExports.useCallback(() => {
     if (zoomedMonth === 0) {
@@ -8764,27 +8767,20 @@ const THUMB_SIZE = {
   medium: 132,
   large: 200
 };
-const TYPE_COLORS$3 = {
+const TYPE_COLORS$2 = {
   photo: "#3b82f6",
   video: "#8b5cf6",
   audio: "#10b981",
   document: "#f59e0b",
   journal: "#ec4899"
 };
-const TYPE_LABELS$2 = {
+const TYPE_LABELS$1 = {
   photo: "PHO",
   video: "VID",
   audio: "AUD",
   document: "DOC",
   journal: "JNL"
 };
-function monthYearKey(ms) {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${d.getMonth()}`;
-}
-function monthYearLabel(ms) {
-  return new Date(ms).toLocaleString("en-US", { month: "long", year: "numeric" });
-}
 function Thumb({ entry, size }) {
   const src = entry.thumbnail_medium ?? entry.thumbnail_small ?? entry.thumbnail_large;
   if (src) {
@@ -8810,7 +8806,7 @@ function Thumb({ entry, size }) {
     width: badge,
     height: badge,
     borderRadius: badge * 0.22,
-    background: TYPE_COLORS$3[entry.type] ?? "#555",
+    background: TYPE_COLORS$2[entry.type] ?? "#555",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -8818,7 +8814,7 @@ function Thumb({ entry, size }) {
     fontWeight: 700,
     color: "#fff",
     letterSpacing: 0.5
-  }, children: TYPE_LABELS$2[entry.type] ?? "?" }) });
+  }, children: TYPE_LABELS$1[entry.type] ?? "?" }) });
 }
 function GridCell({ entry, selected, onClick, onDoubleClick, onContextMenu, size }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(
@@ -8889,7 +8885,7 @@ function ListRow({ entry, selected, onClick, onDoubleClick, onContextMenu }) {
           letterSpacing: 0.6,
           textTransform: "uppercase",
           color: "#fff",
-          background: TYPE_COLORS$3[entry.type] ?? "#555",
+          background: TYPE_COLORS$2[entry.type] ?? "#555",
           borderRadius: 3,
           padding: "2px 6px",
           justifySelf: "start"
@@ -8904,6 +8900,45 @@ function ListRow({ entry, selected, onClick, onDoubleClick, onContextMenu }) {
       ]
     }
   );
+}
+function iconFor(m2) {
+  if (m2 === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { letterSpacing: 1 }, children: "≡" });
+  if (m2 === "small") return /* @__PURE__ */ jsxRuntimeExports.jsx(IconGrid, { n: 3 });
+  if (m2 === "medium") return /* @__PURE__ */ jsxRuntimeExports.jsx(IconGrid, { n: 2 });
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(IconGrid, { n: 1 });
+}
+function IconGrid({ n: n2 }) {
+  const cells = n2 * n2;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+    display: "inline-grid",
+    gridTemplateColumns: `repeat(${n2}, 1fr)`,
+    gap: 1.5,
+    width: 12,
+    height: 12,
+    verticalAlign: "middle"
+  }, children: Array.from({ length: cells }).map((_, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { background: "currentColor", borderRadius: 1 } }, i)) });
+}
+const toolBtn = (active) => ({
+  background: active ? "var(--text)" : "none",
+  color: active ? "var(--bg-app)" : "var(--text-2)",
+  border: active ? "none" : "1px solid var(--border)",
+  borderRadius: 5,
+  padding: "3px 8px",
+  fontSize: 12,
+  cursor: "pointer",
+  lineHeight: 1,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  height: 24,
+  minWidth: 26
+});
+function monthYearKey(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${d.getMonth()}`;
+}
+function monthYearLabel(ms) {
+  return new Date(ms).toLocaleString("en-US", { month: "long", year: "numeric" });
 }
 function FilesView() {
   const {
@@ -9390,38 +9425,6 @@ const modalBtn = (primary) => ({
   background: primary ? "var(--accent)" : "transparent",
   color: primary ? "#fff" : "var(--text)"
 });
-function iconFor(m2) {
-  if (m2 === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { letterSpacing: 1 }, children: "≡" });
-  if (m2 === "small") return /* @__PURE__ */ jsxRuntimeExports.jsx(IconGrid, { n: 3 });
-  if (m2 === "medium") return /* @__PURE__ */ jsxRuntimeExports.jsx(IconGrid, { n: 2 });
-  return /* @__PURE__ */ jsxRuntimeExports.jsx(IconGrid, { n: 1 });
-}
-function IconGrid({ n: n2 }) {
-  const cells = n2 * n2;
-  return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
-    display: "inline-grid",
-    gridTemplateColumns: `repeat(${n2}, 1fr)`,
-    gap: 1.5,
-    width: 12,
-    height: 12,
-    verticalAlign: "middle"
-  }, children: Array.from({ length: cells }).map((_, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { background: "currentColor", borderRadius: 1 } }, i)) });
-}
-const toolBtn = (active) => ({
-  background: active ? "var(--text)" : "none",
-  color: active ? "var(--bg-app)" : "var(--text-2)",
-  border: active ? "none" : "1px solid var(--border)",
-  borderRadius: 5,
-  padding: "3px 8px",
-  fontSize: 12,
-  cursor: "pointer",
-  lineHeight: 1,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  height: 24,
-  minWidth: 26
-});
 const selectStyle = {
   fontSize: 12,
   padding: "3px 6px",
@@ -9431,6 +9434,7 @@ const selectStyle = {
   color: "var(--text)"
 };
 const MS_DAY = 864e5;
+const MIN_HEIGHT = 140;
 function periodLabel(from2, to) {
   const rangeMs = to - from2;
   const d = new Date(from2);
@@ -9440,24 +9444,10 @@ function periodLabel(from2, to) {
     return d.toLocaleString("en-US", { month: "long", year: "numeric" });
   if (rangeMs >= 6 * MS_DAY)
     return `Week of ${d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
-  if (rangeMs >= MS_DAY - 1)
+  if (rangeMs >= 23 * 36e5)
     return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-const TYPE_COLORS$2 = {
-  photo: "#3b82f6",
-  video: "#8b5cf6",
-  audio: "#10b981",
-  document: "#f59e0b",
-  journal: "#ec4899"
-};
-const TYPE_LABELS$1 = {
-  photo: "PHO",
-  video: "VID",
-  audio: "AUD",
-  document: "DOC",
-  journal: "JNL"
-};
 function AssignDropdown({ selectedIds, groups, onAssign }) {
   const [open, setOpen] = reactExports.useState(false);
   const ref = reactExports.useRef(null);
@@ -9559,98 +9549,6 @@ function AssignDropdown({ selectedIds, groups, onAssign }) {
     ] })
   ] });
 }
-function EntryCard({ entry, onOpen }) {
-  const { selectedIds, setSelection, lastSelectedId } = useStore();
-  const isSelected = selectedIds.has(entry.id);
-  const thumbSrc = entry.thumbnail_small ? `timeline:///${entry.thumbnail_small}` : null;
-  const handleClick2 = reactExports.useCallback((e) => {
-    if (e.metaKey || e.ctrlKey) {
-      const next = new Set(selectedIds);
-      if (next.has(entry.id)) next.delete(entry.id);
-      else next.add(entry.id);
-      setSelection(next, entry.id);
-    } else if (e.shiftKey && lastSelectedId !== null) {
-      setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
-    } else {
-      setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
-    }
-  }, [entry.id, selectedIds, lastSelectedId, setSelection]);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
-    "div",
-    {
-      onClick: handleClick2,
-      onDoubleClick: () => onOpen(entry.id),
-      style: {
-        width: 140,
-        borderRadius: 8,
-        overflow: "hidden",
-        background: isSelected ? "var(--bg-entry-sel)" : "var(--bg-surface)",
-        border: `2px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
-        cursor: "pointer",
-        userSelect: "none",
-        transition: "border-color 0.1s",
-        flexShrink: 0
-      },
-      children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { width: 140, height: 110, position: "relative", overflow: "hidden", background: "var(--bg-thumb)" }, children: [
-          thumbSrc ? /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "img",
-            {
-              src: thumbSrc,
-              style: { width: "100%", height: "100%", objectFit: "cover", display: "block" },
-              draggable: false
-            }
-          ) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-            width: "100%",
-            height: "100%",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6
-          }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-            width: 44,
-            height: 44,
-            borderRadius: 10,
-            background: TYPE_COLORS$2[entry.type] ?? "#555",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 13,
-            fontWeight: 700,
-            color: "#fff",
-            letterSpacing: 0.5
-          }, children: TYPE_LABELS$1[entry.type] ?? "?" }) }),
-          isSelected && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-            position: "absolute",
-            top: 6,
-            right: 6,
-            width: 18,
-            height: 18,
-            borderRadius: 9,
-            background: "var(--accent)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 11,
-            color: "var(--accent-fg)"
-          }, children: "✓" })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "7px 8px 8px" }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-            fontSize: 12,
-            fontWeight: 500,
-            color: "var(--text)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap"
-          }, children: entry.title ?? entry.type }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-3)", marginTop: 2 }, children: new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) })
-        ] })
-      ]
-    }
-  );
-}
 function DayView() {
   const {
     selectedPeriod,
@@ -9658,12 +9556,19 @@ function DayView() {
     setActiveEntryId,
     setSelection,
     selectedIds,
+    lastSelectedId,
     selectedGroupId,
     groups,
     refreshKey,
-    bumpRefreshKey
+    bumpRefreshKey,
+    settings,
+    setSettings
   } = useStore();
   const [entries, setEntries] = reactExports.useState([]);
+  const [resizing, setResizing] = reactExports.useState(false);
+  const [handleHovered, setHandleHovered] = reactExports.useState(false);
+  const height = settings?.dayViewHeight ?? 240;
+  const viewMode = settings?.dayViewMode ?? "medium";
   reactExports.useEffect(() => {
     if (!selectedPeriod) {
       setEntries([]);
@@ -9680,17 +9585,95 @@ function DayView() {
     setSelection(/* @__PURE__ */ new Set(), null);
     bumpRefreshKey();
   }, [selectedIds, setSelection, bumpRefreshKey]);
+  const setViewMode = reactExports.useCallback((m2) => {
+    if (!settings) return;
+    setSettings({ ...settings, dayViewMode: m2 });
+    window.api.settings.set({ dayViewMode: m2 });
+  }, [settings, setSettings]);
+  const onResizeMouseDown = reactExports.useCallback((e) => {
+    if (!settings) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = settings.dayViewHeight ?? 240;
+    const snap = { ...settings };
+    const clamp = (h) => Math.min(Math.max(h, MIN_HEIGHT), window.innerHeight - 160);
+    setResizing(true);
+    const onMove = (ev) => {
+      setSettings({ ...snap, dayViewHeight: clamp(startH + startY - ev.clientY) });
+    };
+    const onUp = (ev) => {
+      const newH = clamp(startH + startY - ev.clientY);
+      setSettings({ ...snap, dayViewHeight: newH });
+      window.api.settings.set({ dayViewHeight: newH });
+      setResizing(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [settings, setSettings]);
+  const handleClickEntry = reactExports.useCallback((entry) => (e) => {
+    if (e.metaKey || e.ctrlKey) {
+      const next = new Set(selectedIds);
+      if (next.has(entry.id)) next.delete(entry.id);
+      else next.add(entry.id);
+      setSelection(next, entry.id);
+    } else if (e.shiftKey && lastSelectedId !== null) {
+      const from2 = entries.findIndex((x2) => x2.id === lastSelectedId);
+      const to = entries.findIndex((x2) => x2.id === entry.id);
+      if (from2 >= 0 && to >= 0) {
+        const [a, b] = from2 < to ? [from2, to] : [to, from2];
+        setSelection(new Set(entries.slice(a, b + 1).map((x2) => x2.id)), entry.id);
+      } else {
+        setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
+      }
+    } else {
+      setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
+    }
+  }, [selectedIds, lastSelectedId, entries, setSelection]);
   if (!selectedPeriod) return null;
   const label = periodLabel(selectedPeriod[0], selectedPeriod[1]);
   const count = entries.length;
+  const renderItem = (entry) => {
+    const common = {
+      entry,
+      selected: selectedIds.has(entry.id),
+      onClick: handleClickEntry(entry),
+      onDoubleClick: () => setActiveEntryId(entry.id)
+    };
+    if (viewMode === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx(ListRow, { ...common }, entry.id);
+    return /* @__PURE__ */ jsxRuntimeExports.jsx(GridCell, { ...common, size: THUMB_SIZE[viewMode] }, entry.id);
+  };
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-    height: 240,
+    height,
     borderTop: "1px solid var(--border)",
     background: "var(--bg-app)",
     display: "flex",
     flexDirection: "column",
-    flexShrink: 0
+    flexShrink: 0,
+    position: "relative"
   }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        onMouseDown: onResizeMouseDown,
+        onMouseEnter: () => setHandleHovered(true),
+        onMouseLeave: () => setHandleHovered(false),
+        style: {
+          position: "absolute",
+          top: -3,
+          left: 0,
+          right: 0,
+          height: 7,
+          cursor: "ns-resize",
+          zIndex: 40,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        },
+        children: (handleHovered || resizing) && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 32, height: 3, borderRadius: 2, background: "var(--scrollbar-thumb)" } })
+      }
+    ),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
       display: "flex",
       alignItems: "center",
@@ -9706,6 +9689,16 @@ function DayView() {
         count === 1 ? "item" : "items"
       ] }),
       selectedIds.size > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(AssignDropdown, { selectedIds, groups, onAssign: handleAssign }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginLeft: "auto", display: "flex", gap: 2 }, children: ["list", "small", "medium", "large"].map((m2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => setViewMode(m2),
+          title: m2,
+          style: toolBtn(viewMode === m2),
+          children: iconFor(m2)
+        },
+        m2
+      )) }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
@@ -9714,36 +9707,27 @@ function DayView() {
             setActiveEntryId(null);
           },
           style: {
-            marginLeft: "auto",
             background: "none",
             border: "none",
             color: "var(--text-4)",
             fontSize: 16,
             lineHeight: 1,
             padding: "2px 6px",
-            borderRadius: 4
+            borderRadius: 4,
+            cursor: "pointer"
           },
           children: "✕"
         }
       )
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      flex: 1,
-      overflowX: "auto",
-      overflowY: "hidden",
-      display: "flex",
-      alignItems: "flex-start",
-      gap: 10,
-      padding: "12px 14px"
-    }, children: entries.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      width: "100%",
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", minHeight: 0 }, children: entries.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
       height: "100%",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       color: "var(--text-4)",
       fontSize: 13
-    }, children: "No entries for this period" }) : entries.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(EntryCard, { entry: e, onOpen: setActiveEntryId }, e.id)) })
+    }, children: "No entries for this period" }) : viewMode === "list" ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "6px 0" }, children: entries.map(renderItem) }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px" }, children: entries.map(renderItem) }) })
   ] });
 }
 function OrderedMap(content) {
@@ -28627,6 +28611,34 @@ function RichTextView({ json }) {
   }, [editor, json]);
   return /* @__PURE__ */ jsxRuntimeExports.jsx(EditorContent, { editor });
 }
+function TypeIconBlock({ type }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+    width: 72,
+    height: 72,
+    borderRadius: 16,
+    background: TYPE_COLORS$1[type] ?? "#555",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 28
+  }, children: type === "photo" ? "📷" : type === "video" ? "🎬" : type === "audio" ? "🎵" : "📄" });
+}
+function useMediaUrl(entry) {
+  const [url, setUrl] = reactExports.useState(null);
+  reactExports.useEffect(() => {
+    let alive = true;
+    setUrl(null);
+    if (entry.file_path && !entry.is_missing && (entry.type === "video" || entry.type === "audio")) {
+      window.api.files.getMediaUrl(entry.id).then((u2) => {
+        if (alive) setUrl(u2);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [entry.id, entry.file_path, entry.is_missing, entry.type]);
+  return url;
+}
 function EntryContent({ entry }) {
   const thumbSrc = entry.thumbnail_large ? `timeline:///${entry.thumbnail_large}` : entry.thumbnail_medium ? `timeline:///${entry.thumbnail_medium}` : null;
   const dateStr = new Date(entry.timestamp).toLocaleString("en-US", {
@@ -28637,6 +28649,31 @@ function EntryContent({ entry }) {
     hour: "2-digit",
     minute: "2-digit"
   });
+  const mediaSrc = useMediaUrl(entry);
+  if (entry.type === "video" && mediaSrc) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16, alignItems: "center" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "video",
+        {
+          src: mediaSrc,
+          controls: true,
+          poster: thumbSrc ?? void 0,
+          style: { maxWidth: "100%", maxHeight: 400, borderRadius: 6, background: "#000" }
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "var(--text-3)" }, children: dateStr })
+    ] });
+  }
+  if (entry.type === "audio" && mediaSrc) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16, alignItems: "center", padding: "12px 0" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(TypeIconBlock, { type: entry.type }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { textAlign: "center" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }, children: entry.title ?? "(untitled)" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "var(--text-3)" }, children: dateStr })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("audio", { src: mediaSrc, controls: true, style: { width: "100%", maxWidth: 480 } })
+    ] });
+  }
   if (thumbSrc) {
     return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 16, alignItems: "center" }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -28660,16 +28697,7 @@ function EntryContent({ entry }) {
     ] });
   }
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 20, padding: "24px 0" }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      width: 72,
-      height: 72,
-      borderRadius: 16,
-      background: TYPE_COLORS$1[entry.type] ?? "#555",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      fontSize: 28
-    }, children: entry.type === "photo" ? "📷" : entry.type === "video" ? "🎬" : entry.type === "audio" ? "🎵" : "📄" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(TypeIconBlock, { type: entry.type }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { textAlign: "center" }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 15, fontWeight: 600, color: "var(--text)", marginBottom: 8 }, children: entry.title ?? "(untitled)" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "var(--text-3)", marginBottom: 6 }, children: dateStr }),
@@ -28683,6 +28711,124 @@ function EntryContent({ entry }) {
       borderRadius: 8,
       padding: 16
     }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(RichTextView, { json: entry.rich_text_json }) })
+  ] });
+}
+function formatBytes(n2) {
+  if (n2 < 1024) return `${n2} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v2 = n2;
+  let i = -1;
+  do {
+    v2 /= 1024;
+    i++;
+  } while (v2 >= 1024 && i < units.length - 1);
+  return `${v2 >= 100 ? Math.round(v2) : v2.toFixed(1)} ${units[i]}`;
+}
+function formatDuration(totalSeconds) {
+  const s = Math.round(totalSeconds);
+  const h = Math.floor(s / 3600);
+  const m2 = Math.floor(s % 3600 / 60);
+  const sec = s % 60;
+  return h > 0 ? `${h}:${String(m2).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m2}:${String(sec).padStart(2, "0")}`;
+}
+function formatDateTime(ms) {
+  return new Date(ms).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+function MetadataPanel({ entry }) {
+  const [info, setInfo] = reactExports.useState(null);
+  reactExports.useEffect(() => {
+    let alive = true;
+    setInfo(null);
+    if (entry.file_path && !entry.is_missing) {
+      window.api.files.getFileInfo(entry.id).then((i) => {
+        if (alive) setInfo(i);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [entry.id, entry.file_path, entry.is_missing]);
+  const fileName = entry.file_path?.split(/[\\/]/).pop() ?? null;
+  const ext = fileName?.includes(".") ? fileName.split(".").pop().toUpperCase() : null;
+  const rows = [];
+  if (fileName) rows.push(["File name", fileName]);
+  rows.push(["Kind", ext ? `${entry.type} (${ext})` : entry.type]);
+  if (info) rows.push(["Size", formatBytes(info.sizeBytes)]);
+  if (info?.width && info?.height) rows.push(["Dimensions", `${info.width} × ${info.height}`]);
+  if (entry.duration_seconds != null) rows.push(["Duration", formatDuration(entry.duration_seconds)]);
+  rows.push(["Date taken", formatDateTime(entry.timestamp)]);
+  if (info) rows.push(["Modified", formatDateTime(info.modifiedMs)]);
+  rows.push(["Added", formatDateTime(entry.created_at)]);
+  if (entry.file_path) {
+    rows.push(["Location", info?.absolutePath ?? entry.file_path]);
+    rows.push(["Import mode", entry.import_mode === "copy" ? "Copied into library" : "Referenced in place"]);
+  }
+  if (entry.content_hash) {
+    rows.push(["SHA-256", /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { title: entry.content_hash, style: { fontFamily: "monospace", fontSize: 11 }, children: [
+      entry.content_hash.slice(0, 16),
+      "…"
+    ] })]);
+  }
+  if (entry.is_missing) rows.push(["Status", /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "#ef4444" }, children: "File is missing" })]);
+  if (entry.needs_date_review) rows.push(["Date review", "Needs review"]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+    marginTop: 20,
+    borderTop: "1px solid var(--border-light)",
+    paddingTop: 14,
+    display: "grid",
+    gridTemplateColumns: "max-content 1fr",
+    columnGap: 16,
+    rowGap: 6,
+    fontSize: 12
+  }, children: rows.map(([label, value]) => /* @__PURE__ */ jsxRuntimeExports.jsxs(React$2.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+      color: "var(--text-4)",
+      fontWeight: 600,
+      letterSpacing: 0.4,
+      textTransform: "uppercase",
+      fontSize: 10,
+      alignSelf: "baseline",
+      paddingTop: 1
+    }, children: label }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-2)", wordBreak: "break-all", alignSelf: "baseline" }, children: value })
+  ] }, label)) });
+}
+const fileBtnStyle = {
+  background: "none",
+  border: "1px solid var(--border)",
+  color: "var(--text-2)",
+  fontSize: 12,
+  padding: "4px 10px",
+  borderRadius: 5,
+  cursor: "pointer",
+  lineHeight: 1.2
+};
+function FileActions({ entry }) {
+  const [error, setError] = reactExports.useState(null);
+  const run2 = async (action) => {
+    setError(null);
+    const err = await action();
+    if (err) setError(err);
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+    padding: "10px 16px",
+    borderTop: "1px solid var(--border-light)",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap"
+  }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: fileBtnStyle, onClick: () => run2(() => window.api.files.showInFolder(entry.id)), children: "📁 Show in Folder" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: fileBtnStyle, onClick: () => run2(() => window.api.files.openDefault(entry.id)), children: "Open" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: fileBtnStyle, onClick: () => run2(() => window.api.files.openWith(entry.id)), children: "Open With…" }),
+    entry.is_missing ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)" }, children: "File is missing" }) : null,
+    error && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "#ef4444" }, children: error })
   ] });
 }
 function EntryModal() {
@@ -28749,6 +28895,7 @@ function EntryModal() {
       children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
         width: 600,
         maxWidth: "90vw",
+        maxHeight: "88vh",
         background: "var(--bg-surface)",
         borderRadius: 12,
         border: "1px solid var(--border)",
@@ -28787,7 +28934,11 @@ function EntryModal() {
             }
           )
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "24px 32px", minHeight: 220 }, children: entry ? /* @__PURE__ */ jsxRuntimeExports.jsx(EntryContent, { entry }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: 160, color: "var(--text-3)" }, children: "Loading…" }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "24px 32px", minHeight: 220 }, children: entry ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(EntryContent, { entry }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(MetadataPanel, { entry })
+        ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: 160, color: "var(--text-3)" }, children: "Loading…" }) }),
+        entry?.file_path && /* @__PURE__ */ jsxRuntimeExports.jsx(FileActions, { entry }),
         entry && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
           padding: "10px 16px",
           borderTop: "1px solid var(--border-light)",
@@ -31345,6 +31496,7 @@ function Main() {
   const importBusy = isImporting || isSyncing;
   const histH = settings?.histogramHeight;
   const isFixedHistogram = histH !== null && histH !== void 0;
+  const bottomH = selectedPeriod !== null ? settings?.dayViewHeight ?? 240 : 240;
   const onResizeMouseDown = React$2.useCallback((e) => {
     e.preventDefault();
     const startY = e.clientY;
@@ -31519,7 +31671,7 @@ function Main() {
         /* @__PURE__ */ jsxRuntimeExports.jsx(SyncProgressBar, {}),
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
           flex: bottomOpen || activeView === "timeline" && isFixedHistogram ? "0 0 auto" : 1,
-          height: bottomOpen ? "calc(100% - 240px - 41px)" : activeView === "timeline" && isFixedHistogram ? histH : void 0,
+          height: bottomOpen ? `calc(100% - ${bottomH}px - 41px)` : activeView === "timeline" && isFixedHistogram ? histH : void 0,
           minHeight: bottomOpen ? 140 : void 0,
           display: "flex",
           flexDirection: "column",

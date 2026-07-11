@@ -9,7 +9,7 @@ import type { EntryType, IngestProgressEvent, IngestFailure } from '../../shared
 
 const HASH_THRESHOLD = 100 * 1024 * 1024  // 100 MB
 
-const IMAGE_EXTS = new Set([
+export const IMAGE_EXTS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.webp', '.tiff', '.tif',
   '.bmp', '.heic', '.heif', '.avif', '.svg',
 ])
@@ -80,6 +80,25 @@ async function generateImageThumbnails(
   }
 }
 
+/**
+ * Copy into destDir keeping the original name, appending " (2)", " (3)", …
+ * on collision. COPYFILE_EXCL makes the claim atomic, so concurrent ingest
+ * workers copying identically-named files can't overwrite each other.
+ */
+async function copyWithUniqueName(sourcePath: string, destDir: string, fileName: string): Promise<string> {
+  const ext = path.extname(fileName)
+  const stem = path.basename(fileName, ext)
+  for (let n = 1; ; n++) {
+    const destName = n === 1 ? fileName : `${stem} (${n})${ext}`
+    try {
+      await fs.copyFile(sourcePath, path.join(destDir, destName), fs.constants.COPYFILE_EXCL)
+      return destName
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    }
+  }
+}
+
 interface OneResult {
   ok: boolean
   id?: number
@@ -96,8 +115,8 @@ async function ingestOne(sourcePath: string, relDir: string): Promise<OneResult>
     return { ok: true, skipped: true }
   }
 
-  const hash = crypto.randomBytes(6).toString('hex')
-  const baseName = `${Date.now()}_${hash}`
+  // Thumbnails are keyed by a unique stem, independent of the stored file name
+  const baseName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}`
 
   const settings = getSettings()
   const isReference = settings.importMode === 'reference'
@@ -107,11 +126,9 @@ async function ingestOne(sourcePath: string, relDir: string): Promise<OneResult>
   if (isReference) {
     storedFilePath = sourcePath
   } else {
-    const destName = `${baseName}${ext}`
     const destDir = path.join(getFilesPath(), relDir)
     await fs.mkdir(destDir, { recursive: true })
-    const destPath = path.join(destDir, destName)
-    await fs.copyFile(sourcePath, destPath)
+    const destName = await copyWithUniqueName(sourcePath, destDir, fileName)
     storedFilePath = path.join('files', relDir, destName).split(path.sep).join('/')
   }
 

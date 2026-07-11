@@ -23,9 +23,11 @@ export function getSettings(): AppSettings {
       heatmapScale: parsed.heatmapScale ?? 'log',
       heatmapMaxCount: parsed.heatmapMaxCount ?? null,
       curveTension: parsed.curveTension ?? 1,
+      dayViewHeight: parsed.dayViewHeight ?? 240,
+      dayViewMode: parsed.dayViewMode ?? 'medium',
     }
   } catch {
-    cached = { importMode: 'copy', libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1 }
+    cached = { importMode: 'copy', libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, dayViewHeight: 240, dayViewMode: 'medium' }
   }
   return cached
 }

@@ -3,6 +3,7 @@ import { join, normalize } from 'path'
 import { ensureLibraryDirs, getLibraryPath } from './library'
 import { closeDb } from './db'
 import { registerAllHandlers } from './ipc'
+import { startMediaServer } from './media'
 import { startWatcher, stopWatcher } from './sync'
 
 // Allow timeline:// to be used in img src without CSP issues
@@ -47,7 +48,7 @@ app.whenReady().then(() => {
     return net.fetch(`file://${filePath}`)
   })
 
-  createWindow()
+  startMediaServer().then(createWindow)
   startWatcher()
 
   app.on('activate', () => {

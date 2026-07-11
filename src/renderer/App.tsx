@@ -253,6 +253,8 @@ function Main() {
 
   const histH = settings?.histogramHeight  // number | null | undefined; null = fullscreen
   const isFixedHistogram = histH !== null && histH !== undefined
+  // Height of whichever bottom panel is open: DayView is user-resizable, SearchResults is fixed
+  const bottomH = selectedPeriod !== null ? (settings?.dayViewHeight ?? 240) : 240
 
   const onResizeMouseDown = React.useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -423,7 +425,7 @@ function Main() {
 
       <div style={{
         flex: (bottomOpen || (activeView === 'timeline' && isFixedHistogram)) ? '0 0 auto' : 1,
-        height: bottomOpen ? 'calc(100% - 240px - 41px)' : (activeView === 'timeline' && isFixedHistogram) ? histH! : undefined,
+        height: bottomOpen ? `calc(100% - ${bottomH}px - 41px)` : (activeView === 'timeline' && isFixedHistogram) ? histH! : undefined,
         minHeight: bottomOpen ? 140 : undefined,
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>

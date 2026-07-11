@@ -61,6 +61,8 @@ export interface SearchFilters {
   tagIds?: number[]
 }
 
+export type FileViewMode = 'list' | 'small' | 'medium' | 'large'
+
 export interface AppSettings {
   importMode: 'copy' | 'reference'
   libraryPath: string
@@ -71,6 +73,16 @@ export interface AppSettings {
   heatmapScale: 'log' | 'linear'
   heatmapMaxCount: number | null   // null = auto (uses max from current year's data)
   curveTension: number             // 0 = angular, 1 = fully smooth (quadratic bezier midpoint)
+  dayViewHeight: number
+  dayViewMode: FileViewMode
+}
+
+export interface FileInfo {
+  absolutePath: string
+  sizeBytes: number
+  modifiedMs: number
+  width: number | null    // photos only
+  height: number | null   // photos only
 }
 
 export interface IngestFailure {

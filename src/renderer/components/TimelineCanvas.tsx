@@ -638,9 +638,11 @@ export default function TimelineCanvas() {
     const bMs   = BUCKET_MS[level]
 
     if (level === 'day') {
-      // Snap click to calendar day start (SQL returns UTC midnight bucket_starts)
-      const dayStart = Math.floor(ts / MS_DAY) * MS_DAY
-      setSelectedPeriod([dayStart, dayStart + MS_DAY])
+      // Snap click to the local calendar day (SQL buckets by local date)
+      const c = new Date(ts)
+      const dayStart = new Date(c.getFullYear(), c.getMonth(), c.getDate()).getTime()
+      const dayEnd   = new Date(c.getFullYear(), c.getMonth(), c.getDate() + 1).getTime()
+      setSelectedPeriod([dayStart, dayEnd])
       return
     }
 

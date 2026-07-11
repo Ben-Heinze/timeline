@@ -62,6 +62,13 @@ electron.contextBridge.exposeInMainWorld("api", {
     forGroup: (groupId) => electron.ipcRenderer.invoke("tags:forGroup", groupId),
     setForGroup: (groupId, names) => electron.ipcRenderer.invoke("tags:setForGroup", groupId, names)
   },
+  files: {
+    getMediaUrl: (entryId) => electron.ipcRenderer.invoke("files:getMediaUrl", entryId),
+    getFileInfo: (entryId) => electron.ipcRenderer.invoke("files:getFileInfo", entryId),
+    showInFolder: (entryId) => electron.ipcRenderer.invoke("files:showInFolder", entryId),
+    openDefault: (entryId) => electron.ipcRenderer.invoke("files:openDefault", entryId),
+    openWith: (entryId) => electron.ipcRenderer.invoke("files:openWith", entryId)
+  },
   settings: {
     get: () => electron.ipcRenderer.invoke("settings:get"),
     set: (patch) => electron.ipcRenderer.invoke("settings:set", patch),

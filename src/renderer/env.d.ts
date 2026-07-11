@@ -2,7 +2,7 @@
 
 import type {
   IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, Bucket, Group, Entry, NewGroup,
-  EntryType, Tag, SearchFilters, AppSettings, DuplicateGroup,
+  EntryType, Tag, SearchFilters, AppSettings, DuplicateGroup, FileInfo,
 } from '../shared/types'
 
 interface Api {
@@ -50,6 +50,13 @@ interface Api {
     addToEntries: (entryIds: number[], names: string[]) => Promise<void>
     forGroup: (groupId: number) => Promise<Tag[]>
     setForGroup: (groupId: number, names: string[]) => Promise<Tag[]>
+  }
+  files: {
+    getMediaUrl: (entryId: number) => Promise<string | null>
+    getFileInfo: (entryId: number) => Promise<FileInfo | null>
+    showInFolder: (entryId: number) => Promise<void>
+    openDefault: (entryId: number) => Promise<string>
+    openWith: (entryId: number) => Promise<string>
   }
   settings: {
     get: () => Promise<AppSettings>

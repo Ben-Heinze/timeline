@@ -7,6 +7,8 @@ const fs$1 = require("fs/promises");
 const crypto = require("crypto");
 const sharp = require("sharp");
 const chokidar = require("chokidar");
+const child_process = require("child_process");
+const http = require("http");
 const settingsFile = () => path.join(electron.app.getPath("userData"), "settings.json");
 let cached = null;
 function getSettings() {
@@ -24,10 +26,12 @@ function getSettings() {
       theme: parsed.theme ?? "light",
       heatmapScale: parsed.heatmapScale ?? "log",
       heatmapMaxCount: parsed.heatmapMaxCount ?? null,
-      curveTension: parsed.curveTension ?? 1
+      curveTension: parsed.curveTension ?? 1,
+      dayViewHeight: parsed.dayViewHeight ?? 240,
+      dayViewMode: parsed.dayViewMode ?? "medium"
     };
   } catch {
-    cached = { importMode: "copy", libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1 };
+    cached = { importMode: "copy", libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, dayViewHeight: 240, dayViewMode: "medium" };
   }
   return cached;
 }
@@ -519,6 +523,19 @@ async function generateImageThumbnails(sourcePath, baseName) {
     return null;
   }
 }
+async function copyWithUniqueName(sourcePath, destDir, fileName) {
+  const ext = path.extname(fileName);
+  const stem = path.basename(fileName, ext);
+  for (let n = 1; ; n++) {
+    const destName = n === 1 ? fileName : `${stem} (${n})${ext}`;
+    try {
+      await fs$1.copyFile(sourcePath, path.join(destDir, destName), fs$1.constants.COPYFILE_EXCL);
+      return destName;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+    }
+  }
+}
 async function ingestOne(sourcePath, relDir) {
   const fileName = path.basename(sourcePath);
   const ext = path.extname(fileName);
@@ -526,8 +543,7 @@ async function ingestOne(sourcePath, relDir) {
   if (await isDuplicate(sourcePath, fileName)) {
     return { ok: true, skipped: true };
   }
-  const hash = crypto.randomBytes(6).toString("hex");
-  const baseName = `${Date.now()}_${hash}`;
+  const baseName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
   const settings = getSettings();
   const isReference = settings.importMode === "reference";
   let storedFilePath;
@@ -535,11 +551,9 @@ async function ingestOne(sourcePath, relDir) {
   if (isReference) {
     storedFilePath = sourcePath;
   } else {
-    const destName = `${baseName}${ext}`;
     const destDir = path.join(getFilesPath(), relDir);
     await fs$1.mkdir(destDir, { recursive: true });
-    const destPath = path.join(destDir, destName);
-    await fs$1.copyFile(sourcePath, destPath);
+    const destName = await copyWithUniqueName(sourcePath, destDir, fileName);
     storedFilePath = path.join("files", relDir, destName).split(path.sep).join("/");
   }
   const stat = await fs$1.stat(sourcePath);
@@ -1013,8 +1027,142 @@ function registerSettingsHandlers() {
     return { success: true };
   });
 }
+const MEDIA_MIME = {
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".mov": "video/quicktime",
+  ".webm": "video/webm",
+  ".mkv": "video/x-matroska",
+  ".avi": "video/x-msvideo",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".ogg": "audio/ogg",
+  ".opus": "audio/opus",
+  ".wav": "audio/wav",
+  ".flac": "audio/flac"
+};
+function resolveEntryFilePath(entryId) {
+  const entry = getEntry(entryId);
+  if (!entry?.file_path) return null;
+  return entry.import_mode === "reference" ? entry.file_path : path.join(getLibraryPath(), entry.file_path);
+}
+let serverPort = 0;
+const serverToken = crypto.randomBytes(16).toString("hex");
+function getMediaUrl(entryId) {
+  if (!serverPort || !resolveEntryFilePath(entryId)) return null;
+  return `http://127.0.0.1:${serverPort}/media/${entryId}?token=${serverToken}`;
+}
+function handleRequest(req, res) {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  const match = url.pathname.match(/^\/media\/(\d+)$/);
+  if (req.method !== "GET" || !match || url.searchParams.get("token") !== serverToken) {
+    res.writeHead(403).end();
+    return;
+  }
+  const abs = resolveEntryFilePath(Number(match[1]));
+  let size;
+  try {
+    size = fs.statSync(abs).size;
+  } catch {
+    res.writeHead(404).end();
+    return;
+  }
+  const mime = MEDIA_MIME[path.extname(abs).toLowerCase()] ?? "application/octet-stream";
+  const range = req.headers.range?.match(/bytes=(\d+)-(\d*)/);
+  let start = 0;
+  let end = size - 1;
+  if (range) {
+    start = Number(range[1]);
+    end = range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start >= size) {
+      res.writeHead(416, { "Content-Range": `bytes */${size}` }).end();
+      return;
+    }
+  }
+  res.writeHead(range ? 206 : 200, {
+    "Content-Type": mime,
+    "Accept-Ranges": "bytes",
+    "Content-Length": end - start + 1,
+    ...range ? { "Content-Range": `bytes ${start}-${end}/${size}` } : {}
+  });
+  const stream = fs.createReadStream(abs, { start, end });
+  stream.pipe(res);
+  stream.on("error", () => res.destroy());
+  res.on("close", () => stream.destroy());
+}
+function startMediaServer() {
+  const server = http.createServer(handleRequest);
+  server.unref();
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      serverPort = server.address().port;
+      resolve();
+    });
+  });
+}
+function registerFileHandlers() {
+  electron.ipcMain.handle("files:getMediaUrl", (_, entryId) => getMediaUrl(entryId));
+  electron.ipcMain.handle("files:getFileInfo", async (_, entryId) => {
+    const abs = resolveEntryFilePath(entryId);
+    if (!abs) return null;
+    let stat;
+    try {
+      stat = await fs$1.stat(abs);
+    } catch {
+      return null;
+    }
+    let width = null;
+    let height = null;
+    if (IMAGE_EXTS.has(path.extname(abs).toLowerCase())) {
+      try {
+        const meta = await sharp(abs).metadata();
+        const swap = (meta.orientation ?? 1) >= 5;
+        width = (swap ? meta.height : meta.width) ?? null;
+        height = (swap ? meta.width : meta.height) ?? null;
+      } catch {
+      }
+    }
+    return { absolutePath: abs, sizeBytes: stat.size, modifiedMs: stat.mtimeMs, width, height };
+  });
+  electron.ipcMain.handle("files:showInFolder", (_, entryId) => {
+    const abs = resolveEntryFilePath(entryId);
+    if (abs) electron.shell.showItemInFolder(abs);
+  });
+  electron.ipcMain.handle("files:openDefault", async (_, entryId) => {
+    const abs = resolveEntryFilePath(entryId);
+    if (!abs) return "No file attached";
+    return electron.shell.openPath(abs);
+  });
+  electron.ipcMain.handle("files:openWith", async (e, entryId) => {
+    const abs = resolveEntryFilePath(entryId);
+    if (!abs) return "No file attached";
+    if (process.platform === "win32") {
+      child_process.spawn("rundll32", ["shell32.dll,OpenAs_RunDLL", abs], { detached: true, stdio: "ignore" }).unref();
+      return "";
+    }
+    const win = electron.BrowserWindow.fromWebContents(e.sender);
+    const isMac = process.platform === "darwin";
+    const result = await electron.dialog.showOpenDialog(win, {
+      title: "Choose an application",
+      defaultPath: isMac ? "/Applications" : "/usr/bin",
+      properties: ["openFile"],
+      filters: isMac ? [{ name: "Applications", extensions: ["app"] }] : []
+    });
+    if (result.canceled || result.filePaths.length === 0) return "";
+    const app = result.filePaths[0];
+    try {
+      const child = isMac ? child_process.spawn("open", ["-a", app, abs], { detached: true, stdio: "ignore" }) : child_process.spawn(app, [abs], { detached: true, stdio: "ignore" });
+      child.unref();
+      return "";
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  });
+}
 function registerAllHandlers() {
   registerEntryHandlers();
+  registerFileHandlers();
   registerGroupHandlers();
   registerIngestHandlers();
   registerTagHandlers();
@@ -1053,7 +1201,7 @@ electron.app.whenReady().then(() => {
     const filePath = path.normalize(path.join(getLibraryPath(), rel));
     return electron.net.fetch(`file://${filePath}`);
   });
-  createWindow();
+  startMediaServer().then(createWindow);
   startWatcher();
   electron.app.on("activate", () => {
     if (electron.BrowserWindow.getAllWindows().length === 0) createWindow();

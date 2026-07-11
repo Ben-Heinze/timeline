@@ -209,7 +209,9 @@ export default function CalendarHeatmap() {
       didSelectRef.current = false
       return
     }
-    setSelectedPeriod([ts, ts + MS_DAY])
+    // ts is local midnight; end at the next local midnight so DST-shifted days match the SQL buckets
+    const d = new Date(ts)
+    setSelectedPeriod([ts, new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()])
   }, [setSelectedPeriod])
 
   const goToPrevMonth = useCallback(() => {
