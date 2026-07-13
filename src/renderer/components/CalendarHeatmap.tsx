@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useStore } from '../store/useStore'
 import type { Group, LifeEvent } from '../../shared/types'
+import EventsPanel from './EventsPanel'
 
 const MS_DAY = 86_400_000
 
@@ -56,11 +57,11 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
   for (let d = 1; d <= daysInMonth; d++) cells.push(d)
 
   const isExpanded = cellSize > 30
-  const dayFont = isExpanded ? 13 : 9
-  const dowFont = isExpanded ? 11 : 9
-  const dowH    = isExpanded ? 20 : 14
-  const gap     = isExpanded ? 4 : 2
-  const radius  = isExpanded ? 6 : 3
+  const dayFont = isExpanded ? Math.round(cellSize * 0.22) : 9
+  const dowFont = isExpanded ? Math.round(cellSize * 0.18) : 9
+  const dowH    = isExpanded ? Math.round(cellSize * 0.3) : 14
+  const gap     = isExpanded ? Math.max(4, Math.round(cellSize * 0.06)) : 2
+  const radius  = isExpanded ? Math.max(6, Math.round(cellSize * 0.08)) : 3
 
   return (
     <div style={{ padding: '10px 12px', background: 'var(--bg-surface)', borderRadius: 8, border: '1px solid var(--border-light)' }}>
@@ -254,34 +255,37 @@ export default function CalendarHeatmap() {
   // Zoomed single-month view
   if (zoomedMonth !== null) {
     return (
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', background: 'var(--bg-app)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-          <button style={navBtnStyle} onClick={() => setZoomedMonth(null)}>← Back</button>
-          <div style={{ width: 1, height: 18, background: 'var(--border)', marginLeft: 2, marginRight: 2 }} />
-          <button style={navBtnStyle} onClick={goToPrevMonth}>←</button>
-          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', minWidth: 180, textAlign: 'center' }}>
-            {MONTH_NAMES[zoomedMonth]} {year}
-          </span>
-          <button style={navBtnStyle} onClick={goToNextMonth}>→</button>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <div style={{ width: 480 }}>
-            <MonthGrid
-              year={year}
-              month={zoomedMonth}
-              countMap={countMap}
-              effectiveMax={effectiveMax}
-              scale={scale}
-              selRange={selRange}
-              dateRangeGroups={dateRangeGroups}
-              events={yearEvents}
-              onDayClick={handleDayClick}
-              onDayMouseDown={handleDayMouseDown}
-              onDayMouseEnter={handleDayMouseEnter}
-              cellSize={48}
-            />
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 28px', background: 'var(--bg-app)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 28 }}>
+            <button style={navBtnStyle} onClick={() => setZoomedMonth(null)}>← Back</button>
+            <div style={{ width: 1, height: 18, background: 'var(--border)', marginLeft: 2, marginRight: 2 }} />
+            <button style={navBtnStyle} onClick={goToPrevMonth}>←</button>
+            <span style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', minWidth: 200, textAlign: 'center' }}>
+              {MONTH_NAMES[zoomedMonth]} {year}
+            </span>
+            <button style={navBtnStyle} onClick={goToNextMonth}>→</button>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <div style={{ width: '100%', maxWidth: 1100 }}>
+              <MonthGrid
+                year={year}
+                month={zoomedMonth}
+                countMap={countMap}
+                effectiveMax={effectiveMax}
+                scale={scale}
+                selRange={selRange}
+                dateRangeGroups={dateRangeGroups}
+                events={yearEvents}
+                onDayClick={handleDayClick}
+                onDayMouseDown={handleDayMouseDown}
+                onDayMouseEnter={handleDayMouseEnter}
+                cellSize={100}
+              />
+            </div>
           </div>
         </div>
+        <EventsPanel />
       </div>
     )
   }
