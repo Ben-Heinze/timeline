@@ -12,6 +12,7 @@ import {
   markEntriesFound,
   updateEntry,
 } from '../db/queries/entries'
+import { generateTestData } from '../testdata'
 import type { AppSettings } from '../../shared/types'
 
 async function pathExists(p: string): Promise<boolean> {
@@ -101,6 +102,8 @@ export function registerSettingsHandlers(): void {
 
     return { found: foundIds.length, total: entries.length }
   })
+
+  ipcMain.handle('settings:generateTestData', () => generateTestData())
 
   ipcMain.handle('settings:resetLibrary', async () => {
     closeDb()

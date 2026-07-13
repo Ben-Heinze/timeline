@@ -7174,6 +7174,7 @@ const useStore = create((set) => ({
   lastSelectedId: null,
   activeEntryId: null,
   selectedPeriod: null,
+  fileBrowserOpen: false,
   selectedGroupId: null,
   dataExtent: null,
   ingestProgress: null,
@@ -7195,6 +7196,7 @@ const useStore = create((set) => ({
   setSelection: (ids, lastId) => set({ selectedIds: ids, lastSelectedId: lastId }),
   setActiveEntryId: (id2) => set({ activeEntryId: id2 }),
   setSelectedPeriod: (period) => set({ selectedPeriod: period }),
+  setFileBrowserOpen: (open) => set({ fileBrowserOpen: open }),
   setSelectedGroupId: (id2) => set({ selectedGroupId: id2 }),
   setDataExtent: (extent) => set({ dataExtent: extent }),
   setIngestProgress: (progress) => set({ ingestProgress: progress }),
@@ -7270,7 +7272,6 @@ const durationSecond = 1e3;
 const durationMinute = durationSecond * 60;
 const durationHour = durationMinute * 60;
 const durationDay = durationHour * 24;
-const durationWeek = durationDay * 7;
 const timeDay = timeInterval(
   (date) => date.setHours(0, 0, 0, 0),
   (date, step) => date.setDate(date.getDate() + step),
@@ -7298,54 +7299,6 @@ const unixDay = timeInterval((date) => {
   return Math.floor(date / durationDay);
 });
 unixDay.range;
-function timeWeekday(i) {
-  return timeInterval((date) => {
-    date.setDate(date.getDate() - (date.getDay() + 7 - i) % 7);
-    date.setHours(0, 0, 0, 0);
-  }, (date, step) => {
-    date.setDate(date.getDate() + step * 7);
-  }, (start, end) => {
-    return (end - start - (end.getTimezoneOffset() - start.getTimezoneOffset()) * durationMinute) / durationWeek;
-  });
-}
-const timeSunday = timeWeekday(0);
-const timeMonday = timeWeekday(1);
-const timeTuesday = timeWeekday(2);
-const timeWednesday = timeWeekday(3);
-const timeThursday = timeWeekday(4);
-const timeFriday = timeWeekday(5);
-const timeSaturday = timeWeekday(6);
-timeSunday.range;
-timeMonday.range;
-timeTuesday.range;
-timeWednesday.range;
-timeThursday.range;
-timeFriday.range;
-timeSaturday.range;
-function utcWeekday(i) {
-  return timeInterval((date) => {
-    date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 7 - i) % 7);
-    date.setUTCHours(0, 0, 0, 0);
-  }, (date, step) => {
-    date.setUTCDate(date.getUTCDate() + step * 7);
-  }, (start, end) => {
-    return (end - start) / durationWeek;
-  });
-}
-const utcSunday = utcWeekday(0);
-const utcMonday = utcWeekday(1);
-const utcTuesday = utcWeekday(2);
-const utcWednesday = utcWeekday(3);
-const utcThursday = utcWeekday(4);
-const utcFriday = utcWeekday(5);
-const utcSaturday = utcWeekday(6);
-utcSunday.range;
-utcMonday.range;
-utcTuesday.range;
-utcWednesday.range;
-utcThursday.range;
-utcFriday.range;
-utcSaturday.range;
 const timeMonth = timeInterval((date) => {
   date.setDate(1);
   date.setHours(0, 0, 0, 0);
@@ -7414,17 +7367,40 @@ const BAND_H = 14;
 const BAR_FILL = 0.55;
 const YAXIS_W = 40;
 const cv = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const niceStep = (n2) => {
+  if (n2 <= 1) return 1;
+  const rough = n2 / 4;
+  const p2 = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / p2;
+  return (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * p2;
+};
+const MIN_YEAR_VIEW_YEARS = 5;
+const yearViewRange = (extent) => {
+  const startYear = new Date(extent[0]).getFullYear();
+  const endYear = new Date(extent[1]).getFullYear();
+  const extra = Math.max(0, MIN_YEAR_VIEW_YEARS - (endYear - startYear + 1));
+  const from2 = new Date(startYear - Math.ceil(extra / 2), 0, 1).getTime();
+  const to = new Date(endYear + 1 + Math.floor(extra / 2), 0, 1).getTime();
+  const pad = (to - from2) * 0.02;
+  return [from2 - pad, to + pad];
+};
 const WINDOW_MS = {
   year: 20 * 365.25 * MS_DAY$2,
   month: 24 * 30.44 * MS_DAY$2,
-  week: 26 * 7 * MS_DAY$2,
   day: 60 * MS_DAY$2
 };
 const NEXT_LEVEL = {
   year: "month",
-  month: "week",
-  week: "day",
+  month: "day",
   day: "day"
+};
+const monthStartMs = (ts) => {
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+};
+const addMonths = (monthStart, n2) => {
+  const d = new Date(monthStart);
+  return new Date(d.getFullYear(), d.getMonth() + n2, 1).getTime();
 };
 const bucketEndMs = (bs, level) => {
   if (level === "year") return new Date(new Date(bs).getFullYear() + 1, 0, 1).getTime();
@@ -7432,7 +7408,6 @@ const bucketEndMs = (bs, level) => {
     const d = new Date(bs);
     return new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
   }
-  if (level === "week") return bs + 7 * MS_DAY$2;
   return bs + MS_DAY$2;
 };
 const TYPE_LABELS$2 = {
@@ -7445,19 +7420,16 @@ const TYPE_LABELS$2 = {
 const HOVER_DATE_FMT = {
   year: (bs) => `${new Date(bs).getFullYear()}`,
   month: (bs) => new Date(bs).toLocaleString("en-US", { month: "long", year: "numeric" }),
-  week: (bs) => `${new Date(bs).toLocaleString("en-US", { month: "short", day: "numeric" })} – ${new Date(bs + 6 * MS_DAY$2).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
   day: (bs) => new Date(bs).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })
 };
 const TICK_CONFIG = {
   year: { iv: timeYear, fmt: (d) => `${d.getFullYear()}` },
   month: { iv: timeMonth, fmt: (d) => d.toLocaleString("en-US", { month: "short" }) },
-  week: { iv: timeSunday, fmt: (d) => d.toLocaleString("en-US", { weekday: "short", day: "numeric" }) },
-  day: { iv: timeDay, fmt: (d) => d.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric" }) }
+  day: { iv: timeDay, fmt: (d) => d.getDate() === 1 ? d.toLocaleString("en-US", { month: "short", day: "numeric" }) : `${d.getDate()}` }
 };
 const LEVEL_LABELS = {
   year: "Year",
   month: "Month",
-  week: "Week",
   day: "Day"
 };
 function Scrollbar({ dataExtent, visibleRange, onPan }) {
@@ -7472,7 +7444,7 @@ function Scrollbar({ dataExtent, visibleRange, onPan }) {
   reactExports.useEffect(() => {
     const onMove = (e) => {
       const d = dragRef.current;
-      if (!d || !trackRef.current) return;
+      if (!d || !trackRef.current || vRange >= dataRange) return;
       const trackW = trackRef.current.getBoundingClientRect().width;
       const dMs = (e.clientX - d.startX) / trackW * dataRange;
       const newFrom = Math.max(dFrom, Math.min(dTo - vRange, d.startFrom + dMs));
@@ -7493,7 +7465,7 @@ function Scrollbar({ dataExtent, visibleRange, onPan }) {
     {
       ref: trackRef,
       onClick: (e) => {
-        if (!trackRef.current || dragRef.current) return;
+        if (!trackRef.current || dragRef.current || vRange >= dataRange) return;
         const rect = trackRef.current.getBoundingClientRect();
         const frac = (e.clientX - rect.left) / rect.width;
         const clickTs = dFrom + frac * dataRange;
@@ -7538,6 +7510,8 @@ function TimelineCanvas() {
     groups,
     selectedPeriod,
     setSelectedPeriod,
+    fileBrowserOpen,
+    setFileBrowserOpen,
     selectedGroupId,
     dataExtent,
     refreshKey,
@@ -7557,10 +7531,6 @@ function TimelineCanvas() {
     const now2 = /* @__PURE__ */ new Date();
     return new Date(now2.getFullYear(), now2.getMonth(), 1).getTime();
   });
-  const [selectedWeekStart, setSelectedWeekStart] = reactExports.useState(() => {
-    const now2 = /* @__PURE__ */ new Date();
-    return new Date(now2.getFullYear(), now2.getMonth(), now2.getDate() - now2.getDay()).getTime();
-  });
   const [curveMode, setCurveMode] = reactExports.useState(false);
   const rangeRef = reactExports.useRef(visibleRange);
   const extentRef = reactExports.useRef(dataExtent);
@@ -7579,6 +7549,23 @@ function TimelineCanvas() {
   reactExports.useEffect(() => {
     dateRangeSelRef.current = dateRangeSelection;
   }, [dateRangeSelection]);
+  const bucketSegments = reactExports.useMemo(() => {
+    const byStart = /* @__PURE__ */ new Map();
+    for (const b of histogramBuckets) {
+      let segs = byStart.get(b.bucket_start);
+      if (!segs) {
+        segs = [];
+        byStart.set(b.bucket_start, segs);
+      }
+      const seg = segs.find((s) => s.group_id === b.group_id);
+      if (seg) seg.count += b.count;
+      else segs.push({ group_id: b.group_id, count: b.count });
+    }
+    for (const segs of byStart.values()) {
+      segs.sort((a, b) => (a.group_id ?? -1) - (b.group_id ?? -1));
+    }
+    return byStart;
+  }, [histogramBuckets]);
   reactExports.useEffect(() => {
     const [from2, to] = visibleRange;
     window.api.entries.histogram(from2, to, zoomLevel, selectedGroupId ?? void 0).then((buckets) => {
@@ -7586,8 +7573,7 @@ function TimelineCanvas() {
       if (buckets.length === 0 && selectedGroupId == null && zoomLevel === "year") {
         const ext = extentRef.current;
         if (ext) {
-          const pad = (ext[1] - ext[0]) * 0.04 || MS_DAY$2 * 30;
-          setVisibleRange([ext[0] - pad, ext[1] + pad]);
+          setVisibleRange(yearViewRange(ext));
           setZoomLevel("year");
         }
       }
@@ -7633,26 +7619,12 @@ function TimelineCanvas() {
       ctx.lineWidth = 1.5;
       ctx.strokeRect(Math.max(YAXIS_W, Math.floor(sx)) + 0.5, 0.5, Math.max(1, Math.ceil(sw) - 1), chartH - 1);
     }
-    const byStart = /* @__PURE__ */ new Map();
-    for (const b of histogramBuckets) {
-      if (!byStart.has(b.bucket_start)) byStart.set(b.bucket_start, []);
-      const segs = byStart.get(b.bucket_start);
-      const seg = segs.find((s) => s.group_id === b.group_id);
-      if (seg) seg.count += b.count;
-      else segs.push({ group_id: b.group_id, count: b.count });
-    }
+    const byStart = bucketSegments;
     let maxCount = 1;
     for (const segs of byStart.values()) {
       const total = segs.reduce((s, sg2) => s + sg2.count, 0);
       if (total > maxCount) maxCount = total;
     }
-    const niceStep = (n2) => {
-      if (n2 <= 1) return 1;
-      const rough = n2 / 4;
-      const p2 = Math.pow(10, Math.floor(Math.log10(rough)));
-      const norm = rough / p2;
-      return (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * p2;
-    };
     const yStep = niceStep(maxCount);
     const niceMax = Math.ceil(maxCount / yStep) * yStep;
     const barScale = barsH * 0.92 / niceMax;
@@ -7776,10 +7748,8 @@ function TimelineCanvas() {
         tickMs = (tick.getTime() + new Date(tick.getFullYear() + 1, 0, 1).getTime()) / 2;
       } else if (zoomLevel === "month") {
         tickMs = (tick.getTime() + new Date(tick.getFullYear(), tick.getMonth() + 1, 1).getTime()) / 2;
-      } else if (zoomLevel === "week") {
-        tickMs = tick.getTime() + 3.5 * MS_DAY$2;
       } else {
-        tickMs = tick.getTime();
+        tickMs = tick.getTime() + MS_DAY$2 / 2;
       }
       const x2 = tsToX(tickMs);
       if (x2 < YAXIS_W + 2 || x2 > w2 - 2) continue;
@@ -7806,7 +7776,7 @@ function TimelineCanvas() {
     ctx.moveTo(YAXIS_W - 0.5, 0);
     ctx.lineTo(YAXIS_W - 0.5, chartH);
     ctx.stroke();
-  }, [visibleRange, histogramBuckets, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension]);
+  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension]);
   const handleWheel = reactExports.useCallback((e) => {
     e.preventDefault();
     if (zoomRef.current === "month") {
@@ -7818,22 +7788,12 @@ function TimelineCanvas() {
       }
       return;
     }
-    if (zoomRef.current === "week") {
-      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-        const [from22, to2] = rangeRef.current;
-        const mid = new Date((from22 + to2) / 2);
-        const newMonth = new Date(mid.getFullYear(), mid.getMonth() + (e.deltaY > 0 ? 1 : -1), 1);
-        setSelectedMonthStart(newMonth.getTime());
-        setVisibleRange([newMonth.getTime(), new Date(newMonth.getFullYear(), newMonth.getMonth() + 1, 1).getTime()]);
-      }
-      return;
-    }
     if (zoomRef.current === "day") {
       if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
         const [from22] = rangeRef.current;
-        const newWeekStart = from22 + (e.deltaY > 0 ? 7 : -7) * MS_DAY$2;
-        setSelectedWeekStart(newWeekStart);
-        setVisibleRange([newWeekStart, newWeekStart + 7 * MS_DAY$2]);
+        const newMonthStart = addMonths(monthStartMs(from22), e.deltaY > 0 ? 1 : -1);
+        setSelectedMonthStart(newMonthStart);
+        setVisibleRange([newMonthStart, addMonths(newMonthStart, 1)]);
       }
       return;
     }
@@ -7844,18 +7804,19 @@ function TimelineCanvas() {
     let newTo = newFrom + width;
     const ext = extentRef.current;
     if (ext) {
-      const pad = (ext[1] - ext[0]) * 0.04;
-      if (newFrom < ext[0] - pad) {
-        newFrom = ext[0] - pad;
+      const [lo, hi2] = yearViewRange(ext);
+      if (width >= hi2 - lo) return;
+      if (newFrom < lo) {
+        newFrom = lo;
         newTo = newFrom + width;
       }
-      if (newTo > ext[1] + pad) {
-        newTo = ext[1] + pad;
+      if (newTo > hi2) {
+        newTo = hi2;
         newFrom = newTo - width;
       }
     }
     setVisibleRange([newFrom, newTo]);
-  }, [setVisibleRange, setSelectedYear, setSelectedMonthStart, setSelectedWeekStart]);
+  }, [setVisibleRange, setSelectedYear, setSelectedMonthStart]);
   reactExports.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -7892,18 +7853,14 @@ function TimelineCanvas() {
     const to = new Date(year + 1, 0, 1).getTime();
     setSelectedYear(year);
     setVisibleRange([from2, to]);
-  }, [setVisibleRange]);
-  const setMonthRange = reactExports.useCallback((monthStart) => {
-    const d = new Date(monthStart);
-    const from2 = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
-    const to = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
-    setSelectedMonthStart(from2);
-    setVisibleRange([from2, to]);
-  }, [setVisibleRange]);
-  const setWeekRange = reactExports.useCallback((weekStart) => {
-    setSelectedWeekStart(weekStart);
-    setVisibleRange([weekStart, weekStart + 7 * MS_DAY$2]);
-  }, [setVisibleRange]);
+    setSelectedPeriod(null);
+  }, [setVisibleRange, setSelectedPeriod]);
+  const setMonthRange = reactExports.useCallback((ts) => {
+    const monthStart = monthStartMs(ts);
+    setSelectedMonthStart(monthStart);
+    setVisibleRange([monthStart, addMonths(monthStart, 1)]);
+    setSelectedPeriod(null);
+  }, [setVisibleRange, setSelectedPeriod]);
   const drag = reactExports.useRef(null);
   const [grabbing, setGrabbing] = reactExports.useState(false);
   const [hover, setHover] = reactExports.useState(null);
@@ -7939,7 +7896,7 @@ function TimelineCanvas() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const d = drag.current;
-    if (d && zoomRef.current !== "month" && zoomRef.current !== "week" && zoomRef.current !== "day") {
+    if (d && zoomRef.current !== "month" && zoomRef.current !== "day") {
       const dx = e.clientX - d.startX;
       if (Math.abs(dx) > 4) {
         d.moved = true;
@@ -7961,15 +7918,40 @@ function TimelineCanvas() {
     if (cx >= YAXIS_W && cy <= barsBottom) {
       const [from2, to] = rangeRef.current;
       const tsToX = (ts) => YAXIS_W + (ts - from2) / (to - from2) * chartW;
-      for (const b of histogramBuckets) {
-        if (cx >= tsToX(b.bucket_start) && cx < tsToX(bucketEndMs(b.bucket_start, zoomLevel))) {
-          found2 = b.bucket_start;
+      let maxCount = 1;
+      for (const segs of bucketSegments.values()) {
+        const t2 = segs.reduce((s, sg2) => s + sg2.count, 0);
+        if (t2 > maxCount) maxCount = t2;
+      }
+      const yStep = niceStep(maxCount);
+      const niceMax = Math.ceil(maxCount / yStep) * yStep;
+      const barScale = barsBottom * 0.92 / niceMax;
+      for (const [bucketStart, segs] of bucketSegments) {
+        const total = segs.reduce((s, sg2) => s + sg2.count, 0);
+        const slotX = tsToX(bucketStart);
+        const slotW = tsToX(bucketEndMs(bucketStart, zoomLevel)) - slotX;
+        const barW = curveMode ? slotW : Math.max(2, slotW * BAR_FILL);
+        const barX = curveMode ? slotX : slotX + (slotW - barW) / 2;
+        const barH = Math.max(2, total * barScale);
+        if (cx >= barX && cx < barX + barW && cy >= barsBottom - barH) {
+          found2 = { bucketStart };
+          if (!curveMode) {
+            let yBase = barsBottom;
+            for (const seg of segs) {
+              const segH = seg.count / total * barH;
+              if (cy >= yBase - segH) {
+                if (seg.group_id !== null) found2.groupId = seg.group_id;
+                break;
+              }
+              yBase -= segH;
+            }
+          }
           break;
         }
       }
     }
-    setHover(found2 !== null ? { x: cx, y: cy, bucketStart: found2 } : null);
-  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, histogramBuckets, zoomLevel]);
+    setHover(found2 !== null ? { x: cx, y: cy, ...found2 } : null);
+  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, bucketSegments, zoomLevel, curveMode]);
   const onMouseUp = reactExports.useCallback((e) => {
     if (rangeSelectMode) return;
     const d = drag.current;
@@ -7980,9 +7962,16 @@ function TimelineCanvas() {
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const cx = e.clientX - rect.left;
+    if (cx < YAXIS_W) return;
     const [from2, to] = rangeRef.current;
-    const ts = from2 + cx / rect.width * (to - from2);
+    const ts = from2 + (cx - YAXIS_W) / (rect.width - YAXIS_W) * (to - from2);
     const level = zoomRef.current;
+    const cd2 = new Date(ts);
+    const bucketStart = level === "year" ? new Date(cd2.getFullYear(), 0, 1).getTime() : level === "month" ? new Date(cd2.getFullYear(), cd2.getMonth(), 1).getTime() : new Date(cd2.getFullYear(), cd2.getMonth(), cd2.getDate()).getTime();
+    if (!histogramBuckets.some((b) => b.bucket_start === bucketStart && b.count > 0)) {
+      setSelectedPeriod(null);
+      return;
+    }
     if (level === "day") {
       const c = new Date(ts);
       const dayStart = new Date(c.getFullYear(), c.getMonth(), c.getDate()).getTime();
@@ -7996,20 +7985,12 @@ function TimelineCanvas() {
       setZoomLevel("month");
       return;
     }
-    if (next === "week") {
-      const d2 = new Date(ts);
-      setMonthRange(new Date(d2.getFullYear(), d2.getMonth(), 1).getTime());
-      setZoomLevel("week");
-      return;
-    }
     if (next === "day") {
-      const d2 = new Date(ts);
-      const weekStart = new Date(d2.getFullYear(), d2.getMonth(), d2.getDate() - d2.getDay()).getTime();
-      setWeekRange(weekStart);
+      setMonthRange(ts);
       setZoomLevel("day");
       return;
     }
-  }, [rangeSelectMode, setSelectedPeriod, setZoomLevel, setVisibleRange, setYearRange, setMonthRange, setWeekRange]);
+  }, [rangeSelectMode, setSelectedPeriod, setZoomLevel, setVisibleRange, setYearRange, setMonthRange, histogramBuckets]);
   const onMouseLeave = reactExports.useCallback(() => {
     setHover(null);
     if (!rangeSelectMode) {
@@ -8020,11 +8001,9 @@ function TimelineCanvas() {
   const handleLevelChange = reactExports.useCallback((level) => {
     const ext = extentRef.current;
     if (level === "year") {
-      if (ext) {
-        const pad = (ext[1] - ext[0]) * 0.04 || MS_DAY$2 * 30;
-        setVisibleRange([ext[0] - pad, ext[1] + pad]);
-      }
+      if (ext) setVisibleRange(yearViewRange(ext));
       setZoomLevel("year");
+      setSelectedPeriod(null);
       return;
     }
     if (level === "month") {
@@ -8034,20 +8013,9 @@ function TimelineCanvas() {
       setZoomLevel("month");
       return;
     }
-    if (level === "week") {
-      const [from22, to2] = rangeRef.current;
-      const center2 = (from22 + to2) / 2;
-      const d = new Date(center2);
-      const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
-      setMonthRange(monthStart);
-      setZoomLevel("week");
-      return;
-    }
     if (level === "day") {
       const [from22, to2] = rangeRef.current;
-      const d = new Date((from22 + to2) / 2);
-      const weekStart = new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay()).getTime();
-      setWeekRange(weekStart);
+      setMonthRange((from22 + to2) / 2);
       setZoomLevel("day");
       return;
     }
@@ -8069,22 +8037,16 @@ function TimelineCanvas() {
     }
     setVisibleRange([newFrom, newTo]);
     setZoomLevel(level);
-  }, [setVisibleRange, setZoomLevel, setYearRange, setMonthRange, setWeekRange]);
+  }, [setVisibleRange, setZoomLevel, setYearRange, setMonthRange, setSelectedPeriod]);
   const panLeft = reactExports.useCallback(() => {
     if (zoomRef.current === "month") {
       const [from22, to2] = rangeRef.current;
       setYearRange(new Date((from22 + to2) / 2).getFullYear() - 1);
       return;
     }
-    if (zoomRef.current === "week") {
-      const [from22, to2] = rangeRef.current;
-      const mid = new Date((from22 + to2) / 2);
-      setMonthRange(new Date(mid.getFullYear(), mid.getMonth() - 1, 1).getTime());
-      return;
-    }
     if (zoomRef.current === "day") {
       const [from22] = rangeRef.current;
-      setWeekRange(from22 - 7 * MS_DAY$2);
+      setMonthRange(addMonths(monthStartMs(from22), -1));
       return;
     }
     const [from2, to] = rangeRef.current;
@@ -8092,7 +8054,11 @@ function TimelineCanvas() {
     const shift2 = w2 * 0.5;
     const ext = extentRef.current;
     let newFrom = from2 - shift2;
-    if (ext) newFrom = Math.max(newFrom, ext[0] - (ext[1] - ext[0]) * 0.04);
+    if (ext) {
+      const [lo, hi2] = yearViewRange(ext);
+      if (w2 >= hi2 - lo) return;
+      newFrom = Math.max(newFrom, lo);
+    }
     setVisibleRange([newFrom, newFrom + w2]);
   }, [setVisibleRange, setYearRange, setMonthRange]);
   const panRight = reactExports.useCallback(() => {
@@ -8101,15 +8067,9 @@ function TimelineCanvas() {
       setYearRange(new Date((from22 + to2) / 2).getFullYear() + 1);
       return;
     }
-    if (zoomRef.current === "week") {
-      const [from22, to2] = rangeRef.current;
-      const mid = new Date((from22 + to2) / 2);
-      setMonthRange(new Date(mid.getFullYear(), mid.getMonth() + 1, 1).getTime());
-      return;
-    }
     if (zoomRef.current === "day") {
       const [from22] = rangeRef.current;
-      setWeekRange(from22 + 7 * MS_DAY$2);
+      setMonthRange(addMonths(monthStartMs(from22), 1));
       return;
     }
     const [from2, to] = rangeRef.current;
@@ -8117,21 +8077,28 @@ function TimelineCanvas() {
     const shift2 = w2 * 0.5;
     const ext = extentRef.current;
     let newTo = to + shift2;
-    if (ext) newTo = Math.min(newTo, ext[1] + (ext[1] - ext[0]) * 0.04);
+    if (ext) {
+      const [lo, hi2] = yearViewRange(ext);
+      if (w2 >= hi2 - lo) return;
+      newTo = Math.min(newTo, hi2);
+    }
     setVisibleRange([newTo - w2, newTo]);
-  }, [setVisibleRange, setYearRange, setMonthRange, setWeekRange]);
+  }, [setVisibleRange, setYearRange, setMonthRange]);
   const hoverInfo = reactExports.useMemo(() => {
     if (!hover) return null;
     let total = 0;
+    let groupCount = 0;
     const typeCounts = /* @__PURE__ */ new Map();
     for (const b of histogramBuckets) {
       if (b.bucket_start !== hover.bucketStart) continue;
       total += b.count;
       typeCounts.set(b.type, (typeCounts.get(b.type) ?? 0) + b.count);
+      if (hover.groupId !== void 0 && b.group_id === hover.groupId) groupCount += b.count;
     }
     if (total === 0) return null;
-    return { total, types: [...typeCounts.entries()].sort((a, b) => b[1] - a[1]) };
-  }, [hover, histogramBuckets]);
+    const group = hover.groupId !== void 0 ? groups.find((g) => g.id === hover.groupId) ?? null : null;
+    return { total, types: [...typeCounts.entries()].sort((a, b) => b[1] - a[1]), group, groupCount };
+  }, [hover, histogramBuckets, groups]);
   const btnStyle = (active) => ({
     background: active ? "var(--text)" : "none",
     color: active ? "var(--bg-app)" : "var(--text-2)",
@@ -8161,12 +8128,28 @@ function TimelineCanvas() {
       background: "var(--bg-muted)",
       flexShrink: 0
     }, children: [
-      ["year", "month", "week", "day"].map((level) => /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => handleLevelChange(level), style: btnStyle(zoomLevel === level), children: LEVEL_LABELS[level] }, level)),
+      ["year", "month", "day"].map((level) => /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => handleLevelChange(level), style: btnStyle(zoomLevel === level), children: LEVEL_LABELS[level] }, level)),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 1, height: 18, background: "var(--border)", margin: "0 6px", flexShrink: 0 } }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setCurveMode(false), style: btnStyle(!curveMode), title: "Bar chart", children: "▬ Bars" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setCurveMode(true), style: btnStyle(curveMode), title: "Smooth curve", children: "∿ Curve" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", marginLeft: 6 }, children: rangeSelectMode ? "drag to select a date range" : zoomLevel === "day" ? "click bar to view entries" : "click bar to zoom in" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 } }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => {
+            if (fileBrowserOpen || selectedPeriod !== null) {
+              setFileBrowserOpen(false);
+              setSelectedPeriod(null);
+            } else {
+              setFileBrowserOpen(true);
+            }
+          },
+          style: { ...btnStyle(fileBrowserOpen || selectedPeriod !== null), marginRight: 6 },
+          title: "Show the files within the current view",
+          children: "☰ Files"
+        }
+      ),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
@@ -8209,54 +8192,16 @@ function TimelineCanvas() {
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
-          onClick: () => setWeekRange(selectedWeekStart - 7 * MS_DAY$2),
+          onClick: () => setMonthRange(addMonths(selectedMonthStart, -1)),
           style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
           children: "←"
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", minWidth: 160, textAlign: "center" }, children: [
-        new Date(selectedWeekStart).toLocaleString("en-US", { month: "short", day: "numeric" }),
-        " – ",
-        new Date(selectedWeekStart + 6 * MS_DAY$2).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric" })
-      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", minWidth: 160, textAlign: "center" }, children: new Date(selectedMonthStart).toLocaleString("en-US", { month: "long", year: "numeric" }) }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
-          onClick: () => setWeekRange(selectedWeekStart + 7 * MS_DAY$2),
-          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
-          children: "→"
-        }
-      )
-    ] }),
-    zoomLevel === "week" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 12,
-      padding: "4px 12px",
-      borderBottom: "1px solid var(--border-light)",
-      background: "var(--bg-muted)",
-      flexShrink: 0
-    }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "button",
-        {
-          onClick: () => {
-            const d = new Date(selectedMonthStart);
-            setMonthRange(new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime());
-          },
-          style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
-          children: "←"
-        }
-      ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", minWidth: 100, textAlign: "center" }, children: new Date(selectedMonthStart).toLocaleString("en-US", { month: "long", year: "numeric" }) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "button",
-        {
-          onClick: () => {
-            const d = new Date(selectedMonthStart);
-            setMonthRange(new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime());
-          },
+          onClick: () => setMonthRange(addMonths(selectedMonthStart, 1)),
           style: { background: "none", border: "1px solid var(--border)", borderRadius: 5, padding: "2px 10px", fontSize: 13, cursor: "pointer", color: "var(--text-2)" },
           children: "→"
         }
@@ -8334,10 +8279,30 @@ function TimelineCanvas() {
           count,
           " ",
           (TYPE_LABELS$2[type] ?? [type, type])[count === 1 ? 0 : 1]
-        ] }, type))
+        ] }, type)),
+        hoverInfo.group && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { borderTop: "1px solid var(--border-light)", marginTop: 5, paddingTop: 5 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6, fontWeight: 600, color: "var(--text)" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 9, height: 9, borderRadius: 2, background: hoverInfo.group.color, flexShrink: 0 } }),
+            hoverInfo.group.name
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { color: "var(--text-2)" }, children: [
+            hoverInfo.groupCount,
+            " of ",
+            hoverInfo.total,
+            " ",
+            hoverInfo.total === 1 ? "file" : "files",
+            " in this group"
+          ] }),
+          hoverInfo.group.date_from != null && hoverInfo.group.date_to != null && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { color: "var(--text-3)" }, children: [
+            new Date(hoverInfo.group.date_from).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+            " – ",
+            new Date(hoverInfo.group.date_to).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+          ] }),
+          hoverInfo.group.description && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", maxWidth: 240, whiteSpace: "normal" }, children: hoverInfo.group.description })
+        ] })
       ] })
     ] }),
-    dataExtent && zoomLevel !== "month" && zoomLevel !== "week" && zoomLevel !== "day" && /* @__PURE__ */ jsxRuntimeExports.jsx(Scrollbar, { dataExtent, visibleRange, onPan: setVisibleRange })
+    dataExtent && zoomLevel !== "month" && zoomLevel !== "day" && /* @__PURE__ */ jsxRuntimeExports.jsx(Scrollbar, { dataExtent, visibleRange, onPan: setVisibleRange })
   ] });
 }
 const MS_DAY$1 = 864e5;
@@ -8762,6 +8727,484 @@ function TagEditor({ tags, onChange, compact }) {
     )) })
   ] });
 }
+function GroupPickerList({ groups, onPick, onRemove }) {
+  const [query, setQuery] = reactExports.useState("");
+  const filtered = reactExports.useMemo(() => {
+    const q2 = query.trim().toLowerCase();
+    if (!q2) return groups;
+    return groups.filter((g) => g.name.toLowerCase().includes(q2));
+  }, [groups, query]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    groups.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 6, borderBottom: "1px solid var(--border-light)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "input",
+      {
+        autoFocus: true,
+        value: query,
+        onChange: (e) => setQuery(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter" && filtered.length === 1) onPick(filtered[0].id);
+        },
+        placeholder: "Search groups…",
+        style: {
+          width: "100%",
+          boxSizing: "border-box",
+          padding: "4px 8px",
+          fontSize: 12,
+          border: "1px solid var(--border-strong)",
+          borderRadius: 5,
+          background: "var(--bg-input)",
+          color: "var(--text)",
+          outline: "none"
+        }
+      }
+    ) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { maxHeight: 220, overflowY: "auto" }, children: [
+      groups.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "10px 12px", fontSize: 12, color: "var(--text-4)" }, children: "No groups yet" }),
+      groups.length > 0 && filtered.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "10px 12px", fontSize: 12, color: "var(--text-4)" }, children: "No matching groups" }),
+      filtered.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "div",
+        {
+          onClick: () => onPick(g.id),
+          style: {
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "7px 12px",
+            cursor: "pointer",
+            fontSize: 13,
+            color: "var(--text)"
+          },
+          onMouseEnter: (e) => {
+            e.currentTarget.style.background = "var(--bg-subtle)";
+          },
+          onMouseLeave: (e) => {
+            e.currentTarget.style.background = "";
+          },
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 10, height: 10, borderRadius: 2, background: g.color, flexShrink: 0 } }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: g.name })
+          ]
+        },
+        g.id
+      ))
+    ] }),
+    onRemove && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        onClick: onRemove,
+        style: {
+          padding: "7px 12px",
+          cursor: "pointer",
+          fontSize: 13,
+          color: "var(--text-3)",
+          borderTop: groups.length > 0 ? "1px solid var(--border-light)" : "none"
+        },
+        onMouseEnter: (e) => {
+          e.currentTarget.style.background = "var(--bg-subtle)";
+        },
+        onMouseLeave: (e) => {
+          e.currentTarget.style.background = "";
+        },
+        children: "Remove from group"
+      }
+    )
+  ] });
+}
+function AssignDropdown({ selectedIds, groups, onAssign }) {
+  const [open, setOpen] = reactExports.useState(false);
+  const ref = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { ref, style: { position: "relative" }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "button",
+      {
+        onClick: () => setOpen((o) => !o),
+        style: {
+          fontSize: 12,
+          padding: "4px 10px",
+          background: "var(--accent)",
+          border: "none",
+          borderRadius: 5,
+          color: "var(--accent-fg)",
+          fontWeight: 600,
+          cursor: "pointer"
+        },
+        children: [
+          "Assign (",
+          selectedIds.size,
+          ") ▾"
+        ]
+      }
+    ),
+    open && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+      position: "absolute",
+      top: "calc(100% + 4px)",
+      right: 0,
+      background: "var(--bg-surface)",
+      border: "1px solid var(--border)",
+      borderRadius: 8,
+      boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
+      minWidth: 200,
+      zIndex: 50,
+      overflow: "hidden"
+    }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+      GroupPickerList,
+      {
+        groups,
+        onPick: (id2) => {
+          onAssign(id2);
+          setOpen(false);
+        },
+        onRemove: () => {
+          onAssign(null);
+          setOpen(false);
+        }
+      }
+    ) })
+  ] });
+}
+function useEntryContextMenu(entries) {
+  const {
+    selectedIds,
+    setSelection,
+    groups,
+    tags: allTags,
+    setTags: setAllTags,
+    bumpRefreshKey
+  } = useStore();
+  const [menu, setMenu] = reactExports.useState(null);
+  const [groupSubOpen, setGroupSubOpen] = reactExports.useState(false);
+  const [tagModalIds, setTagModalIds] = reactExports.useState(null);
+  const [pendingTagNames, setPendingTagNames] = reactExports.useState([]);
+  const [existingTags, setExistingTags] = reactExports.useState([]);
+  reactExports.useEffect(() => {
+    if (tagModalIds === null) {
+      setExistingTags([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all(tagModalIds.map((id2) => window.api.tags.forEntry(id2))).then((perEntry) => {
+      if (cancelled) return;
+      const counts = /* @__PURE__ */ new Map();
+      for (const tags of perEntry) {
+        for (const t2 of tags) {
+          const cur = counts.get(t2.id);
+          if (cur) cur.count += 1;
+          else counts.set(t2.id, { tag: t2, count: 1 });
+        }
+      }
+      setExistingTags([...counts.values()].sort((a, b) => a.tag.name.localeCompare(b.tag.name)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tagModalIds]);
+  const pendingTags = reactExports.useMemo(
+    () => pendingTagNames.map((n2) => allTags.find((t2) => t2.name.toLowerCase() === n2.toLowerCase())).filter((t2) => t2 != null),
+    [pendingTagNames, allTags]
+  );
+  const onEntryContextMenu = reactExports.useCallback((entry) => (e) => {
+    e.preventDefault();
+    let ids;
+    if (selectedIds.has(entry.id)) {
+      ids = [...selectedIds];
+    } else {
+      ids = [entry.id];
+      setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
+    }
+    setGroupSubOpen(false);
+    setMenu({ x: e.clientX, y: e.clientY, ids });
+  }, [selectedIds, setSelection]);
+  const closeMenu = reactExports.useCallback(() => {
+    setMenu(null);
+    setGroupSubOpen(false);
+  }, []);
+  reactExports.useEffect(() => {
+    if (!menu && tagModalIds === null) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setMenu(null);
+        setGroupSubOpen(false);
+        setTagModalIds(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menu, tagModalIds]);
+  const openTagModal = reactExports.useCallback(() => {
+    if (!menu) return;
+    setPendingTagNames([]);
+    setTagModalIds(menu.ids);
+    closeMenu();
+  }, [menu, closeMenu]);
+  const applyTags = reactExports.useCallback(async () => {
+    if (!tagModalIds || pendingTagNames.length === 0) {
+      setTagModalIds(null);
+      return;
+    }
+    await window.api.tags.addToEntries(tagModalIds, pendingTagNames);
+    setAllTags(await window.api.tags.list());
+    setTagModalIds(null);
+    bumpRefreshKey();
+  }, [tagModalIds, pendingTagNames, setAllTags, bumpRefreshKey]);
+  const assignToGroup = reactExports.useCallback(async (groupId) => {
+    if (!menu) return;
+    await window.api.groups.assignEntries(groupId, menu.ids);
+    closeMenu();
+    bumpRefreshKey();
+  }, [menu, closeMenu, bumpRefreshKey]);
+  const deleteSelected = reactExports.useCallback(async () => {
+    if (!menu) return;
+    const ids = menu.ids;
+    closeMenu();
+    const hasCopied = entries.some((e) => ids.includes(e.id) && e.import_mode === "copy" && e.file_path);
+    const msg = `Delete ${ids.length} ${ids.length === 1 ? "item" : "items"} from the database?` + (hasCopied ? " Files copied into the library will be moved to the trash." : "");
+    if (!window.confirm(msg)) return;
+    await window.api.entries.delete(ids);
+    setSelection(/* @__PURE__ */ new Set(), null);
+    bumpRefreshKey();
+  }, [menu, entries, closeMenu, setSelection, bumpRefreshKey]);
+  const contextMenuUI = /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    menu && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "div",
+        {
+          style: { position: "fixed", inset: 0, zIndex: 100 },
+          onMouseDown: closeMenu,
+          onContextMenu: (e) => {
+            e.preventDefault();
+            closeMenu();
+          }
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        position: "fixed",
+        zIndex: 101,
+        left: Math.min(menu.x, window.innerWidth - 210),
+        top: Math.min(menu.y, window.innerHeight - 140),
+        minWidth: 190,
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+        padding: 4,
+        fontSize: 13,
+        color: "var(--text)"
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          padding: "4px 10px 6px",
+          fontSize: 11,
+          color: "var(--text-4)",
+          borderBottom: "1px solid var(--border-light)",
+          marginBottom: 4
+        }, children: [
+          menu.ids.length,
+          " ",
+          menu.ids.length === 1 ? "item" : "items"
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Add tags…", onClick: openTagModal }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            style: { position: "relative" },
+            onMouseEnter: () => setGroupSubOpen(true),
+            onMouseLeave: () => setGroupSubOpen(false),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Add to group", trailing: "›", onClick: () => setGroupSubOpen((o) => !o) }),
+              groupSubOpen && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+                position: "absolute",
+                left: "100%",
+                top: -4,
+                zIndex: 102,
+                minWidth: 200,
+                background: "var(--bg-surface)",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                overflow: "hidden"
+              }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+                GroupPickerList,
+                {
+                  groups,
+                  onPick: assignToGroup,
+                  onRemove: () => assignToGroup(null)
+                }
+              ) })
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "var(--border-light)", margin: "4px 0" } }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Delete…", danger: true, onClick: deleteSelected })
+      ] })
+    ] }),
+    tagModalIds !== null && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        style: {
+          position: "fixed",
+          inset: 0,
+          zIndex: 110,
+          background: "rgba(0,0,0,0.35)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        },
+        onMouseDown: (e) => {
+          if (e.target === e.currentTarget) setTagModalIds(null);
+        },
+        children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          width: 380,
+          maxWidth: "90vw",
+          background: "var(--bg-surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+          padding: 16
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 14, fontWeight: 700, color: "var(--text)", marginBottom: 4 }, children: "Add tags" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-3)", marginBottom: 12 }, children: [
+            "Tags will be added to ",
+            tagModalIds.length,
+            " ",
+            tagModalIds.length === 1 ? "item" : "items",
+            ". Existing tags are kept."
+          ] }),
+          existingTags.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 12 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              color: "var(--text-4)",
+              marginBottom: 6
+            }, children: "Already assigned" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, maxHeight: 80, overflowY: "auto" }, children: existingTags.map(({ tag, count }) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: {
+              fontSize: 11,
+              padding: "3px 8px",
+              borderRadius: 10,
+              background: "var(--bg-entry-sel)",
+              color: "var(--text-2)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4
+            }, children: [
+              "#",
+              tag.name,
+              tagModalIds.length > 1 && count < tagModalIds.length && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { color: "var(--text-4)", fontSize: 10 }, children: [
+                count,
+                "/",
+                tagModalIds.length
+              ] })
+            ] }, tag.id)) })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            padding: "6px 8px",
+            background: "var(--bg-input)",
+            marginBottom: 12
+          }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(TagEditor, { tags: pendingTags, onChange: setPendingTagNames }) }),
+          allTags.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 14 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              color: "var(--text-4)",
+              marginBottom: 6
+            }, children: "All tags" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 4,
+              maxHeight: 120,
+              overflowY: "auto"
+            }, children: allTags.map((t2) => {
+              const added = pendingTagNames.some((n2) => n2.toLowerCase() === t2.name.toLowerCase());
+              return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "button",
+                {
+                  disabled: added,
+                  onClick: () => setPendingTagNames((prev) => [...prev, t2.name]),
+                  style: {
+                    fontSize: 11,
+                    padding: "3px 8px",
+                    borderRadius: 10,
+                    border: "1px solid var(--border)",
+                    cursor: added ? "default" : "pointer",
+                    background: added ? "var(--bg-entry-sel)" : "var(--bg-subtle)",
+                    color: added ? "var(--text-4)" : "var(--text)",
+                    opacity: added ? 0.6 : 1
+                  },
+                  children: [
+                    "#",
+                    t2.name
+                  ]
+                },
+                t2.id
+              );
+            }) })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setTagModalIds(null), style: modalBtn(false), children: "Cancel" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: applyTags,
+                disabled: pendingTagNames.length === 0,
+                style: { ...modalBtn(true), opacity: pendingTagNames.length === 0 ? 0.5 : 1 },
+                children: "Add tags"
+              }
+            )
+          ] })
+        ] })
+      }
+    )
+  ] });
+  return { onEntryContextMenu, contextMenuUI };
+}
+function MenuItem({ label, onClick, danger, trailing, swatch }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      onClick,
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 10px",
+        borderRadius: 5,
+        cursor: "pointer",
+        color: danger ? "var(--danger, #e5484d)" : "var(--text)",
+        whiteSpace: "nowrap",
+        userSelect: "none"
+      },
+      onMouseEnter: (e) => e.currentTarget.style.background = "var(--bg-hover)",
+      onMouseLeave: (e) => e.currentTarget.style.background = "",
+      children: [
+        swatch && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 10, height: 10, borderRadius: 3, background: swatch, flexShrink: 0 } }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis" }, children: label }),
+        trailing && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-4)" }, children: trailing })
+      ]
+    }
+  );
+}
+const modalBtn = (primary) => ({
+  fontSize: 13,
+  padding: "6px 14px",
+  borderRadius: 6,
+  cursor: "pointer",
+  border: primary ? "none" : "1px solid var(--border)",
+  background: primary ? "var(--accent)" : "transparent",
+  color: primary ? "#fff" : "var(--text)"
+});
 const THUMB_SIZE = {
   small: 84,
   medium: 132,
@@ -8949,45 +9392,13 @@ function FilesView() {
     selectedIds,
     setSelection,
     lastSelectedId,
-    groups,
-    tags: allTags,
-    setTags: setAllTags
+    groups
   } = useStore();
   const [entries, setEntries] = reactExports.useState([]);
   const [viewMode, setViewMode] = reactExports.useState("medium");
   const [sortBy, setSortBy] = reactExports.useState("date");
   const [sortDir, setSortDir] = reactExports.useState("desc");
-  const [menu, setMenu] = reactExports.useState(null);
-  const [groupSubOpen, setGroupSubOpen] = reactExports.useState(false);
-  const [tagModalIds, setTagModalIds] = reactExports.useState(null);
-  const [pendingTagNames, setPendingTagNames] = reactExports.useState([]);
-  const [existingTags, setExistingTags] = reactExports.useState([]);
-  reactExports.useEffect(() => {
-    if (tagModalIds === null) {
-      setExistingTags([]);
-      return;
-    }
-    let cancelled = false;
-    Promise.all(tagModalIds.map((id2) => window.api.tags.forEntry(id2))).then((perEntry) => {
-      if (cancelled) return;
-      const counts = /* @__PURE__ */ new Map();
-      for (const tags of perEntry) {
-        for (const t2 of tags) {
-          const cur = counts.get(t2.id);
-          if (cur) cur.count += 1;
-          else counts.set(t2.id, { tag: t2, count: 1 });
-        }
-      }
-      setExistingTags([...counts.values()].sort((a, b) => a.tag.name.localeCompare(b.tag.name)));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [tagModalIds]);
-  const pendingTags = reactExports.useMemo(
-    () => pendingTagNames.map((n2) => allTags.find((t2) => t2.name.toLowerCase() === n2.toLowerCase())).filter((t2) => t2 != null),
-    [pendingTagNames, allTags]
-  );
+  const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(entries);
   reactExports.useEffect(() => {
     window.api.entries.listAll({
       groupId: selectedGroupId ?? void 0,
@@ -9015,67 +9426,11 @@ function FilesView() {
       setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
     }
   }, [selectedIds, lastSelectedId, entries, setSelection]);
-  const handleContextMenu = reactExports.useCallback((entry) => (e) => {
-    e.preventDefault();
-    let ids;
-    if (selectedIds.has(entry.id)) {
-      ids = [...selectedIds];
-    } else {
-      ids = [entry.id];
-      setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
-    }
-    setGroupSubOpen(false);
-    setMenu({ x: e.clientX, y: e.clientY, ids });
-  }, [selectedIds, setSelection]);
-  const closeMenu = reactExports.useCallback(() => {
-    setMenu(null);
-    setGroupSubOpen(false);
-  }, []);
-  reactExports.useEffect(() => {
-    if (!menu && tagModalIds === null) return;
-    const onKey = (e) => {
-      if (e.key === "Escape") {
-        setMenu(null);
-        setGroupSubOpen(false);
-        setTagModalIds(null);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [menu, tagModalIds]);
-  const openTagModal = reactExports.useCallback(() => {
-    if (!menu) return;
-    setPendingTagNames([]);
-    setTagModalIds(menu.ids);
-    closeMenu();
-  }, [menu, closeMenu]);
-  const applyTags = reactExports.useCallback(async () => {
-    if (!tagModalIds || pendingTagNames.length === 0) {
-      setTagModalIds(null);
-      return;
-    }
-    await window.api.tags.addToEntries(tagModalIds, pendingTagNames);
-    setAllTags(await window.api.tags.list());
-    setTagModalIds(null);
-    bumpRefreshKey();
-  }, [tagModalIds, pendingTagNames, setAllTags, bumpRefreshKey]);
-  const assignToGroup = reactExports.useCallback(async (groupId) => {
-    if (!menu) return;
-    await window.api.groups.assignEntries(groupId, menu.ids);
-    closeMenu();
-    bumpRefreshKey();
-  }, [menu, closeMenu, bumpRefreshKey]);
-  const deleteSelected = reactExports.useCallback(async () => {
-    if (!menu) return;
-    const ids = menu.ids;
-    closeMenu();
-    const hasCopied = entries.some((e) => ids.includes(e.id) && e.import_mode === "copy" && e.file_path);
-    const msg = `Delete ${ids.length} ${ids.length === 1 ? "item" : "items"} from the database?` + (hasCopied ? " Files copied into the library will be moved to the trash." : "");
-    if (!window.confirm(msg)) return;
-    await window.api.entries.delete(ids);
+  const handleAssign = reactExports.useCallback(async (groupId) => {
+    await window.api.groups.assignEntries(groupId, [...selectedIds]);
     setSelection(/* @__PURE__ */ new Set(), null);
     bumpRefreshKey();
-  }, [menu, entries, closeMenu, setSelection, bumpRefreshKey]);
+  }, [selectedIds, setSelection, bumpRefreshKey]);
   const groupedByMonth = reactExports.useMemo(() => {
     if (sortBy !== "date") return null;
     const out = [];
@@ -9097,7 +9452,7 @@ function FilesView() {
       selected,
       onClick: handleClickEntry(entry),
       onDoubleClick: () => setActiveEntryId(entry.id),
-      onContextMenu: handleContextMenu(entry)
+      onContextMenu: onEntryContextMenu(entry)
     };
     if (viewMode === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx(ListRow, { ...common }, entry.id);
     return /* @__PURE__ */ jsxRuntimeExports.jsx(GridCell, { ...common, size: THUMB_SIZE[viewMode] }, entry.id);
@@ -9154,6 +9509,10 @@ function FilesView() {
           children: sortDir === "desc" ? "↓" : "↑"
         }
       ),
+      selectedIds.size > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 1, height: 18, background: "var(--border)", margin: "0 4px" } }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(AssignDropdown, { selectedIds, groups, onAssign: handleAssign })
+      ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: "auto", fontSize: 12, color: "var(--text-3)" }, children: [
         entries.length,
         " ",
@@ -9185,246 +9544,9 @@ function FilesView() {
       ] }),
       renderItems(section.items)
     ] }, section.key)) : renderItems(entries) }),
-    menu && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "div",
-        {
-          style: { position: "fixed", inset: 0, zIndex: 100 },
-          onMouseDown: closeMenu,
-          onContextMenu: (e) => {
-            e.preventDefault();
-            closeMenu();
-          }
-        }
-      ),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-        position: "fixed",
-        zIndex: 101,
-        left: Math.min(menu.x, window.innerWidth - 210),
-        top: Math.min(menu.y, window.innerHeight - 140),
-        minWidth: 190,
-        background: "var(--bg-surface)",
-        border: "1px solid var(--border)",
-        borderRadius: 8,
-        boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
-        padding: 4,
-        fontSize: 13,
-        color: "var(--text)"
-      }, children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-          padding: "4px 10px 6px",
-          fontSize: 11,
-          color: "var(--text-4)",
-          borderBottom: "1px solid var(--border-light)",
-          marginBottom: 4
-        }, children: [
-          menu.ids.length,
-          " ",
-          menu.ids.length === 1 ? "item" : "items"
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Add tags…", onClick: openTagModal }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "div",
-          {
-            style: { position: "relative" },
-            onMouseEnter: () => setGroupSubOpen(true),
-            onMouseLeave: () => setGroupSubOpen(false),
-            children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Add to group", trailing: "›", onClick: () => setGroupSubOpen((o) => !o) }),
-              groupSubOpen && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-                position: "absolute",
-                left: "100%",
-                top: -4,
-                zIndex: 102,
-                minWidth: 170,
-                maxHeight: 260,
-                overflowY: "auto",
-                background: "var(--bg-surface)",
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-                boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
-                padding: 4
-              }, children: [
-                groups.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "6px 10px", color: "var(--text-4)", fontSize: 12 }, children: "No groups" }),
-                groups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsx(
-                  MenuItem,
-                  {
-                    label: g.name,
-                    swatch: g.color,
-                    onClick: () => assignToGroup(g.id)
-                  },
-                  g.id
-                )),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "var(--border-light)", margin: "4px 0" } }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Remove from group", onClick: () => assignToGroup(null) })
-              ] })
-            ]
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "var(--border-light)", margin: "4px 0" } }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Delete…", danger: true, onClick: deleteSelected })
-      ] })
-    ] }),
-    tagModalIds !== null && /* @__PURE__ */ jsxRuntimeExports.jsx(
-      "div",
-      {
-        style: {
-          position: "fixed",
-          inset: 0,
-          zIndex: 110,
-          background: "rgba(0,0,0,0.35)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center"
-        },
-        onMouseDown: (e) => {
-          if (e.target === e.currentTarget) setTagModalIds(null);
-        },
-        children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-          width: 380,
-          maxWidth: "90vw",
-          background: "var(--bg-surface)",
-          border: "1px solid var(--border)",
-          borderRadius: 10,
-          boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
-          padding: 16
-        }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 14, fontWeight: 700, color: "var(--text)", marginBottom: 4 }, children: "Add tags" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-3)", marginBottom: 12 }, children: [
-            "Tags will be added to ",
-            tagModalIds.length,
-            " ",
-            tagModalIds.length === 1 ? "item" : "items",
-            ". Existing tags are kept."
-          ] }),
-          existingTags.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 12 }, children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.6,
-              textTransform: "uppercase",
-              color: "var(--text-4)",
-              marginBottom: 6
-            }, children: "Already assigned" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, maxHeight: 80, overflowY: "auto" }, children: existingTags.map(({ tag, count }) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: {
-              fontSize: 11,
-              padding: "3px 8px",
-              borderRadius: 10,
-              background: "var(--bg-entry-sel)",
-              color: "var(--text-2)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4
-            }, children: [
-              "#",
-              tag.name,
-              tagModalIds.length > 1 && count < tagModalIds.length && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { color: "var(--text-4)", fontSize: 10 }, children: [
-                count,
-                "/",
-                tagModalIds.length
-              ] })
-            ] }, tag.id)) })
-          ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-            border: "1px solid var(--border)",
-            borderRadius: 6,
-            padding: "6px 8px",
-            background: "var(--bg-input)",
-            marginBottom: 12
-          }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(TagEditor, { tags: pendingTags, onChange: setPendingTagNames }) }),
-          allTags.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 14 }, children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.6,
-              textTransform: "uppercase",
-              color: "var(--text-4)",
-              marginBottom: 6
-            }, children: "All tags" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 4,
-              maxHeight: 120,
-              overflowY: "auto"
-            }, children: allTags.map((t2) => {
-              const added = pendingTagNames.some((n2) => n2.toLowerCase() === t2.name.toLowerCase());
-              return /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                "button",
-                {
-                  disabled: added,
-                  onClick: () => setPendingTagNames((prev) => [...prev, t2.name]),
-                  style: {
-                    fontSize: 11,
-                    padding: "3px 8px",
-                    borderRadius: 10,
-                    border: "1px solid var(--border)",
-                    cursor: added ? "default" : "pointer",
-                    background: added ? "var(--bg-entry-sel)" : "var(--bg-subtle)",
-                    color: added ? "var(--text-4)" : "var(--text)",
-                    opacity: added ? 0.6 : 1
-                  },
-                  children: [
-                    "#",
-                    t2.name
-                  ]
-                },
-                t2.id
-              );
-            }) })
-          ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 }, children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setTagModalIds(null), style: modalBtn(false), children: "Cancel" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                onClick: applyTags,
-                disabled: pendingTagNames.length === 0,
-                style: { ...modalBtn(true), opacity: pendingTagNames.length === 0 ? 0.5 : 1 },
-                children: "Add tags"
-              }
-            )
-          ] })
-        ] })
-      }
-    )
+    contextMenuUI
   ] });
 }
-function MenuItem({ label, onClick, danger, trailing, swatch }) {
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
-    "div",
-    {
-      onClick,
-      style: {
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "6px 10px",
-        borderRadius: 5,
-        cursor: "pointer",
-        color: danger ? "var(--danger, #e5484d)" : "var(--text)",
-        whiteSpace: "nowrap",
-        userSelect: "none"
-      },
-      onMouseEnter: (e) => e.currentTarget.style.background = "var(--bg-hover)",
-      onMouseLeave: (e) => e.currentTarget.style.background = "",
-      children: [
-        swatch && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 10, height: 10, borderRadius: 3, background: swatch, flexShrink: 0 } }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis" }, children: label }),
-        trailing && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-4)" }, children: trailing })
-      ]
-    }
-  );
-}
-const modalBtn = (primary) => ({
-  fontSize: 13,
-  padding: "6px 14px",
-  borderRadius: 6,
-  cursor: "pointer",
-  border: primary ? "none" : "1px solid var(--border)",
-  background: primary ? "var(--accent)" : "transparent",
-  color: primary ? "#fff" : "var(--text)"
-});
 const selectStyle = {
   fontSize: 12,
   padding: "3px 6px",
@@ -9434,7 +9556,6 @@ const selectStyle = {
   color: "var(--text)"
 };
 const MS_DAY = 864e5;
-const MIN_HEIGHT = 140;
 function periodLabel(from2, to) {
   const rangeMs = to - from2;
   const d = new Date(from2);
@@ -9448,111 +9569,44 @@ function periodLabel(from2, to) {
     return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-function AssignDropdown({ selectedIds, groups, onAssign }) {
-  const [open, setOpen] = reactExports.useState(false);
-  const ref = reactExports.useRef(null);
-  reactExports.useEffect(() => {
-    if (!open) return;
-    const handler = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { ref, style: { position: "relative" }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "button",
-      {
-        onClick: () => setOpen((o) => !o),
-        style: {
-          fontSize: 12,
-          padding: "4px 10px",
-          background: "var(--accent)",
-          border: "none",
-          borderRadius: 5,
-          color: "var(--accent-fg)",
-          fontWeight: 600,
-          cursor: "pointer"
-        },
-        children: [
-          "Assign (",
-          selectedIds.size,
-          ") ▾"
-        ]
-      }
-    ),
-    open && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-      position: "absolute",
-      top: "calc(100% + 4px)",
-      right: 0,
-      background: "var(--bg-surface)",
-      border: "1px solid var(--border)",
-      borderRadius: 8,
-      boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
-      minWidth: 180,
-      zIndex: 50,
-      overflow: "hidden"
-    }, children: [
-      groups.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "10px 12px", fontSize: 12, color: "var(--text-4)" }, children: "No groups yet" }),
-      groups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "div",
-        {
-          onClick: () => {
-            onAssign(g.id);
-            setOpen(false);
-          },
-          style: {
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "8px 12px",
-            cursor: "pointer",
-            fontSize: 13,
-            color: "var(--text)"
-          },
-          onMouseEnter: (e) => {
-            e.currentTarget.style.background = "var(--bg-subtle)";
-          },
-          onMouseLeave: (e) => {
-            e.currentTarget.style.background = "";
-          },
-          children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 10, height: 10, borderRadius: 2, background: g.color, flexShrink: 0 } }),
-            g.name
-          ]
-        },
-        g.id
-      )),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "div",
-        {
-          onClick: () => {
-            onAssign(null);
-            setOpen(false);
-          },
-          style: {
-            padding: "8px 12px",
-            cursor: "pointer",
-            fontSize: 13,
-            color: "var(--text-3)",
-            borderTop: groups.length > 0 ? "1px solid var(--border-light)" : "none"
-          },
-          onMouseEnter: (e) => {
-            e.currentTarget.style.background = "var(--bg-subtle)";
-          },
-          onMouseLeave: (e) => {
-            e.currentTarget.style.background = "";
-          },
-          children: "Remove from group"
-        }
-      )
-    ] })
-  ] });
+const SECTION_KEY = {
+  year: (d) => `${d.getFullYear()}`,
+  month: (d) => `${d.getFullYear()}-${d.getMonth()}`,
+  day: (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+};
+const SECTION_LABEL = {
+  year: (d) => `${d.getFullYear()}`,
+  month: (d) => d.toLocaleString("en-US", { month: "long", year: "numeric" }),
+  day: (d) => d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })
+};
+function computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent) {
+  if (selectedPeriod) {
+    return { from: selectedPeriod[0], to: selectedPeriod[1], label: periodLabel(selectedPeriod[0], selectedPeriod[1]), sectionUnit: null };
+  }
+  if (zoomLevel === "year") {
+    if (!dataExtent) return null;
+    return { from: dataExtent[0], to: dataExtent[1] + 1, label: "All files", sectionUnit: "year" };
+  }
+  const mid = new Date((visibleRange[0] + visibleRange[1]) / 2);
+  if (zoomLevel === "month") {
+    const from22 = new Date(mid.getFullYear(), 0, 1).getTime();
+    const to2 = new Date(mid.getFullYear() + 1, 0, 1).getTime();
+    return { from: from22, to: to2, label: `${mid.getFullYear()}`, sectionUnit: "month" };
+  }
+  const from2 = new Date(mid.getFullYear(), mid.getMonth(), 1).getTime();
+  const to = new Date(mid.getFullYear(), mid.getMonth() + 1, 1).getTime();
+  return { from: from2, to, label: mid.toLocaleString("en-US", { month: "long", year: "numeric" }), sectionUnit: "day" };
 }
-function DayView() {
+const MIN_HEIGHT = 140;
+function FileBrowser() {
   const {
     selectedPeriod,
     setSelectedPeriod,
+    fileBrowserOpen,
+    setFileBrowserOpen,
+    zoomLevel,
+    visibleRange,
+    dataExtent,
     setActiveEntryId,
     setSelection,
     selectedIds,
@@ -9567,18 +9621,49 @@ function DayView() {
   const [entries, setEntries] = reactExports.useState([]);
   const [resizing, setResizing] = reactExports.useState(false);
   const [handleHovered, setHandleHovered] = reactExports.useState(false);
-  const height = settings?.dayViewHeight ?? 240;
-  const viewMode = settings?.dayViewMode ?? "medium";
+  const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(entries);
+  const height = settings?.fileBrowserHeight ?? 240;
+  const viewMode = settings?.fileBrowserMode ?? "medium";
+  const isOpen = fileBrowserOpen || selectedPeriod !== null;
+  const scope = reactExports.useMemo(
+    () => isOpen ? computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent) : null,
+    [isOpen, selectedPeriod, zoomLevel, visibleRange, dataExtent]
+  );
+  const scopeFrom = scope?.from ?? null;
+  const scopeTo = scope?.to ?? null;
   reactExports.useEffect(() => {
-    if (!selectedPeriod) {
+    if (scopeFrom === null || scopeTo === null) {
       setEntries([]);
       return;
     }
-    window.api.entries.forPeriod(selectedPeriod[0], selectedPeriod[1], selectedGroupId ?? void 0).then(setEntries);
-  }, [selectedPeriod, selectedGroupId, refreshKey]);
+    let cancelled = false;
+    window.api.entries.forPeriod(scopeFrom, scopeTo, selectedGroupId ?? void 0).then((res) => {
+      if (!cancelled) setEntries(res);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scopeFrom, scopeTo, selectedGroupId, refreshKey]);
   reactExports.useEffect(() => {
-    if (!selectedPeriod) setSelection(/* @__PURE__ */ new Set(), null);
-  }, [selectedPeriod, setSelection]);
+    if (!isOpen) setSelection(/* @__PURE__ */ new Set(), null);
+  }, [isOpen, setSelection]);
+  const sections = reactExports.useMemo(() => {
+    if (!scope?.sectionUnit) return null;
+    const keyOf = SECTION_KEY[scope.sectionUnit];
+    const labelOf = SECTION_LABEL[scope.sectionUnit];
+    const out = [];
+    let currentKey = null;
+    for (const e of entries) {
+      const d = new Date(e.timestamp);
+      const k2 = keyOf(d);
+      if (k2 !== currentKey) {
+        out.push({ key: k2, label: labelOf(d), items: [] });
+        currentKey = k2;
+      }
+      out[out.length - 1].items.push(e);
+    }
+    return out;
+  }, [entries, scope?.sectionUnit]);
   const handleAssign = reactExports.useCallback(async (groupId) => {
     const ids = [...selectedIds];
     await window.api.groups.assignEntries(groupId, ids);
@@ -9587,24 +9672,24 @@ function DayView() {
   }, [selectedIds, setSelection, bumpRefreshKey]);
   const setViewMode = reactExports.useCallback((m2) => {
     if (!settings) return;
-    setSettings({ ...settings, dayViewMode: m2 });
-    window.api.settings.set({ dayViewMode: m2 });
+    setSettings({ ...settings, fileBrowserMode: m2 });
+    window.api.settings.set({ fileBrowserMode: m2 });
   }, [settings, setSettings]);
   const onResizeMouseDown = reactExports.useCallback((e) => {
     if (!settings) return;
     e.preventDefault();
     const startY = e.clientY;
-    const startH = settings.dayViewHeight ?? 240;
+    const startH = settings.fileBrowserHeight ?? 240;
     const snap = { ...settings };
     const clamp = (h) => Math.min(Math.max(h, MIN_HEIGHT), window.innerHeight - 160);
     setResizing(true);
     const onMove = (ev) => {
-      setSettings({ ...snap, dayViewHeight: clamp(startH + startY - ev.clientY) });
+      setSettings({ ...snap, fileBrowserHeight: clamp(startH + startY - ev.clientY) });
     };
     const onUp = (ev) => {
       const newH = clamp(startH + startY - ev.clientY);
-      setSettings({ ...snap, dayViewHeight: newH });
-      window.api.settings.set({ dayViewHeight: newH });
+      setSettings({ ...snap, fileBrowserHeight: newH });
+      window.api.settings.set({ fileBrowserHeight: newH });
       setResizing(false);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
@@ -9631,19 +9716,26 @@ function DayView() {
       setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
     }
   }, [selectedIds, lastSelectedId, entries, setSelection]);
-  if (!selectedPeriod) return null;
-  const label = periodLabel(selectedPeriod[0], selectedPeriod[1]);
+  const close2 = reactExports.useCallback(() => {
+    setFileBrowserOpen(false);
+    setSelectedPeriod(null);
+    setActiveEntryId(null);
+  }, [setFileBrowserOpen, setSelectedPeriod, setActiveEntryId]);
+  if (!isOpen) return null;
+  const label = scope?.label ?? "All files";
   const count = entries.length;
   const renderItem = (entry) => {
     const common = {
       entry,
       selected: selectedIds.has(entry.id),
       onClick: handleClickEntry(entry),
-      onDoubleClick: () => setActiveEntryId(entry.id)
+      onDoubleClick: () => setActiveEntryId(entry.id),
+      onContextMenu: onEntryContextMenu(entry)
     };
     if (viewMode === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx(ListRow, { ...common }, entry.id);
     return /* @__PURE__ */ jsxRuntimeExports.jsx(GridCell, { ...common, size: THUMB_SIZE[viewMode] }, entry.id);
   };
+  const renderItems = (items) => viewMode === "list" ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "6px 0" }, children: items.map(renderItem) }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px" }, children: items.map(renderItem) });
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
     height,
     borderTop: "1px solid var(--border)",
@@ -9688,6 +9780,23 @@ function DayView() {
         " ",
         count === 1 ? "item" : "items"
       ] }),
+      selectedPeriod && fileBrowserOpen && /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => setSelectedPeriod(null),
+          title: "Back to the full view scope",
+          style: {
+            background: "none",
+            border: "1px solid var(--border)",
+            borderRadius: 5,
+            color: "var(--text-3)",
+            fontSize: 11,
+            padding: "2px 8px",
+            cursor: "pointer"
+          },
+          children: "← Back"
+        }
+      ),
       selectedIds.size > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(AssignDropdown, { selectedIds, groups, onAssign: handleAssign }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginLeft: "auto", display: "flex", gap: 2 }, children: ["list", "small", "medium", "large"].map((m2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
@@ -9702,10 +9811,7 @@ function DayView() {
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
-          onClick: () => {
-            setSelectedPeriod(null);
-            setActiveEntryId(null);
-          },
+          onClick: close2,
           style: {
             background: "none",
             border: "none",
@@ -9727,7 +9833,25 @@ function DayView() {
       justifyContent: "center",
       color: "var(--text-4)",
       fontSize: 13
-    }, children: "No entries for this period" }) : viewMode === "list" ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "6px 0" }, children: entries.map(renderItem) }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px" }, children: entries.map(renderItem) }) })
+    }, children: "No entries for this period" }) : sections ? sections.map((section) => /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
+        position: "sticky",
+        top: 0,
+        zIndex: 1,
+        background: "var(--bg-app)",
+        padding: "10px 14px 6px",
+        fontSize: 12,
+        fontWeight: 700,
+        color: "var(--text-2)",
+        letterSpacing: 0.4,
+        borderBottom: "1px solid var(--border-light)"
+      }, children: [
+        section.label,
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "var(--text-4)", fontWeight: 400 }, children: section.items.length })
+      ] }),
+      renderItems(section.items)
+    ] }, section.key)) : renderItems(entries) }),
+    contextMenuUI
   ] });
 }
 function OrderedMap(content) {
@@ -29013,7 +29137,7 @@ const PRESET_COLORS$1 = [
   "#6b7280",
   "#78716c"
 ];
-function buildTree(groups) {
+function buildTree(groups, cmp2) {
   const map2 = /* @__PURE__ */ new Map();
   for (const g of groups) map2.set(g.id, { group: g, children: [] });
   const roots = [];
@@ -29026,17 +29150,18 @@ function buildTree(groups) {
     }
   }
   const sort = (nodes) => {
-    nodes.sort((a, b) => a.group.name.localeCompare(b.group.name));
+    nodes.sort((a, b) => cmp2(a.group, b.group));
     nodes.forEach((n2) => sort(n2.children));
     return nodes;
   };
   return sort(roots);
 }
-function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect, onEdit, onDelete }) {
+function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect, onEdit, onDelete, stats }) {
   const [hovered, setHovered] = reactExports.useState(false);
   const { group, children } = node;
   const isExpanded = expanded.has(group.id);
   const isSelected = selectedGroupId === group.id;
+  const count = stats.get(group.id)?.count ?? 0;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
       "div",
@@ -29088,7 +29213,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
             textOverflow: "ellipsis",
             whiteSpace: "nowrap"
           }, children: group.name }),
-          hovered && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 1, flexShrink: 0 }, children: [
+          hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 1, flexShrink: 0 }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "button",
               {
@@ -29129,7 +29254,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
                 children: "✕"
               }
             )
-          ] })
+          ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", flexShrink: 0 }, children: count })
         ]
       }
     ),
@@ -29143,7 +29268,8 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
         selectedGroupId,
         onSelect,
         onEdit,
-        onDelete
+        onDelete,
+        stats
       },
       child.group.id
     ))
@@ -29262,7 +29388,17 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
   ] });
 }
 function GroupSidebar() {
-  const { groups, setGroups, selectedGroupId, setSelectedGroupId } = useStore();
+  const {
+    groups,
+    setGroups,
+    selectedGroupId,
+    setSelectedGroupId,
+    zoomLevel,
+    visibleRange,
+    selectedPeriod,
+    dataExtent,
+    refreshKey
+  } = useStore();
   const [expanded, setExpanded] = reactExports.useState(/* @__PURE__ */ new Set());
   const [mode, setMode] = reactExports.useState("idle");
   const [editTarget, setEditTarget] = reactExports.useState(null);
@@ -29271,6 +29407,30 @@ function GroupSidebar() {
   const [formParentId, setFormParentId] = reactExports.useState(null);
   const [formTags, setFormTags] = reactExports.useState([]);
   const [pendingTagNames, setPendingTagNames] = reactExports.useState([]);
+  const [sortBy, setSortBy] = reactExports.useState("name");
+  const [sortDir, setSortDir] = reactExports.useState("asc");
+  const [filterText, setFilterText] = reactExports.useState("");
+  const [stats, setStats] = reactExports.useState(/* @__PURE__ */ new Map());
+  const scope = reactExports.useMemo(
+    () => computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent),
+    [selectedPeriod, zoomLevel, visibleRange, dataExtent]
+  );
+  const isScoped = selectedPeriod !== null || zoomLevel !== "year";
+  const scopeFrom = scope?.from ?? null;
+  const scopeTo = scope?.to ?? null;
+  reactExports.useEffect(() => {
+    if (scopeFrom === null || scopeTo === null) {
+      setStats(/* @__PURE__ */ new Map());
+      return;
+    }
+    let cancelled = false;
+    window.api.groups.statsForPeriod(scopeFrom, scopeTo).then((rows) => {
+      if (!cancelled) setStats(new Map(rows.map((r2) => [r2.group_id, r2])));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scopeFrom, scopeTo, refreshKey]);
   reactExports.useEffect(() => {
     if (mode === "edit" && editTarget) {
       window.api.tags.forGroup(editTarget.id).then((ts) => {
@@ -29335,7 +29495,63 @@ function GroupSidebar() {
       return next;
     });
   };
-  const tree = buildTree(groups);
+  const changeSortBy = (by) => {
+    setSortBy(by);
+    setSortDir(by === "size" ? "desc" : "asc");
+  };
+  const visibleGroups = reactExports.useMemo(() => {
+    let result = groups;
+    if (isScoped && scope) {
+      const byId = new Map(groups.map((g) => [g.id, g]));
+      const keep = /* @__PURE__ */ new Set();
+      for (const g of groups) {
+        const overlapsRange = g.date_from != null && g.date_to != null && g.date_from < scope.to && g.date_to > scope.from;
+        if (stats.has(g.id) || overlapsRange || g.id === selectedGroupId) keep.add(g.id);
+      }
+      for (const id2 of [...keep]) {
+        let p2 = byId.get(id2)?.parent_id ?? null;
+        while (p2 !== null && !keep.has(p2)) {
+          keep.add(p2);
+          p2 = byId.get(p2)?.parent_id ?? null;
+        }
+      }
+      result = groups.filter((g) => keep.has(g.id));
+    }
+    const q2 = filterText.trim().toLowerCase();
+    if (q2) {
+      const byId = new Map(result.map((g) => [g.id, g]));
+      const keep = /* @__PURE__ */ new Set();
+      for (const g of result) if (g.name.toLowerCase().includes(q2)) keep.add(g.id);
+      for (const id2 of [...keep]) {
+        let p2 = byId.get(id2)?.parent_id ?? null;
+        while (p2 !== null && !keep.has(p2)) {
+          keep.add(p2);
+          p2 = byId.get(p2)?.parent_id ?? null;
+        }
+      }
+      result = result.filter((g) => keep.has(g.id));
+    }
+    return result;
+  }, [groups, stats, isScoped, scope, selectedGroupId, filterText]);
+  const cmp2 = reactExports.useMemo(() => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    return (a, b) => {
+      if (sortBy === "size") {
+        const d = (stats.get(a.id)?.count ?? 0) - (stats.get(b.id)?.count ?? 0);
+        if (d !== 0) return d * dir;
+      } else if (sortBy === "date") {
+        const av = stats.get(a.id)?.first_ts ?? a.date_from ?? a.created_at;
+        const bv = stats.get(b.id)?.first_ts ?? b.date_from ?? b.created_at;
+        if (av !== bv) return (av - bv) * dir;
+      } else {
+        const d = a.name.localeCompare(b.name);
+        if (d !== 0) return d * dir;
+      }
+      return a.name.localeCompare(b.name);
+    };
+  }, [sortBy, sortDir, stats]);
+  const tree = buildTree(visibleGroups, cmp2);
+  const scopeLabel = isScoped && scope ? scope.label : "All groups";
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { style: {
     width: 220,
     background: "var(--bg-sidebar)",
@@ -29345,7 +29561,7 @@ function GroupSidebar() {
     flexDirection: "column",
     overflow: "hidden"
   }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", marginBottom: 8, paddingLeft: 2 }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", marginBottom: 4, paddingLeft: 2 }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "var(--text-4)", flex: 1, margin: 0 }, children: "Groups" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
@@ -29363,6 +29579,77 @@ function GroupSidebar() {
             cursor: "pointer"
           },
           children: "+"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+      fontSize: 11,
+      color: isScoped ? "var(--text-2)" : "var(--text-4)",
+      fontWeight: isScoped ? 600 : 400,
+      paddingLeft: 2,
+      marginBottom: 6,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }, children: scopeLabel }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 4, marginBottom: 8, alignItems: "center" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "select",
+        {
+          value: sortBy,
+          onChange: (e) => changeSortBy(e.target.value),
+          title: "Sort groups",
+          style: {
+            fontSize: 11,
+            padding: "3px 4px",
+            flexShrink: 0,
+            border: "1px solid var(--border)",
+            borderRadius: 5,
+            background: "var(--bg-input)",
+            color: "var(--text-2)"
+          },
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "name", children: "Name" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "date", children: "Date" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "size", children: "Size" })
+          ]
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => setSortDir((d) => d === "asc" ? "desc" : "asc"),
+          title: sortDir === "asc" ? "Ascending" : "Descending",
+          style: {
+            background: "none",
+            border: "1px solid var(--border)",
+            borderRadius: 5,
+            color: "var(--text-2)",
+            fontSize: 11,
+            padding: "3px 6px",
+            cursor: "pointer",
+            flexShrink: 0
+          },
+          children: sortDir === "asc" ? "↑" : "↓"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          value: filterText,
+          onChange: (e) => setFilterText(e.target.value),
+          placeholder: "Filter groups…",
+          style: {
+            flex: 1,
+            minWidth: 0,
+            padding: "3px 6px",
+            fontSize: 11,
+            border: "1px solid var(--border)",
+            borderRadius: 5,
+            background: "var(--bg-input)",
+            outline: "none",
+            color: "var(--text)"
+          }
         }
       )
     ] }),
@@ -29391,7 +29678,7 @@ function GroupSidebar() {
           ]
         }
       ),
-      groups.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { style: { fontSize: 12, color: "var(--text-4)", paddingLeft: 20, marginTop: 4 }, children: "No groups yet" }) : tree.map((node) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+      groups.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { style: { fontSize: 12, color: "var(--text-4)", paddingLeft: 20, marginTop: 4 }, children: "No groups yet" }) : visibleGroups.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { style: { fontSize: 12, color: "var(--text-4)", paddingLeft: 20, marginTop: 4 }, children: filterText.trim() ? "No matching groups" : "No groups in this period" }) : tree.map((node) => /* @__PURE__ */ jsxRuntimeExports.jsx(
         GroupNode,
         {
           node,
@@ -29401,7 +29688,8 @@ function GroupSidebar() {
           selectedGroupId,
           onSelect: setSelectedGroupId,
           onEdit: openEdit,
-          onDelete: handleDelete
+          onDelete: handleDelete,
+          stats
         },
         node.group.id
       ))
@@ -30215,6 +30503,8 @@ function SettingsView() {
   const [resetPending, setResetPending] = reactExports.useState(false);
   const [resetConfirmText, setResetConfirmText] = reactExports.useState("");
   const [resetting, setResetting] = reactExports.useState(false);
+  const [generating, setGenerating] = reactExports.useState(false);
+  const [generateError, setGenerateError] = reactExports.useState(null);
   const [pathHealth, setPathHealth] = reactExports.useState({});
   const [resolving, setResolving] = reactExports.useState(null);
   function pathColor(p2) {
@@ -30347,6 +30637,20 @@ function SettingsView() {
     const next = { ...settings, watchedFolders: settings.watchedFolders.filter((f2) => f2 !== folder) };
     await window.api.settings.set({ watchedFolders: next.watchedFolders });
     setSettings(next);
+  }
+  async function generateTestData() {
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      if (typeof window.api.settings.generateTestData !== "function") {
+        throw new Error("Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).");
+      }
+      await window.api.settings.generateTestData();
+      window.location.reload();
+    } catch (e) {
+      setGenerateError(e?.message ?? "Test data generation failed");
+      setGenerating(false);
+    }
   }
   async function confirmReset() {
     setResetting(true);
@@ -30775,6 +31079,25 @@ function SettingsView() {
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)" }, children: "Thumbnails are always stored in your library." })
       ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Testing" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: card, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, flexDirection: "column", alignItems: "flex-start", gap: 12 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 4 }, children: "Generate test data" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: 'Creates 1,000 blank placeholder files (photos, videos, audio, documents) inside your library, spread across the last 5 years with a few dense days of 20+ files, and randomly tagged from 10 common tags. Use "Clear entire database" below to remove everything again.' })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            style: { ...btn("default"), padding: "7px 14px", opacity: generating ? 0.6 : 1 },
+            onClick: generateTestData,
+            disabled: generating || resetting,
+            children: generating ? "Generating…" : "⚗ Generate 1,000 test files"
+          }
+        ),
+        generateError && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "#b91c1c", background: "#fee2e2", padding: "6px 10px", borderRadius: 4, width: "100%", boxSizing: "border-box" }, children: generateError })
+      ] }) })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...sectionLabel, color: "#b91c1c" }, children: "Danger zone" }),
@@ -31311,9 +31634,8 @@ function App() {
   const refreshExtent = React$2.useCallback(() => {
     return window.api.entries.extent().then((ext) => {
       if (!ext) return;
-      const pad = (ext.max - ext.min) * 0.04;
       setDataExtent([ext.min, ext.max]);
-      setVisibleRange([ext.min - pad, ext.max + pad]);
+      setVisibleRange(yearViewRange([ext.min, ext.max]));
     });
   }, [setDataExtent, setVisibleRange]);
   reactExports.useEffect(() => {
@@ -31486,8 +31808,9 @@ function IngestProgressBar() {
   ] });
 }
 function Main() {
-  const { ingestProgress, syncProgress, selectedPeriod, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore();
-  const bottomOpen = selectedPeriod !== null || searchResults !== null;
+  const { ingestProgress, syncProgress, selectedPeriod, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore();
+  const browserOpen = fileBrowserOpen || selectedPeriod !== null;
+  const bottomOpen = browserOpen || searchResults !== null;
   const isSyncing = syncProgress !== null && syncProgress.phase !== "done";
   const isImporting = ingestProgress !== null && !ingestProgress.done;
   const [importPending, setImportPending] = reactExports.useState(null);
@@ -31496,7 +31819,7 @@ function Main() {
   const importBusy = isImporting || isSyncing;
   const histH = settings?.histogramHeight;
   const isFixedHistogram = histH !== null && histH !== void 0;
-  const bottomH = selectedPeriod !== null ? settings?.dayViewHeight ?? 240 : 240;
+  const bottomH = browserOpen ? settings?.fileBrowserHeight ?? 240 : 240;
   const onResizeMouseDown = React$2.useCallback((e) => {
     e.preventDefault();
     const startY = e.clientY;
@@ -31679,7 +32002,7 @@ function Main() {
         }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
         activeView === "timeline" && !bottomOpen && isFixedHistogram && /* @__PURE__ */ jsxRuntimeExports.jsx(ResizeDivider, { onMouseDown: onResizeMouseDown }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(SearchResults, {}),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(DayView, {}),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(FileBrowser, {}),
         /* @__PURE__ */ jsxRuntimeExports.jsx(EntryModal, {}),
         /* @__PURE__ */ jsxRuntimeExports.jsx(JournalModal, {}),
         /* @__PURE__ */ jsxRuntimeExports.jsx(DateRangeGroupModal, {}),

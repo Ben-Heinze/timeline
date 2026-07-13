@@ -1,7 +1,8 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useMemo } from 'react'
 import { useStore } from '../store/useStore'
-import type { Group, Tag } from '../../shared/types'
+import type { Group, GroupStats, Tag } from '../../shared/types'
 import TagEditor from './TagEditor'
+import { computeScope } from './scope'
 
 const PRESET_COLORS = [
   '#ef4444', '#f97316', '#f59e0b', '#84cc16',
@@ -9,9 +10,11 @@ const PRESET_COLORS = [
   '#8b5cf6', '#ec4899', '#6b7280', '#78716c',
 ]
 
+type GroupSortBy = 'name' | 'date' | 'size'
+
 interface TreeNode { group: Group; children: TreeNode[] }
 
-function buildTree(groups: Group[]): TreeNode[] {
+function buildTree(groups: Group[], cmp: (a: Group, b: Group) => number): TreeNode[] {
   const map = new Map<number, TreeNode>()
   for (const g of groups) map.set(g.id, { group: g, children: [] })
   const roots: TreeNode[] = []
@@ -24,7 +27,7 @@ function buildTree(groups: Group[]): TreeNode[] {
     }
   }
   const sort = (nodes: TreeNode[]) => {
-    nodes.sort((a, b) => a.group.name.localeCompare(b.group.name))
+    nodes.sort((a, b) => cmp(a.group, b.group))
     nodes.forEach(n => sort(n.children))
     return nodes
   }
@@ -42,13 +45,15 @@ interface GroupNodeProps {
   onSelect: (id: number | null) => void
   onEdit: (g: Group) => void
   onDelete: (id: number) => void
+  stats: Map<number, GroupStats>
 }
 
-function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect, onEdit, onDelete }: GroupNodeProps) {
+function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect, onEdit, onDelete, stats }: GroupNodeProps) {
   const [hovered, setHovered] = useState(false)
   const { group, children } = node
   const isExpanded = expanded.has(group.id)
   const isSelected = selectedGroupId === group.id
+  const count = stats.get(group.id)?.count ?? 0
 
   return (
     <>
@@ -82,7 +87,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
         }}>
           {group.name}
         </span>
-        {hovered && (
+        {hovered ? (
           <div style={{ display: 'flex', gap: 1, flexShrink: 0 }}>
             <button
               onClick={e => { e.stopPropagation(); onEdit(group) }}
@@ -101,6 +106,8 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
               }}
             >✕</button>
           </div>
+        ) : (
+          <span style={{ fontSize: 11, color: 'var(--text-4)', flexShrink: 0 }}>{count}</span>
         )}
       </div>
       {isExpanded && children.map(child => (
@@ -114,6 +121,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
           onSelect={onSelect}
           onEdit={onEdit}
           onDelete={onDelete}
+          stats={stats}
         />
       ))}
     </>
@@ -218,7 +226,10 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
 export default function GroupSidebar() {
-  const { groups, setGroups, selectedGroupId, setSelectedGroupId } = useStore()
+  const {
+    groups, setGroups, selectedGroupId, setSelectedGroupId,
+    zoomLevel, visibleRange, selectedPeriod, dataExtent, refreshKey,
+  } = useStore()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [mode, setMode] = useState<'idle' | 'create' | 'edit'>('idle')
   const [editTarget, setEditTarget] = useState<Group | null>(null)
@@ -227,6 +238,29 @@ export default function GroupSidebar() {
   const [formParentId, setFormParentId] = useState<number | null>(null)
   const [formTags, setFormTags] = useState<Tag[]>([])
   const [pendingTagNames, setPendingTagNames] = useState<string[]>([])
+  const [sortBy, setSortBy] = useState<GroupSortBy>('name')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [filterText, setFilterText] = useState('')
+  const [stats, setStats] = useState<Map<number, GroupStats>>(new Map())
+
+  // The sidebar follows the same scope as the file browser: year view shows
+  // every group; month/day zoom (or a clicked bar) narrows to that timeframe.
+  const scope = useMemo(
+    () => computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent),
+    [selectedPeriod, zoomLevel, visibleRange, dataExtent]
+  )
+  const isScoped = selectedPeriod !== null || zoomLevel !== 'year'
+
+  const scopeFrom = scope?.from ?? null
+  const scopeTo = scope?.to ?? null
+  useEffect(() => {
+    if (scopeFrom === null || scopeTo === null) { setStats(new Map()); return }
+    let cancelled = false
+    window.api.groups.statsForPeriod(scopeFrom, scopeTo).then(rows => {
+      if (!cancelled) setStats(new Map(rows.map(r => [r.group_id, r])))
+    })
+    return () => { cancelled = true }
+  }, [scopeFrom, scopeTo, refreshKey])
 
   useEffect(() => {
     if (mode === 'edit' && editTarget) {
@@ -290,7 +324,65 @@ export default function GroupSidebar() {
     })
   }
 
-  const tree = buildTree(groups)
+  const changeSortBy = (by: GroupSortBy) => {
+    setSortBy(by)
+    // Sensible default direction per key: A→Z, oldest first, biggest first
+    setSortDir(by === 'size' ? 'desc' : 'asc')
+  }
+
+  // Groups shown for the current scope: in year view all of them; when scoped,
+  // those with entries in the period or a date range overlapping it. Ancestors
+  // of visible groups are kept so the tree stays connected.
+  const visibleGroups = useMemo(() => {
+    let result = groups
+    if (isScoped && scope) {
+      const byId = new Map(groups.map(g => [g.id, g]))
+      const keep = new Set<number>()
+      for (const g of groups) {
+        const overlapsRange = g.date_from != null && g.date_to != null
+          && g.date_from < scope.to && g.date_to > scope.from
+        if (stats.has(g.id) || overlapsRange || g.id === selectedGroupId) keep.add(g.id)
+      }
+      for (const id of [...keep]) {
+        let p = byId.get(id)?.parent_id ?? null
+        while (p !== null && !keep.has(p)) { keep.add(p); p = byId.get(p)?.parent_id ?? null }
+      }
+      result = groups.filter(g => keep.has(g.id))
+    }
+    const q = filterText.trim().toLowerCase()
+    if (q) {
+      const byId = new Map(result.map(g => [g.id, g]))
+      const keep = new Set<number>()
+      for (const g of result) if (g.name.toLowerCase().includes(q)) keep.add(g.id)
+      for (const id of [...keep]) {
+        let p = byId.get(id)?.parent_id ?? null
+        while (p !== null && !keep.has(p)) { keep.add(p); p = byId.get(p)?.parent_id ?? null }
+      }
+      result = result.filter(g => keep.has(g.id))
+    }
+    return result
+  }, [groups, stats, isScoped, scope, selectedGroupId, filterText])
+
+  const cmp = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1
+    return (a: Group, b: Group): number => {
+      if (sortBy === 'size') {
+        const d = (stats.get(a.id)?.count ?? 0) - (stats.get(b.id)?.count ?? 0)
+        if (d !== 0) return d * dir
+      } else if (sortBy === 'date') {
+        const av = stats.get(a.id)?.first_ts ?? a.date_from ?? a.created_at
+        const bv = stats.get(b.id)?.first_ts ?? b.date_from ?? b.created_at
+        if (av !== bv) return (av - bv) * dir
+      } else {
+        const d = a.name.localeCompare(b.name)
+        if (d !== 0) return d * dir
+      }
+      return a.name.localeCompare(b.name)
+    }
+  }, [sortBy, sortDir, stats])
+
+  const tree = buildTree(visibleGroups, cmp)
+  const scopeLabel = isScoped && scope ? scope.label : 'All groups'
 
   return (
     <aside style={{
@@ -303,7 +395,7 @@ export default function GroupSidebar() {
       overflow: 'hidden',
     }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, paddingLeft: 2 }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4, paddingLeft: 2 }}>
         <h2 style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-4)', flex: 1, margin: 0 }}>
           Groups
         </h2>
@@ -315,6 +407,50 @@ export default function GroupSidebar() {
             color: 'var(--text-2)', fontSize: 14, lineHeight: 1, padding: '1px 6px', cursor: 'pointer',
           }}
         >+</button>
+      </div>
+
+      {/* Scope + sort controls */}
+      <div style={{
+        fontSize: 11, color: isScoped ? 'var(--text-2)' : 'var(--text-4)',
+        fontWeight: isScoped ? 600 : 400,
+        paddingLeft: 2, marginBottom: 6,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {scopeLabel}
+      </div>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 8, alignItems: 'center' }}>
+        <select
+          value={sortBy}
+          onChange={e => changeSortBy(e.target.value as GroupSortBy)}
+          title="Sort groups"
+          style={{
+            fontSize: 11, padding: '3px 4px', flexShrink: 0,
+            border: '1px solid var(--border)', borderRadius: 5,
+            background: 'var(--bg-input)', color: 'var(--text-2)',
+          }}
+        >
+          <option value="name">Name</option>
+          <option value="date">Date</option>
+          <option value="size">Size</option>
+        </select>
+        <button
+          onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+          title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+          style={{
+            background: 'none', border: '1px solid var(--border)', borderRadius: 5,
+            color: 'var(--text-2)', fontSize: 11, padding: '3px 6px', cursor: 'pointer', flexShrink: 0,
+          }}
+        >{sortDir === 'asc' ? '↑' : '↓'}</button>
+        <input
+          value={filterText}
+          onChange={e => setFilterText(e.target.value)}
+          placeholder="Filter groups…"
+          style={{
+            flex: 1, minWidth: 0, padding: '3px 6px', fontSize: 11,
+            border: '1px solid var(--border)', borderRadius: 5,
+            background: 'var(--bg-input)', outline: 'none', color: 'var(--text)',
+          }}
+        />
       </div>
 
       {/* Scrollable list */}
@@ -336,6 +472,10 @@ export default function GroupSidebar() {
 
         {groups.length === 0 ? (
           <p style={{ fontSize: 12, color: 'var(--text-4)', paddingLeft: 20, marginTop: 4 }}>No groups yet</p>
+        ) : visibleGroups.length === 0 ? (
+          <p style={{ fontSize: 12, color: 'var(--text-4)', paddingLeft: 20, marginTop: 4 }}>
+            {filterText.trim() ? 'No matching groups' : 'No groups in this period'}
+          </p>
         ) : (
           tree.map(node => (
             <GroupNode
@@ -348,6 +488,7 @@ export default function GroupSidebar() {
               onSelect={setSelectedGroupId}
               onEdit={openEdit}
               onDelete={handleDelete}
+              stats={stats}
             />
           ))
         )}

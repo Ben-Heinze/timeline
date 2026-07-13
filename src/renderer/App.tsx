@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { useStore } from './store/useStore'
 import type { IngestFailure } from '../shared/types'
-import TimelineCanvas from './components/TimelineCanvas'
+import TimelineCanvas, { yearViewRange } from './components/TimelineCanvas'
 import CalendarHeatmap from './components/CalendarHeatmap'
 import FilesView from './components/FilesView'
-import DayView from './components/DayView'
+import FileBrowser from './components/FileBrowser'
 import EntryModal from './components/EntryModal'
 import GroupSidebar from './components/GroupSidebar'
 import JournalModal from './components/JournalModal'
@@ -49,9 +49,8 @@ export default function App() {
   const refreshExtent = React.useCallback(() => {
     return window.api.entries.extent().then(ext => {
       if (!ext) return
-      const pad = (ext.max - ext.min) * 0.04
       setDataExtent([ext.min, ext.max])
-      setVisibleRange([ext.min - pad, ext.max + pad])
+      setVisibleRange(yearViewRange([ext.min, ext.max]))
     })
   }, [setDataExtent, setVisibleRange])
 
@@ -242,8 +241,9 @@ function IngestProgressBar() {
 }
 
 function Main() {
-  const { ingestProgress, syncProgress, selectedPeriod, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore()
-  const bottomOpen = selectedPeriod !== null || searchResults !== null
+  const { ingestProgress, syncProgress, selectedPeriod, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore()
+  const browserOpen = fileBrowserOpen || selectedPeriod !== null
+  const bottomOpen = browserOpen || searchResults !== null
   const isSyncing = syncProgress !== null && syncProgress.phase !== 'done'
   const isImporting = ingestProgress !== null && !ingestProgress.done
   const [importPending, setImportPending] = useState<{ paths: string[]; count: number } | null>(null)
@@ -253,8 +253,8 @@ function Main() {
 
   const histH = settings?.histogramHeight  // number | null | undefined; null = fullscreen
   const isFixedHistogram = histH !== null && histH !== undefined
-  // Height of whichever bottom panel is open: DayView is user-resizable, SearchResults is fixed
-  const bottomH = selectedPeriod !== null ? (settings?.dayViewHeight ?? 240) : 240
+  // Height of whichever bottom panel is open: FileBrowser is user-resizable, SearchResults is fixed
+  const bottomH = browserOpen ? (settings?.fileBrowserHeight ?? 240) : 240
 
   const onResizeMouseDown = React.useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -440,7 +440,7 @@ function Main() {
       )}
 
       <SearchResults />
-      <DayView />
+      <FileBrowser />
       <EntryModal />
       <JournalModal />
       <DateRangeGroupModal />

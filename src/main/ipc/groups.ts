@@ -3,6 +3,7 @@ import * as q from '../db/queries/groups'
 
 export function registerGroupHandlers(): void {
   ipcMain.handle('groups:list', () => q.listGroups())
+  ipcMain.handle('groups:statsForPeriod', (_, from, to) => q.getGroupStatsForPeriod(from, to))
   ipcMain.handle('groups:create', (_, data) => q.createGroup(data))
   ipcMain.handle('groups:update', (_, id, patch) => q.updateGroup(id, patch))
   ipcMain.handle('groups:delete', (_, id) => q.deleteGroup(id))

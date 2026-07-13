@@ -46,6 +46,7 @@ electron.contextBridge.exposeInMainWorld("api", {
   },
   groups: {
     list: () => electron.ipcRenderer.invoke("groups:list"),
+    statsForPeriod: (from, to) => electron.ipcRenderer.invoke("groups:statsForPeriod", from, to),
     create: (data) => electron.ipcRenderer.invoke("groups:create", data),
     update: (id, patch) => electron.ipcRenderer.invoke("groups:update", id, patch),
     delete: (id) => electron.ipcRenderer.invoke("groups:delete", id),
@@ -78,6 +79,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     checkPaths: () => electron.ipcRenderer.invoke("settings:checkPaths"),
     resolveWatchedFolder: (oldPath, newPath) => electron.ipcRenderer.invoke("settings:resolveWatchedFolder", oldPath, newPath),
     relocateLibrary: (newPath) => electron.ipcRenderer.invoke("settings:relocateLibrary", newPath),
-    resetLibrary: () => electron.ipcRenderer.invoke("settings:resetLibrary")
+    resetLibrary: () => electron.ipcRenderer.invoke("settings:resetLibrary"),
+    generateTestData: () => electron.ipcRenderer.invoke("settings:generateTestData")
   }
 });

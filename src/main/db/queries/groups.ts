@@ -1,8 +1,17 @@
 import { getDb } from '../index'
-import type { Group, NewGroup } from '../../../shared/types'
+import type { Group, GroupStats, NewGroup } from '../../../shared/types'
 
 export function listGroups(): Group[] {
   return getDb().prepare('SELECT * FROM groups ORDER BY name').all() as Group[]
+}
+
+export function getGroupStatsForPeriod(from: number, to: number): GroupStats[] {
+  return getDb().prepare(`
+    SELECT group_id, COUNT(*) AS count, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts
+    FROM entries
+    WHERE group_id IS NOT NULL AND timestamp >= ? AND timestamp < ?
+    GROUP BY group_id
+  `).all(from, to) as GroupStats[]
 }
 
 export function createGroup(data: NewGroup): Group {

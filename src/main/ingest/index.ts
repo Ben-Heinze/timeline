@@ -20,7 +20,7 @@ const AUDIO_EXTS = new Set([
   '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.opus',
 ])
 
-function detectType(ext: string): EntryType {
+export function detectType(ext: string): EntryType {
   const e = ext.toLowerCase()
   if (IMAGE_EXTS.has(e)) return 'photo'
   if (VIDEO_EXTS.has(e)) return 'video'

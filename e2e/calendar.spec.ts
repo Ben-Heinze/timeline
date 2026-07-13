@@ -143,6 +143,9 @@ test.describe('Calendar view', () => {
     await page.getByRole('button', { name: 'Create Group' }).click()
 
     await expect(page.getByText('New Date Range Group')).not.toBeVisible()
+    // The sidebar is scoped to the day pinned by the earlier DayView test —
+    // close the file browser to unpin it so all groups are visible again
+    await page.locator('button[title="Close file browser"]').click()
     await expect(page.locator('aside').getByText('Mid January', { exact: true })).toBeVisible({ timeout: 8_000 })
   })
 })

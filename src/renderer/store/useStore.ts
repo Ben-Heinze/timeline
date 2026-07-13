@@ -17,6 +17,7 @@ interface TimelineStore {
   lastSelectedId: number | null
   activeEntryId: number | null
   selectedPeriod: [number, number] | null
+  fileBrowserOpen: boolean
   selectedGroupId: number | null
   dataExtent: [number, number] | null
   ingestProgress: IngestProgress | null
@@ -35,6 +36,7 @@ interface TimelineStore {
   setSelection: (ids: Set<number>, lastId: number | null) => void
   setActiveEntryId: (id: number | null) => void
   setSelectedPeriod: (period: [number, number] | null) => void
+  setFileBrowserOpen: (open: boolean) => void
   setSelectedGroupId: (id: number | null) => void
   setDataExtent: (extent: [number, number] | null) => void
   setIngestProgress: (progress: IngestProgress | null) => void
@@ -63,6 +65,7 @@ export const useStore = create<TimelineStore>((set) => ({
   lastSelectedId: null,
   activeEntryId: null,
   selectedPeriod: null,
+  fileBrowserOpen: false,
   selectedGroupId: null,
   dataExtent: null,
   ingestProgress: null,
@@ -85,6 +88,7 @@ export const useStore = create<TimelineStore>((set) => ({
   setSelection: (ids, lastId) => set({ selectedIds: ids, lastSelectedId: lastId }),
   setActiveEntryId: (id) => set({ activeEntryId: id }),
   setSelectedPeriod: (period) => set({ selectedPeriod: period }),
+  setFileBrowserOpen: (open) => set({ fileBrowserOpen: open }),
   setSelectedGroupId: (id) => set({ selectedGroupId: id }),
   setDataExtent: (extent) => set({ dataExtent: extent }),
   setIngestProgress: (progress) => set({ ingestProgress: progress }),

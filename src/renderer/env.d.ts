@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 import type {
-  IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, Bucket, Group, Entry, NewGroup,
+  IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, Bucket, Group, GroupStats, Entry, NewGroup,
   EntryType, Tag, SearchFilters, AppSettings, DuplicateGroup, FileInfo,
 } from '../shared/types'
 
@@ -35,6 +35,7 @@ interface Api {
   }
   groups: {
     list: () => Promise<Group[]>
+    statsForPeriod: (from: number, to: number) => Promise<GroupStats[]>
     create: (data: NewGroup) => Promise<Group>
     update: (id: number, patch: Partial<Omit<Group, 'id'>>) => Promise<Group>
     delete: (id: number) => Promise<void>
@@ -68,6 +69,7 @@ interface Api {
     resolveWatchedFolder: (oldPath: string, newPath: string) => Promise<{ found: number; total: number }>
     relocateLibrary: (newPath: string) => Promise<{ found: number; total: number }>
     resetLibrary: () => Promise<{ success: boolean }>
+    generateTestData: () => Promise<{ entries: number; tags: number; denseDays: number }>
   }
 }
 

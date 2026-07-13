@@ -68,6 +68,8 @@ contextBridge.exposeInMainWorld('api', {
   groups: {
     list: () =>
       ipcRenderer.invoke('groups:list'),
+    statsForPeriod: (from: number, to: number) =>
+      ipcRenderer.invoke('groups:statsForPeriod', from, to),
     create: (data: NewGroup) =>
       ipcRenderer.invoke('groups:create', data),
     update: (id: number, patch: Partial<Omit<Group, 'id'>>) =>
@@ -128,5 +130,7 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('settings:relocateLibrary', newPath),
     resetLibrary: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('settings:resetLibrary'),
+    generateTestData: (): Promise<{ entries: number; tags: number; denseDays: number }> =>
+      ipcRenderer.invoke('settings:generateTestData'),
   },
 })

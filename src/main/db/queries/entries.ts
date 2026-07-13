@@ -9,9 +9,6 @@ export function getHistogram(from: number, to: number, zoomLevel: string, groupI
     bucketExpr = `CAST(strftime('%s', strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01-01', 'utc') AS INTEGER) * 1000`
   } else if (zoomLevel === 'month') {
     bucketExpr = `CAST(strftime('%s', strftime('%Y-%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01', 'utc') AS INTEGER) * 1000`
-  } else if (zoomLevel === 'week') {
-    // Snap to the Sunday that starts the week in local time
-    bucketExpr = `CAST(strftime('%s', date(datetime(timestamp/1000, 'unixepoch', 'localtime'), '-' || CAST(strftime('%w', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) || ' days'), 'utc') AS INTEGER) * 1000`
   } else {
     bucketExpr = `CAST(strftime('%s', date(datetime(timestamp/1000, 'unixepoch', 'localtime')), 'utc') AS INTEGER) * 1000`
   }

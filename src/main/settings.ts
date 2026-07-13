@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import path from 'path'
 import fs from 'fs'
-import type { AppSettings } from '../shared/types'
+import type { AppSettings, FileViewMode } from '../shared/types'
 
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json')
 
@@ -12,7 +12,8 @@ export function getSettings(): AppSettings {
   const defaultLibrary = path.join(app.getPath('userData'), 'library')
   try {
     const raw = fs.readFileSync(settingsFile(), 'utf-8')
-    const parsed = JSON.parse(raw) as Partial<AppSettings>
+    // dayViewHeight/dayViewMode are legacy names from before the file-browser rename
+    const parsed = JSON.parse(raw) as Partial<AppSettings> & { dayViewHeight?: number; dayViewMode?: FileViewMode }
     cached = {
       importMode: parsed.importMode ?? 'copy',
       libraryPath: parsed.libraryPath || defaultLibrary,
@@ -23,11 +24,11 @@ export function getSettings(): AppSettings {
       heatmapScale: parsed.heatmapScale ?? 'log',
       heatmapMaxCount: parsed.heatmapMaxCount ?? null,
       curveTension: parsed.curveTension ?? 1,
-      dayViewHeight: parsed.dayViewHeight ?? 240,
-      dayViewMode: parsed.dayViewMode ?? 'medium',
+      fileBrowserHeight: parsed.fileBrowserHeight ?? parsed.dayViewHeight ?? 240,
+      fileBrowserMode: parsed.fileBrowserMode ?? parsed.dayViewMode ?? 'medium',
     }
   } catch {
-    cached = { importMode: 'copy', libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, dayViewHeight: 240, dayViewMode: 'medium' }
+    cached = { importMode: 'copy', libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: 'medium' }
   }
   return cached
 }

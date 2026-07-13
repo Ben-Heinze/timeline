@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
-import { timeYear, timeMonth, timeWeek, timeDay } from 'd3-time'
+import { timeYear, timeMonth, timeDay } from 'd3-time'
 import { useStore } from '../store/useStore'
 import type { ZoomLevel } from '../../shared/types'
 
@@ -11,31 +11,59 @@ const YAXIS_W = 40  // left margin reserved for Y axis labels
 
 const cv = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 
+// Nice Y-axis tick step (shared by the draw code and the hover hit test)
+const niceStep = (n: number) => {
+  if (n <= 1) return 1
+  const rough = n / 4
+  const p = Math.pow(10, Math.floor(Math.log10(rough)))
+  const norm = rough / p
+  return (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * p
+}
+
 // Fixed bucket size per zoom level
 export const BUCKET_MS: Record<ZoomLevel, number> = {
   year:  365.25 * MS_DAY,
   month: 30.44  * MS_DAY,
-  week:  7      * MS_DAY,
   day:   MS_DAY,
+}
+
+// Year view always spans whole calendar years, with a minimum number of years
+// so a single year of data doesn't stretch one bar across the full canvas
+const MIN_YEAR_VIEW_YEARS = 5
+export const yearViewRange = (extent: [number, number]): [number, number] => {
+  const startYear = new Date(extent[0]).getFullYear()
+  const endYear   = new Date(extent[1]).getFullYear()
+  const extra = Math.max(0, MIN_YEAR_VIEW_YEARS - (endYear - startYear + 1))
+  const from = new Date(startYear - Math.ceil(extra / 2), 0, 1).getTime()
+  const to   = new Date(endYear + 1 + Math.floor(extra / 2), 0, 1).getTime()
+  const pad = (to - from) * 0.02
+  return [from - pad, to + pad]
 }
 
 // Default visible window when entering a zoom level
 const WINDOW_MS: Record<ZoomLevel, number> = {
   year:  20 * 365.25 * MS_DAY,
   month: 24 * 30.44  * MS_DAY,
-  week:  26 * 7      * MS_DAY,
   day:   60 * MS_DAY,
 }
 
 const NEXT_LEVEL: Record<ZoomLevel, ZoomLevel> = {
-  year: 'month', month: 'week', week: 'day', day: 'day',
+  year: 'month', month: 'day', day: 'day',
+}
+
+const monthStartMs = (ts: number) => {
+  const d = new Date(ts)
+  return new Date(d.getFullYear(), d.getMonth(), 1).getTime()
+}
+const addMonths = (monthStart: number, n: number) => {
+  const d = new Date(monthStart)
+  return new Date(d.getFullYear(), d.getMonth() + n, 1).getTime()
 }
 
 // Exclusive end of the calendar period a bucket covers
 const bucketEndMs = (bs: number, level: ZoomLevel): number => {
   if (level === 'year')  return new Date(new Date(bs).getFullYear() + 1, 0, 1).getTime()
   if (level === 'month') { const d = new Date(bs); return new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime() }
-  if (level === 'week')  return bs + 7 * MS_DAY
   return bs + MS_DAY
 }
 
@@ -50,7 +78,6 @@ const TYPE_LABELS: Record<string, [string, string]> = {
 const HOVER_DATE_FMT: Record<ZoomLevel, (bs: number) => string> = {
   year:  bs => `${new Date(bs).getFullYear()}`,
   month: bs => new Date(bs).toLocaleString('en-US', { month: 'long', year: 'numeric' }),
-  week:  bs => `${new Date(bs).toLocaleString('en-US', { month: 'short', day: 'numeric' })} – ${new Date(bs + 6 * MS_DAY).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
   day:   bs => new Date(bs).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }),
 }
 
@@ -58,12 +85,11 @@ type TickConfig = { iv: { range: (a: Date, b: Date) => Date[] }; fmt: (d: Date) 
 const TICK_CONFIG: Record<ZoomLevel, TickConfig> = {
   year:  { iv: timeYear,  fmt: d => `${d.getFullYear()}` },
   month: { iv: timeMonth, fmt: d => d.toLocaleString('en-US', { month: 'short' }) },
-  week:  { iv: timeWeek,  fmt: d => d.toLocaleString('en-US', { weekday: 'short', day: 'numeric' }) },
-  day:   { iv: timeDay,   fmt: d => d.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) },
+  day:   { iv: timeDay,   fmt: d => d.getDate() === 1 ? d.toLocaleString('en-US', { month: 'short', day: 'numeric' }) : `${d.getDate()}` },
 }
 
 const LEVEL_LABELS: Record<ZoomLevel, string> = {
-  year: 'Year', month: 'Month', week: 'Week', day: 'Day',
+  year: 'Year', month: 'Month', day: 'Day',
 }
 
 // ─── Scrollbar ───────────────────────────────────────────────────────────────
@@ -87,7 +113,7 @@ function Scrollbar({ dataExtent, visibleRange, onPan }: {
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const d = dragRef.current
-      if (!d || !trackRef.current) return
+      if (!d || !trackRef.current || vRange >= dataRange) return
       const trackW = trackRef.current.getBoundingClientRect().width
       const dMs = ((e.clientX - d.startX) / trackW) * dataRange
       const newFrom = Math.max(dFrom, Math.min(dTo - vRange, d.startFrom + dMs))
@@ -103,7 +129,7 @@ function Scrollbar({ dataExtent, visibleRange, onPan }: {
     <div
       ref={trackRef}
       onClick={e => {
-        if (!trackRef.current || dragRef.current) return
+        if (!trackRef.current || dragRef.current || vRange >= dataRange) return
         const rect = trackRef.current.getBoundingClientRect()
         const frac = (e.clientX - rect.left) / rect.width
         const clickTs = dFrom + frac * dataRange
@@ -139,6 +165,7 @@ export default function TimelineCanvas() {
     histogramBuckets, setHistogramBuckets,
     groups,
     selectedPeriod, setSelectedPeriod,
+    fileBrowserOpen, setFileBrowserOpen,
     selectedGroupId,
     dataExtent,
     refreshKey,
@@ -157,10 +184,6 @@ export default function TimelineCanvas() {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1).getTime()
   })
-  const [selectedWeekStart, setSelectedWeekStart] = useState<number>(() => {
-    const now = new Date()
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).getTime()
-  })
   const [curveMode, setCurveMode] = useState(false)
 
   const rangeRef      = useRef(visibleRange)
@@ -174,17 +197,34 @@ export default function TimelineCanvas() {
   useEffect(() => { zoomRef.current   = zoomLevel    },        [zoomLevel])
   useEffect(() => { dateRangeSelRef.current = dateRangeSelection }, [dateRangeSelection])
 
+  // Rows arrive split by (group, type); merge to one segment per group per
+  // bucket. Shared by the draw pass and the hover hit test so the stacking
+  // geometry stays identical. Ungrouped entries stack first (bottom).
+  const bucketSegments = useMemo(() => {
+    const byStart = new Map<number, { group_id: number | null; count: number }[]>()
+    for (const b of histogramBuckets) {
+      let segs = byStart.get(b.bucket_start)
+      if (!segs) { segs = []; byStart.set(b.bucket_start, segs) }
+      const seg = segs.find(s => s.group_id === b.group_id)
+      if (seg) seg.count += b.count
+      else segs.push({ group_id: b.group_id, count: b.count })
+    }
+    for (const segs of byStart.values()) {
+      segs.sort((a, b) => (a.group_id ?? -1) - (b.group_id ?? -1))
+    }
+    return byStart
+  }, [histogramBuckets])
+
   // Fetch histogram with fixed bucket for this zoom level
   useEffect(() => {
     const [from, to] = visibleRange
     window.api.entries.histogram(from, to, zoomLevel, selectedGroupId ?? undefined).then(buckets => {
       setHistogramBuckets(buckets)
-      // Only auto-fit to full extent from year view — never yank the user out of week/day/month
+      // Only auto-fit to full extent from year view — never yank the user out of day/month
       if (buckets.length === 0 && selectedGroupId == null && zoomLevel === 'year') {
         const ext = extentRef.current
         if (ext) {
-          const pad = (ext[1] - ext[0]) * 0.04 || MS_DAY * 30
-          setVisibleRange([ext[0] - pad, ext[1] + pad])
+          setVisibleRange(yearViewRange(ext))
           setZoomLevel('year')
         }
       }
@@ -241,15 +281,7 @@ export default function TimelineCanvas() {
       ctx.strokeRect(Math.max(YAXIS_W, Math.floor(sx)) + 0.5, 0.5, Math.max(1, Math.ceil(sw) - 1), chartH - 1)
     }
 
-    // Rows arrive split by (group, type); merge back to one segment per group for stacking
-    const byStart = new Map<number, { group_id: number | null; count: number }[]>()
-    for (const b of histogramBuckets) {
-      if (!byStart.has(b.bucket_start)) byStart.set(b.bucket_start, [])
-      const segs = byStart.get(b.bucket_start)!
-      const seg = segs.find(s => s.group_id === b.group_id)
-      if (seg) seg.count += b.count
-      else segs.push({ group_id: b.group_id, count: b.count })
-    }
+    const byStart = bucketSegments
 
     let maxCount = 1
     for (const segs of byStart.values()) {
@@ -257,14 +289,6 @@ export default function TimelineCanvas() {
       if (total > maxCount) maxCount = total
     }
 
-    // Nice Y-axis tick step
-    const niceStep = (n: number) => {
-      if (n <= 1) return 1
-      const rough = n / 4
-      const p = Math.pow(10, Math.floor(Math.log10(rough)))
-      const norm = rough / p
-      return (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * p
-    }
     const yStep   = niceStep(maxCount)
     const niceMax = Math.ceil(maxCount / yStep) * yStep
     const barScale = (barsH * 0.92) / niceMax
@@ -413,10 +437,9 @@ export default function TimelineCanvas() {
         tickMs = (tick.getTime() + new Date(tick.getFullYear() + 1, 0, 1).getTime()) / 2
       } else if (zoomLevel === 'month') {
         tickMs = (tick.getTime() + new Date(tick.getFullYear(), tick.getMonth() + 1, 1).getTime()) / 2
-      } else if (zoomLevel === 'week') {
-        tickMs = tick.getTime() + 3.5 * MS_DAY
       } else {
-        tickMs = tick.getTime()
+        // Center the day label under its bar
+        tickMs = tick.getTime() + MS_DAY / 2
       }
       const x = tsToX(tickMs)
       if (x < YAXIS_W + 2 || x > w - 2) continue
@@ -445,7 +468,7 @@ export default function TimelineCanvas() {
     ctx.moveTo(YAXIS_W - 0.5, 0)
     ctx.lineTo(YAXIS_W - 0.5, chartH)
     ctx.stroke()
-  }, [visibleRange, histogramBuckets, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension])
+  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension])
 
   // Wheel → pan
   const handleWheel = useCallback((e: WheelEvent) => {
@@ -459,22 +482,12 @@ export default function TimelineCanvas() {
       }
       return
     }
-    if (zoomRef.current === 'week') {
-      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-        const [from, to] = rangeRef.current
-        const mid = new Date((from + to) / 2)
-        const newMonth = new Date(mid.getFullYear(), mid.getMonth() + (e.deltaY > 0 ? 1 : -1), 1)
-        setSelectedMonthStart(newMonth.getTime())
-        setVisibleRange([newMonth.getTime(), new Date(newMonth.getFullYear(), newMonth.getMonth() + 1, 1).getTime()])
-      }
-      return
-    }
     if (zoomRef.current === 'day') {
       if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
         const [from] = rangeRef.current
-        const newWeekStart = from + (e.deltaY > 0 ? 7 : -7) * MS_DAY
-        setSelectedWeekStart(newWeekStart)
-        setVisibleRange([newWeekStart, newWeekStart + 7 * MS_DAY])
+        const newMonthStart = addMonths(monthStartMs(from), e.deltaY > 0 ? 1 : -1)
+        setSelectedMonthStart(newMonthStart)
+        setVisibleRange([newMonthStart, addMonths(newMonthStart, 1)])
       }
       return
     }
@@ -485,12 +498,13 @@ export default function TimelineCanvas() {
     let newTo   = newFrom + width
     const ext = extentRef.current
     if (ext) {
-      const pad = (ext[1] - ext[0]) * 0.04
-      if (newFrom < ext[0] - pad) { newFrom = ext[0] - pad; newTo = newFrom + width }
-      if (newTo   > ext[1] + pad) { newTo = ext[1] + pad;   newFrom = newTo - width }
+      const [lo, hi] = yearViewRange(ext)
+      if (width >= hi - lo) return  // whole extent already visible; nothing to pan
+      if (newFrom < lo) { newFrom = lo; newTo = newFrom + width }
+      if (newTo   > hi) { newTo = hi;   newFrom = newTo - width }
     }
     setVisibleRange([newFrom, newTo])
-  }, [setVisibleRange, setSelectedYear, setSelectedMonthStart, setSelectedWeekStart])
+  }, [setVisibleRange, setSelectedYear, setSelectedMonthStart])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -533,27 +547,23 @@ export default function TimelineCanvas() {
     const to   = new Date(year + 1, 0, 1).getTime()
     setSelectedYear(year)
     setVisibleRange([from, to])
-  }, [setVisibleRange])
+    setSelectedPeriod(null)  // scope changed — unpin any clicked day so the file browser follows
+  }, [setVisibleRange, setSelectedPeriod])
 
-  const setMonthRange = useCallback((monthStart: number) => {
-    const d    = new Date(monthStart)
-    const from = new Date(d.getFullYear(), d.getMonth(), 1).getTime()
-    const to   = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime()
-    setSelectedMonthStart(from)
-    setVisibleRange([from, to])
-  }, [setVisibleRange])
-
-  const setWeekRange = useCallback((weekStart: number) => {
-    setSelectedWeekStart(weekStart)
-    setVisibleRange([weekStart, weekStart + 7 * MS_DAY])
-  }, [setVisibleRange])
+  const setMonthRange = useCallback((ts: number) => {
+    const monthStart = monthStartMs(ts)
+    setSelectedMonthStart(monthStart)
+    setVisibleRange([monthStart, addMonths(monthStart, 1)])
+    setSelectedPeriod(null)  // scope changed — unpin any clicked day so the file browser follows
+  }, [setVisibleRange, setSelectedPeriod])
 
   // Drag: pan (or select in range select mode)
   const drag = useRef<{ startX: number; fromMs: number; toMs: number; moved: boolean } | null>(null)
   const [grabbing, setGrabbing] = useState(false)
 
-  // Hovered bucket for the tooltip (cursor position is relative to the canvas container)
-  const [hover, setHover] = useState<{ x: number; y: number; bucketStart: number } | null>(null)
+  // Hovered bucket for the tooltip (cursor position is relative to the canvas
+  // container); groupId is set when the cursor is over a group's stacked segment
+  const [hover, setHover] = useState<{ x: number; y: number; bucketStart: number; groupId?: number } | null>(null)
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (rangeSelectMode) {
@@ -590,7 +600,7 @@ export default function TimelineCanvas() {
     if (!canvas) return
 
     const d = drag.current
-    if (d && zoomRef.current !== 'month' && zoomRef.current !== 'week' && zoomRef.current !== 'day') {
+    if (d && zoomRef.current !== 'month' && zoomRef.current !== 'day') {
       const dx = e.clientX - d.startX
       if (Math.abs(dx) > 4) { d.moved = true; setGrabbing(true) }
       if (d.moved) {
@@ -601,27 +611,55 @@ export default function TimelineCanvas() {
       }
     }
 
-    // Hover: find the bucket whose slot contains the cursor
+    // Hover: find the bucket whose bar contains the cursor (same geometry as the draw code)
     const rect = canvas.getBoundingClientRect()
     const cx = e.clientX - rect.left
     const cy = e.clientY - rect.top
     const chartW = rect.width - YAXIS_W
     const barsBottom = rect.height - AXIS_H - BAND_H
-    let found: number | null = null
+    let found: { bucketStart: number; groupId?: number } | null = null
     if (cx >= YAXIS_W && cy <= barsBottom) {
       const [from, to] = rangeRef.current
       const tsToX = (ts: number) => YAXIS_W + ((ts - from) / (to - from)) * chartW
-      for (const b of histogramBuckets) {
-        if (cx >= tsToX(b.bucket_start) && cx < tsToX(bucketEndMs(b.bucket_start, zoomLevel))) {
-          found = b.bucket_start
+
+      let maxCount = 1
+      for (const segs of bucketSegments.values()) {
+        const t = segs.reduce((s, sg) => s + sg.count, 0)
+        if (t > maxCount) maxCount = t
+      }
+      const yStep = niceStep(maxCount)
+      const niceMax = Math.ceil(maxCount / yStep) * yStep
+      const barScale = (barsBottom * 0.92) / niceMax
+
+      for (const [bucketStart, segs] of bucketSegments) {
+        const total = segs.reduce((s, sg) => s + sg.count, 0)
+        const slotX = tsToX(bucketStart)
+        const slotW = tsToX(bucketEndMs(bucketStart, zoomLevel)) - slotX
+        const barW  = curveMode ? slotW : Math.max(2, slotW * BAR_FILL)
+        const barX  = curveMode ? slotX : slotX + (slotW - barW) / 2
+        const barH  = Math.max(2, total * barScale)
+        if (cx >= barX && cx < barX + barW && cy >= barsBottom - barH) {
+          found = { bucketStart }
+          if (!curveMode) {
+            // Walk the stack bottom-up to find which segment the cursor is in
+            let yBase = barsBottom
+            for (const seg of segs) {
+              const segH = (seg.count / total) * barH
+              if (cy >= yBase - segH) {
+                if (seg.group_id !== null) found.groupId = seg.group_id
+                break
+              }
+              yBase -= segH
+            }
+          }
           break
         }
       }
     }
-    setHover(found !== null ? { x: cx, y: cy, bucketStart: found } : null)
-  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, histogramBuckets, zoomLevel])
+    setHover(found !== null ? { x: cx, y: cy, ...found } : null)
+  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, bucketSegments, zoomLevel, curveMode])
 
-  // Click: drill down / open DayView (not used in range select mode — handled globally)
+  // Click: drill down / open the file browser (not used in range select mode — handled globally)
   const onMouseUp = useCallback((e: React.MouseEvent) => {
     if (rangeSelectMode) return  // handled by global mouseup effect
     const d = drag.current
@@ -632,10 +670,21 @@ export default function TimelineCanvas() {
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
     const cx   = e.clientX - rect.left
+    if (cx < YAXIS_W) return
     const [from, to] = rangeRef.current
-    const ts    = from + (cx / rect.width) * (to - from)
+    const ts    = from + ((cx - YAXIS_W) / (rect.width - YAXIS_W)) * (to - from)
     const level = zoomRef.current
-    const bMs   = BUCKET_MS[level]
+
+    // Only drill into periods that actually have a bar (bucket_start is calendar-aligned from SQL)
+    const cd = new Date(ts)
+    const bucketStart =
+      level === 'year'  ? new Date(cd.getFullYear(), 0, 1).getTime() :
+      level === 'month' ? new Date(cd.getFullYear(), cd.getMonth(), 1).getTime() :
+                          new Date(cd.getFullYear(), cd.getMonth(), cd.getDate()).getTime()
+    if (!histogramBuckets.some(b => b.bucket_start === bucketStart && b.count > 0)) {
+      setSelectedPeriod(null)  // clicking empty graph space unpins the highlighted day
+      return
+    }
 
     if (level === 'day') {
       // Snap click to the local calendar day (SQL buckets by local date)
@@ -655,23 +704,13 @@ export default function TimelineCanvas() {
       return
     }
 
-    if (next === 'week') {
-      // month → show the weeks of the clicked month
-      const d = new Date(ts)
-      setMonthRange(new Date(d.getFullYear(), d.getMonth(), 1).getTime())
-      setZoomLevel('week')
-      return
-    }
-
     if (next === 'day') {
-      // week → show the 7 days of the clicked week (Sunday-based)
-      const d = new Date(ts)
-      const weekStart = new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay()).getTime()
-      setWeekRange(weekStart)
+      // month → show every day of the clicked month
+      setMonthRange(ts)
       setZoomLevel('day')
       return
     }
-  }, [rangeSelectMode, setSelectedPeriod, setZoomLevel, setVisibleRange, setYearRange, setMonthRange, setWeekRange])
+  }, [rangeSelectMode, setSelectedPeriod, setZoomLevel, setVisibleRange, setYearRange, setMonthRange, histogramBuckets])
 
   const onMouseLeave = useCallback(() => {
     setHover(null)
@@ -686,11 +725,9 @@ export default function TimelineCanvas() {
     const ext = extentRef.current
     if (level === 'year') {
       // Always re-fit to full data extent when clicking Year
-      if (ext) {
-        const pad = (ext[1] - ext[0]) * 0.04 || MS_DAY * 30
-        setVisibleRange([ext[0] - pad, ext[1] + pad])
-      }
+      if (ext) setVisibleRange(yearViewRange(ext))
       setZoomLevel('year')
+      setSelectedPeriod(null)
       return
     }
     if (level === 'month') {
@@ -700,20 +737,9 @@ export default function TimelineCanvas() {
       setZoomLevel('month')
       return
     }
-    if (level === 'week') {
-      const [from, to] = rangeRef.current
-      const center = (from + to) / 2
-      const d = new Date(center)
-      const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime()
-      setMonthRange(monthStart)
-      setZoomLevel('week')
-      return
-    }
     if (level === 'day') {
       const [from, to] = rangeRef.current
-      const d = new Date((from + to) / 2)
-      const weekStart = new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay()).getTime()
-      setWeekRange(weekStart)
+      setMonthRange((from + to) / 2)
       setZoomLevel('day')
       return
     }
@@ -729,7 +755,7 @@ export default function TimelineCanvas() {
     }
     setVisibleRange([newFrom, newTo])
     setZoomLevel(level)
-  }, [setVisibleRange, setZoomLevel, setYearRange, setMonthRange, setWeekRange])
+  }, [setVisibleRange, setZoomLevel, setYearRange, setMonthRange, setSelectedPeriod])
 
   const panLeft = useCallback(() => {
     if (zoomRef.current === 'month') {
@@ -737,15 +763,9 @@ export default function TimelineCanvas() {
       setYearRange(new Date((from + to) / 2).getFullYear() - 1)
       return
     }
-    if (zoomRef.current === 'week') {
-      const [from, to] = rangeRef.current
-      const mid = new Date((from + to) / 2)
-      setMonthRange(new Date(mid.getFullYear(), mid.getMonth() - 1, 1).getTime())
-      return
-    }
     if (zoomRef.current === 'day') {
       const [from] = rangeRef.current
-      setWeekRange(from - 7 * MS_DAY)
+      setMonthRange(addMonths(monthStartMs(from), -1))
       return
     }
     const [from, to] = rangeRef.current
@@ -753,7 +773,11 @@ export default function TimelineCanvas() {
     const shift = w * 0.5
     const ext = extentRef.current
     let newFrom = from - shift
-    if (ext) newFrom = Math.max(newFrom, ext[0] - (ext[1] - ext[0]) * 0.04)
+    if (ext) {
+      const [lo, hi] = yearViewRange(ext)
+      if (w >= hi - lo) return
+      newFrom = Math.max(newFrom, lo)
+    }
     setVisibleRange([newFrom, newFrom + w])
   }, [setVisibleRange, setYearRange, setMonthRange])
 
@@ -763,15 +787,9 @@ export default function TimelineCanvas() {
       setYearRange(new Date((from + to) / 2).getFullYear() + 1)
       return
     }
-    if (zoomRef.current === 'week') {
-      const [from, to] = rangeRef.current
-      const mid = new Date((from + to) / 2)
-      setMonthRange(new Date(mid.getFullYear(), mid.getMonth() + 1, 1).getTime())
-      return
-    }
     if (zoomRef.current === 'day') {
       const [from] = rangeRef.current
-      setWeekRange(from + 7 * MS_DAY)
+      setMonthRange(addMonths(monthStartMs(from), 1))
       return
     }
     const [from, to] = rangeRef.current
@@ -779,23 +797,33 @@ export default function TimelineCanvas() {
     const shift = w * 0.5
     const ext = extentRef.current
     let newTo = to + shift
-    if (ext) newTo = Math.min(newTo, ext[1] + (ext[1] - ext[0]) * 0.04)
+    if (ext) {
+      const [lo, hi] = yearViewRange(ext)
+      if (w >= hi - lo) return
+      newTo = Math.min(newTo, hi)
+    }
     setVisibleRange([newTo - w, newTo])
-  }, [setVisibleRange, setYearRange, setMonthRange, setWeekRange])
+  }, [setVisibleRange, setYearRange, setMonthRange])
 
-  // Total and per-type counts for the hovered bucket
+  // Total and per-type counts for the hovered bucket, plus details of the
+  // group whose stacked segment is under the cursor (if any)
   const hoverInfo = useMemo(() => {
     if (!hover) return null
     let total = 0
+    let groupCount = 0
     const typeCounts = new Map<string, number>()
     for (const b of histogramBuckets) {
       if (b.bucket_start !== hover.bucketStart) continue
       total += b.count
       typeCounts.set(b.type, (typeCounts.get(b.type) ?? 0) + b.count)
+      if (hover.groupId !== undefined && b.group_id === hover.groupId) groupCount += b.count
     }
     if (total === 0) return null
-    return { total, types: [...typeCounts.entries()].sort((a, b) => b[1] - a[1]) }
-  }, [hover, histogramBuckets])
+    const group = hover.groupId !== undefined
+      ? groups.find(g => g.id === hover.groupId) ?? null
+      : null
+    return { total, types: [...typeCounts.entries()].sort((a, b) => b[1] - a[1]), group, groupCount }
+  }, [hover, histogramBuckets, groups])
 
   const btnStyle = (active: boolean): React.CSSProperties => ({
     background: active ? 'var(--text)' : 'none',
@@ -820,7 +848,7 @@ export default function TimelineCanvas() {
         padding: '5px 12px', borderBottom: '1px solid var(--border-light)',
         background: 'var(--bg-muted)', flexShrink: 0,
       }}>
-        {(['year', 'month', 'week', 'day'] as ZoomLevel[]).map(level => (
+        {(['year', 'month', 'day'] as ZoomLevel[]).map(level => (
           <button key={level} onClick={() => handleLevelChange(level)} style={btnStyle(zoomLevel === level)}>
             {LEVEL_LABELS[level]}
           </button>
@@ -834,6 +862,20 @@ export default function TimelineCanvas() {
             : zoomLevel === 'day' ? 'click bar to view entries' : 'click bar to zoom in'}
         </span>
         <div style={{ flex: 1 }} />
+        <button
+          onClick={() => {
+            if (fileBrowserOpen || selectedPeriod !== null) {
+              setFileBrowserOpen(false)
+              setSelectedPeriod(null)
+            } else {
+              setFileBrowserOpen(true)
+            }
+          }}
+          style={{ ...btnStyle(fileBrowserOpen || selectedPeriod !== null), marginRight: 6 }}
+          title="Show the files within the current view"
+        >
+          ☰ Files
+        </button>
         <button
           onClick={() => {
             if (rangeSelectMode) {
@@ -859,7 +901,7 @@ export default function TimelineCanvas() {
         <button onClick={panRight} style={{ ...navBtnStyle, marginLeft: 3 }}>→</button>
       </div>
 
-      {/* Week navigator (day view only) */}
+      {/* Month navigator (day view only) */}
       {zoomLevel === 'day' && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
@@ -867,43 +909,14 @@ export default function TimelineCanvas() {
           background: 'var(--bg-muted)', flexShrink: 0,
         }}>
           <button
-            onClick={() => setWeekRange(selectedWeekStart - 7 * MS_DAY)}
+            onClick={() => setMonthRange(addMonths(selectedMonthStart, -1))}
             style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 10px', fontSize: 13, cursor: 'pointer', color: 'var(--text-2)' }}
           >←</button>
           <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 160, textAlign: 'center' }}>
-            {new Date(selectedWeekStart).toLocaleString('en-US', { month: 'short', day: 'numeric' })}
-            {' – '}
-            {new Date(selectedWeekStart + 6 * MS_DAY).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-          </span>
-          <button
-            onClick={() => setWeekRange(selectedWeekStart + 7 * MS_DAY)}
-            style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 10px', fontSize: 13, cursor: 'pointer', color: 'var(--text-2)' }}
-          >→</button>
-        </div>
-      )}
-
-      {/* Month navigator (week view only) */}
-      {zoomLevel === 'week' && (
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
-          padding: '4px 12px', borderBottom: '1px solid var(--border-light)',
-          background: 'var(--bg-muted)', flexShrink: 0,
-        }}>
-          <button
-            onClick={() => {
-              const d = new Date(selectedMonthStart)
-              setMonthRange(new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime())
-            }}
-            style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 10px', fontSize: 13, cursor: 'pointer', color: 'var(--text-2)' }}
-          >←</button>
-          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 100, textAlign: 'center' }}>
             {new Date(selectedMonthStart).toLocaleString('en-US', { month: 'long', year: 'numeric' })}
           </span>
           <button
-            onClick={() => {
-              const d = new Date(selectedMonthStart)
-              setMonthRange(new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime())
-            }}
+            onClick={() => setMonthRange(addMonths(selectedMonthStart, 1))}
             style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 10px', fontSize: 13, cursor: 'pointer', color: 'var(--text-2)' }}
           >→</button>
         </div>
@@ -971,11 +984,34 @@ export default function TimelineCanvas() {
                 {count} {(TYPE_LABELS[type] ?? [type, type])[count === 1 ? 0 : 1]}
               </div>
             ))}
+            {hoverInfo.group && (
+              <div style={{ borderTop: '1px solid var(--border-light)', marginTop: 5, paddingTop: 5 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: 'var(--text)' }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: hoverInfo.group.color, flexShrink: 0 }} />
+                  {hoverInfo.group.name}
+                </div>
+                <div style={{ color: 'var(--text-2)' }}>
+                  {hoverInfo.groupCount} of {hoverInfo.total} {hoverInfo.total === 1 ? 'file' : 'files'} in this group
+                </div>
+                {hoverInfo.group.date_from != null && hoverInfo.group.date_to != null && (
+                  <div style={{ color: 'var(--text-3)' }}>
+                    {new Date(hoverInfo.group.date_from).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    {' – '}
+                    {new Date(hoverInfo.group.date_to).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </div>
+                )}
+                {hoverInfo.group.description && (
+                  <div style={{ color: 'var(--text-3)', maxWidth: 240, whiteSpace: 'normal' }}>
+                    {hoverInfo.group.description}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {dataExtent && zoomLevel !== 'month' && zoomLevel !== 'week' && zoomLevel !== 'day' && (
+      {dataExtent && zoomLevel !== 'month' && zoomLevel !== 'day' && (
         <Scrollbar dataExtent={dataExtent} visibleRange={visibleRange} onPan={setVisibleRange} />
       )}
     </div>

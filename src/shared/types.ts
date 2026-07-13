@@ -1,5 +1,5 @@
 export type EntryType = 'photo' | 'video' | 'audio' | 'document' | 'journal'
-export type ZoomLevel = 'year' | 'month' | 'week' | 'day'
+export type ZoomLevel = 'year' | 'month' | 'day'
 
 export interface Entry {
   id: number
@@ -38,6 +38,13 @@ export interface Bucket {
   count: number
 }
 
+export interface GroupStats {
+  group_id: number
+  count: number                // entries in the requested period
+  first_ts: number             // earliest entry timestamp in the period
+  last_ts: number              // latest entry timestamp in the period
+}
+
 export interface NewGroup {
   name: string
   parent_id: number | null
@@ -73,8 +80,8 @@ export interface AppSettings {
   heatmapScale: 'log' | 'linear'
   heatmapMaxCount: number | null   // null = auto (uses max from current year's data)
   curveTension: number             // 0 = angular, 1 = fully smooth (quadratic bezier midpoint)
-  dayViewHeight: number
-  dayViewMode: FileViewMode
+  fileBrowserHeight: number
+  fileBrowserMode: FileViewMode
 }
 
 export interface FileInfo {

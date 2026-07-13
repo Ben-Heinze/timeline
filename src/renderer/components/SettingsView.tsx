@@ -15,6 +15,8 @@ export default function SettingsView() {
   const [resetPending, setResetPending] = useState(false)
   const [resetConfirmText, setResetConfirmText] = useState('')
   const [resetting, setResetting] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [generateError, setGenerateError] = useState<string | null>(null)
 
   type PathHealth = { exists: boolean; foundRatio: number | null }
   const [pathHealth, setPathHealth] = useState<Record<string, PathHealth>>({})
@@ -163,6 +165,21 @@ export default function SettingsView() {
     const next = { ...settings!, watchedFolders: settings!.watchedFolders.filter(f => f !== folder) }
     await window.api.settings.set({ watchedFolders: next.watchedFolders })
     setSettings(next)
+  }
+
+  async function generateTestData() {
+    setGenerating(true)
+    setGenerateError(null)
+    try {
+      if (typeof window.api.settings.generateTestData !== 'function') {
+        throw new Error('Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).')
+      }
+      await window.api.settings.generateTestData()
+      window.location.reload()
+    } catch (e: any) {
+      setGenerateError(e?.message ?? 'Test data generation failed')
+      setGenerating(false)
+    }
   }
 
   async function confirmReset() {
@@ -603,6 +620,35 @@ export default function SettingsView() {
           </div>
         </div>
       )}
+
+      {/* Testing */}
+      <div style={section}>
+        <div style={sectionLabel}>Testing</div>
+        <div style={card}>
+          <div style={{ ...rowLast, flexDirection: 'column', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Generate test data</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                Creates 1,000 blank placeholder files (photos, videos, audio, documents) inside your library,
+                spread across the last 5 years with a few dense days of 20+ files, and randomly tagged from
+                10 common tags. Use "Clear entire database" below to remove everything again.
+              </div>
+            </div>
+            <button
+              style={{ ...btn('default'), padding: '7px 14px', opacity: generating ? 0.6 : 1 }}
+              onClick={generateTestData}
+              disabled={generating || resetting}
+            >
+              {generating ? 'Generating…' : '⚗ Generate 1,000 test files'}
+            </button>
+            {generateError && (
+              <div style={{ fontSize: 12, color: '#b91c1c', background: '#fee2e2', padding: '6px 10px', borderRadius: 4, width: '100%', boxSizing: 'border-box' }}>
+                {generateError}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Danger zone */}
       <div style={section}>

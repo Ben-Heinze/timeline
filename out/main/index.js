@@ -27,11 +27,11 @@ function getSettings() {
       heatmapScale: parsed.heatmapScale ?? "log",
       heatmapMaxCount: parsed.heatmapMaxCount ?? null,
       curveTension: parsed.curveTension ?? 1,
-      dayViewHeight: parsed.dayViewHeight ?? 240,
-      dayViewMode: parsed.dayViewMode ?? "medium"
+      fileBrowserHeight: parsed.fileBrowserHeight ?? parsed.dayViewHeight ?? 240,
+      fileBrowserMode: parsed.fileBrowserMode ?? parsed.dayViewMode ?? "medium"
     };
   } catch {
-    cached = { importMode: "copy", libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, dayViewHeight: 240, dayViewMode: "medium" };
+    cached = { importMode: "copy", libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium" };
   }
   return cached;
 }
@@ -152,8 +152,6 @@ function getHistogram(from, to, zoomLevel, groupId) {
     bucketExpr = `CAST(strftime('%s', strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01-01', 'utc') AS INTEGER) * 1000`;
   } else if (zoomLevel === "month") {
     bucketExpr = `CAST(strftime('%s', strftime('%Y-%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01', 'utc') AS INTEGER) * 1000`;
-  } else if (zoomLevel === "week") {
-    bucketExpr = `CAST(strftime('%s', date(datetime(timestamp/1000, 'unixepoch', 'localtime'), '-' || CAST(strftime('%w', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) || ' days'), 'utc') AS INTEGER) * 1000`;
   } else {
     bucketExpr = `CAST(strftime('%s', date(datetime(timestamp/1000, 'unixepoch', 'localtime')), 'utc') AS INTEGER) * 1000`;
   }
@@ -392,6 +390,14 @@ function registerEntryHandlers() {
 function listGroups() {
   return getDb().prepare("SELECT * FROM groups ORDER BY name").all();
 }
+function getGroupStatsForPeriod(from, to) {
+  return getDb().prepare(`
+    SELECT group_id, COUNT(*) AS count, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts
+    FROM entries
+    WHERE group_id IS NOT NULL AND timestamp >= ? AND timestamp < ?
+    GROUP BY group_id
+  `).all(from, to);
+}
 function createGroup(data) {
   const db2 = getDb();
   const result = db2.prepare(`
@@ -431,6 +437,7 @@ function assignEntriesForPeriod(groupId, from, to) {
 }
 function registerGroupHandlers() {
   electron.ipcMain.handle("groups:list", () => listGroups());
+  electron.ipcMain.handle("groups:statsForPeriod", (_, from, to) => getGroupStatsForPeriod(from, to));
   electron.ipcMain.handle("groups:create", (_, data) => createGroup(data));
   electron.ipcMain.handle("groups:update", (_, id, patch) => updateGroup(id, patch));
   electron.ipcMain.handle("groups:delete", (_, id) => deleteGroup(id));
@@ -920,6 +927,137 @@ function registerTagHandlers() {
   electron.ipcMain.handle("tags:forGroup", (_, groupId) => getGroupTags(groupId));
   electron.ipcMain.handle("tags:setForGroup", (_, groupId, names) => setGroupTags(groupId, names));
 }
+const TOTAL_FILES = 1e3;
+const DENSE_DAYS = 3;
+const DENSE_MIN = 25;
+const DENSE_MAX = 45;
+const SPARSE_YEARS = 5;
+const TEST_DIR = "test-data";
+const TEST_TAGS = [
+  "family",
+  "vacation",
+  "friends",
+  "work",
+  "school",
+  "holidays",
+  "pets",
+  "nature",
+  "birthday",
+  "travel"
+];
+const TEST_EXTS = [
+  ".jpg",
+  ".jpg",
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".png",
+  ".gif",
+  ".webp",
+  ".heic",
+  ".mp4",
+  ".mp4",
+  ".mov",
+  ".mkv",
+  ".mp3",
+  ".wav",
+  ".m4a",
+  ".pdf",
+  ".pdf",
+  ".txt",
+  ".docx"
+];
+const MS_DAY = 864e5;
+const randInt = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+function randomTimeInDay(dayStartMs) {
+  return dayStartMs + randInt(8, 21) * 36e5 + randInt(0, 3599999);
+}
+function buildTimestamps() {
+  const now = /* @__PURE__ */ new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const timestamps = [];
+  const usedDays = /* @__PURE__ */ new Set();
+  for (let d = 0; d < DENSE_DAYS; d++) {
+    let dayStart;
+    do {
+      dayStart = today - randInt(30, 2 * 365) * MS_DAY;
+    } while (usedDays.has(dayStart));
+    usedDays.add(dayStart);
+    const count = randInt(DENSE_MIN, DENSE_MAX);
+    for (let i = 0; i < count && timestamps.length < TOTAL_FILES; i++) {
+      timestamps.push(randomTimeInDay(dayStart));
+    }
+  }
+  while (timestamps.length < TOTAL_FILES) {
+    const dayStart = today - randInt(0, SPARSE_YEARS * 365) * MS_DAY;
+    timestamps.push(randomTimeInDay(dayStart));
+  }
+  return timestamps;
+}
+async function generateTestData() {
+  ensureLibraryDirs();
+  const destDir = path.join(getFilesPath(), TEST_DIR);
+  await fs$1.mkdir(destDir, { recursive: true });
+  const timestamps = buildTimestamps();
+  const runId = crypto.randomBytes(4).toString("hex");
+  const pending = [];
+  const WRITE_BATCH = 50;
+  for (let start = 0; start < timestamps.length; start += WRITE_BATCH) {
+    const batch = timestamps.slice(start, start + WRITE_BATCH);
+    await Promise.all(batch.map(async (timestamp, j) => {
+      const n = start + j;
+      const ext = pick(TEST_EXTS);
+      const fileName = `test_${runId}_${String(n + 1).padStart(4, "0")}${ext}`;
+      const content = `timeline test file ${runId} ${n + 1}
+`;
+      await fs$1.writeFile(path.join(destDir, fileName), content);
+      pending.push({
+        fileName,
+        relPath: ["files", TEST_DIR, fileName].join("/"),
+        timestamp,
+        contentHash: crypto.createHash("sha256").update(content).digest("hex")
+      });
+    }));
+  }
+  const db2 = getDb();
+  const insertEntry2 = db2.prepare(`
+    INSERT INTO entries
+      (type, timestamp, title, file_path, thumbnail_small, thumbnail_medium,
+       thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review,
+       is_missing, content_hash, import_mode, created_at)
+    VALUES
+      (@type, @timestamp, @title, @file_path, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0,
+       @content_hash, 'copy', @created_at)
+  `);
+  const insertTag = db2.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)");
+  const getTagId = db2.prepare("SELECT id FROM tags WHERE name = ?");
+  const insertEntryTag = db2.prepare("INSERT OR IGNORE INTO entry_tags (entry_id, tag_id) VALUES (?, ?)");
+  db2.transaction(() => {
+    const tagIds = TEST_TAGS.map((name) => {
+      insertTag.run(name);
+      return getTagId.get(name).id;
+    });
+    const createdAt = Date.now();
+    for (const p of pending) {
+      const result = insertEntry2.run({
+        type: detectType(path.extname(p.fileName)),
+        timestamp: p.timestamp,
+        title: p.fileName,
+        file_path: p.relPath,
+        content_hash: p.contentHash,
+        created_at: createdAt
+      });
+      const entryId = result.lastInsertRowid;
+      if (Math.random() < 0.6) {
+        const count = randInt(1, 3);
+        const shuffled = [...tagIds].sort(() => Math.random() - 0.5);
+        for (let t = 0; t < count; t++) insertEntryTag.run(entryId, shuffled[t]);
+      }
+    }
+  })();
+  return { entries: pending.length, tags: TEST_TAGS.length, denseDays: DENSE_DAYS };
+}
 async function pathExists(p) {
   try {
     await fs$1.access(p);
@@ -995,6 +1133,7 @@ function registerSettingsHandlers() {
     restartWatcher();
     return { found: foundIds.length, total: entries.length };
   });
+  electron.ipcMain.handle("settings:generateTestData", () => generateTestData());
   electron.ipcMain.handle("settings:resetLibrary", async () => {
     closeDb();
     const libPath = getLibraryPath();
