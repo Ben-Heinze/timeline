@@ -51,6 +51,18 @@ export function initSchema(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag_id);
     CREATE INDEX IF NOT EXISTS idx_group_tags_tag ON group_tags(tag_id);
+
+    CREATE TABLE IF NOT EXISTS events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      title       TEXT    NOT NULL,
+      description TEXT,
+      color       TEXT    NOT NULL,
+      date_from   INTEGER NOT NULL,
+      date_to     INTEGER,
+      created_at  INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_events_date_from ON events(date_from);
   `)
 
   applyMigrations(db)

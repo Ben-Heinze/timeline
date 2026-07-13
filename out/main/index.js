@@ -4,9 +4,11 @@ const path = require("path");
 const fs = require("fs");
 const Database = require("better-sqlite3");
 const fs$1 = require("fs/promises");
+const archiver = require("archiver");
+const extractZip = require("extract-zip");
+const chokidar = require("chokidar");
 const crypto = require("crypto");
 const sharp = require("sharp");
-const chokidar = require("chokidar");
 const child_process = require("child_process");
 const http = require("http");
 const settingsFile = () => path.join(electron.app.getPath("userData"), "settings.json");
@@ -111,6 +113,18 @@ function initSchema(db2) {
 
     CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag_id);
     CREATE INDEX IF NOT EXISTS idx_group_tags_tag ON group_tags(tag_id);
+
+    CREATE TABLE IF NOT EXISTS events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      title       TEXT    NOT NULL,
+      description TEXT,
+      color       TEXT    NOT NULL,
+      date_from   INTEGER NOT NULL,
+      date_to     INTEGER,
+      created_at  INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_events_date_from ON events(date_from);
   `);
   applyMigrations(db2);
 }
@@ -339,111 +353,6 @@ function findDuplicatesByNameSize() {
   `).all();
   return rows.map((r) => ({ key: r.key, count: r.count, entryIds: r.ids.split(",").map(Number) }));
 }
-function registerEntryHandlers() {
-  electron.ipcMain.handle("entries:histogram", (_, from, to, zoomLevel, groupId) => getHistogram(from, to, zoomLevel, groupId ?? void 0));
-  electron.ipcMain.handle("entries:forDay", (_, dateMs) => getEntriesForDay(dateMs));
-  electron.ipcMain.handle("entries:forPeriod", (_, from, to, groupId) => getEntriesForPeriod(from, to, groupId ?? void 0));
-  electron.ipcMain.handle("entries:extent", () => getDataExtent());
-  electron.ipcMain.handle("entries:search", (_, filters) => searchEntries(filters ?? {}));
-  electron.ipcMain.handle("entries:listAll", (_, opts) => listAllEntries(opts));
-  electron.ipcMain.handle("entries:get", (_, id) => getEntry(id));
-  electron.ipcMain.handle("entries:update", (_, id, patch) => updateEntry(id, patch));
-  electron.ipcMain.handle("entries:delete", async (_, ids) => {
-    const entries = ids.map((id) => getEntry(id)).filter(Boolean);
-    deleteEntries(ids);
-    const libraryPath = getLibraryPath();
-    for (const entry of entries) {
-      for (const key of ["thumbnail_small", "thumbnail_medium", "thumbnail_large"]) {
-        const rel = entry[key];
-        if (!rel) continue;
-        try {
-          await fs$1.unlink(path.join(libraryPath, rel));
-        } catch {
-        }
-      }
-      if (entry.import_mode === "copy" && entry.file_path) {
-        try {
-          await electron.shell.trashItem(path.join(libraryPath, entry.file_path));
-        } catch {
-        }
-      }
-    }
-  });
-  electron.ipcMain.handle("entries:create", (_, data) => insertEntry({
-    type: data.type,
-    timestamp: data.timestamp,
-    title: data.title ?? null,
-    file_path: null,
-    thumbnail_small: null,
-    thumbnail_medium: null,
-    thumbnail_large: null,
-    duration_seconds: null,
-    rich_text_json: data.rich_text_json ?? null,
-    group_id: data.group_id ?? null,
-    needs_date_review: 0,
-    is_missing: 0,
-    content_hash: null,
-    import_mode: "copy",
-    created_at: Date.now()
-  }));
-}
-function listGroups() {
-  return getDb().prepare("SELECT * FROM groups ORDER BY name").all();
-}
-function getGroupStatsForPeriod(from, to) {
-  return getDb().prepare(`
-    SELECT group_id, COUNT(*) AS count, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts
-    FROM entries
-    WHERE group_id IS NOT NULL AND timestamp >= ? AND timestamp < ?
-    GROUP BY group_id
-  `).all(from, to);
-}
-function createGroup(data) {
-  const db2 = getDb();
-  const result = db2.prepare(`
-    INSERT INTO groups (name, parent_id, color, description, date_from, date_to, created_at)
-    VALUES (@name, @parent_id, @color, @description, @date_from, @date_to, @created_at)
-  `).run({
-    name: data.name,
-    parent_id: data.parent_id,
-    color: data.color,
-    description: data.description ?? null,
-    date_from: data.date_from ?? null,
-    date_to: data.date_to ?? null,
-    created_at: Date.now()
-  });
-  return db2.prepare("SELECT * FROM groups WHERE id = ?").get(result.lastInsertRowid);
-}
-function updateGroup(id, patch) {
-  const db2 = getDb();
-  const fields = Object.keys(patch).map((k) => `${k} = @${k}`).join(", ");
-  db2.prepare(`UPDATE groups SET ${fields} WHERE id = @id`).run({ ...patch, id });
-  return db2.prepare("SELECT * FROM groups WHERE id = ?").get(id);
-}
-function deleteGroup(id) {
-  getDb().prepare("DELETE FROM groups WHERE id = ?").run(id);
-}
-function assignEntriesToGroup(groupId, entryIds) {
-  if (entryIds.length === 0) return;
-  const db2 = getDb();
-  const stmt = db2.prepare("UPDATE entries SET group_id = ? WHERE id = ?");
-  db2.transaction((ids) => {
-    for (const id of ids) stmt.run(groupId, id);
-  })(entryIds);
-}
-function assignEntriesForPeriod(groupId, from, to) {
-  const result = getDb().prepare(`UPDATE entries SET group_id = ? WHERE timestamp >= ? AND timestamp < ?`).run(groupId, from, to);
-  return result.changes;
-}
-function registerGroupHandlers() {
-  electron.ipcMain.handle("groups:list", () => listGroups());
-  electron.ipcMain.handle("groups:statsForPeriod", (_, from, to) => getGroupStatsForPeriod(from, to));
-  electron.ipcMain.handle("groups:create", (_, data) => createGroup(data));
-  electron.ipcMain.handle("groups:update", (_, id, patch) => updateGroup(id, patch));
-  electron.ipcMain.handle("groups:delete", (_, id) => deleteGroup(id));
-  electron.ipcMain.handle("groups:assignEntries", (_, groupId, entryIds) => assignEntriesToGroup(groupId, entryIds));
-  electron.ipcMain.handle("groups:assignEntriesForPeriod", (_, groupId, from, to) => assignEntriesForPeriod(groupId, from, to));
-}
 const HASH_THRESHOLD = 100 * 1024 * 1024;
 const IMAGE_EXTS = /* @__PURE__ */ new Set([
   ".jpg",
@@ -503,13 +412,31 @@ async function computeFileHash(filePath) {
   }
   return hash.digest("hex");
 }
-async function isDuplicate(sourcePath, fileName) {
+async function findExistingEntry(sourcePath, fileName) {
   const stat = await fs$1.stat(sourcePath);
   if (stat.size < HASH_THRESHOLD) {
     const hash = await computeFileHash(sourcePath);
-    return !!findEntryByHash(hash);
+    return findEntryByHash(hash);
   }
-  return !!findEntryByTitle(fileName);
+  return findEntryByTitle(fileName);
+}
+async function relinkEntry(entry, sourcePath, relDir, fileName) {
+  let storedFilePath;
+  if (entry.import_mode === "reference") {
+    storedFilePath = sourcePath;
+  } else {
+    const relToFiles = path.relative(getFilesPath(), sourcePath);
+    const alreadyInLibrary = !relToFiles.startsWith("..") && !path.isAbsolute(relToFiles);
+    if (alreadyInLibrary) {
+      storedFilePath = path.relative(getLibraryPath(), sourcePath).split(path.sep).join("/");
+    } else {
+      const destDir = path.join(getFilesPath(), relDir);
+      await fs$1.mkdir(destDir, { recursive: true });
+      const destName = await copyWithUniqueName(sourcePath, destDir, fileName);
+      storedFilePath = path.join("files", relDir, destName).split(path.sep).join("/");
+    }
+  }
+  updateEntry(entry.id, { file_path: storedFilePath, is_missing: 0 });
 }
 async function generateImageThumbnails(sourcePath, baseName) {
   const sizes = [
@@ -547,7 +474,11 @@ async function ingestOne(sourcePath, relDir) {
   const fileName = path.basename(sourcePath);
   const ext = path.extname(fileName);
   const type = detectType(ext);
-  if (await isDuplicate(sourcePath, fileName)) {
+  const existing = await findExistingEntry(sourcePath, fileName);
+  if (existing) {
+    if (existing.is_missing && existing.file_path) {
+      await relinkEntry(existing, sourcePath, relDir, fileName);
+    }
     return { ok: true, skipped: true };
   }
   const baseName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
@@ -789,6 +720,411 @@ function stopWatcher() {
 function restartWatcher() {
   stopWatcher();
   startWatcher();
+}
+const MANIFEST_FORMAT = "timeline-backup";
+const FORMAT_VERSION = 1;
+const STORED_EXTS = /* @__PURE__ */ new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".heic",
+  ".heif",
+  ".avif",
+  ".mp4",
+  ".mov",
+  ".avi",
+  ".mkv",
+  ".webm",
+  ".flv",
+  ".m4v",
+  ".wmv",
+  ".mpg",
+  ".mpeg",
+  ".mp3",
+  ".flac",
+  ".ogg",
+  ".m4a",
+  ".aac",
+  ".wma",
+  ".opus",
+  ".zip",
+  ".gz",
+  ".7z",
+  ".rar",
+  ".docx",
+  ".xlsx",
+  ".pptx",
+  ".pdf"
+]);
+async function walkForZip(root, zipPrefix, out) {
+  let dirents;
+  try {
+    dirents = await fs$1.readdir(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const d of dirents) {
+    const abs = path.join(root, d.name);
+    const rel = `${zipPrefix}/${d.name}`;
+    if (d.isDirectory()) await walkForZip(abs, rel, out);
+    else if (d.isFile()) out.push({ abs, rel });
+  }
+}
+function dumpMetadata(db2, exportType) {
+  const all = (table) => db2.prepare(`SELECT * FROM ${table}`).all();
+  return JSON.stringify(
+    {
+      format: MANIFEST_FORMAT,
+      formatVersion: FORMAT_VERSION,
+      exportType,
+      exportedAt: Date.now(),
+      entries: all("entries"),
+      groups: all("groups"),
+      tags: all("tags"),
+      entry_tags: all("entry_tags"),
+      group_tags: all("group_tags"),
+      events: all("events")
+    },
+    null,
+    2
+  );
+}
+async function exportBackup(destZip, type, onProgress) {
+  if (isCurrentlySyncing()) {
+    throw new Error("A library sync is in progress — wait for it to finish before exporting.");
+  }
+  const libraryPath = getLibraryPath();
+  const tmpDir = await fs$1.mkdtemp(path.join(electron.app.getPath("temp"), "timeline-export-"));
+  stopWatcher();
+  try {
+    onProgress({ phase: "preparing", completed: 0, total: 0, current: "Snapshotting database…" });
+    const snapshotPath = path.join(tmpDir, "timeline.db");
+    await getDb().backup(snapshotPath);
+    const snap = new Database(snapshotPath);
+    let referencedFiles = [];
+    const skippedReferences = [];
+    try {
+      if (type === "full") {
+        const refs = snap.prepare(`SELECT id, file_path FROM entries WHERE import_mode = 'reference' AND file_path IS NOT NULL`).all();
+        const rewrite = snap.prepare(
+          `UPDATE entries SET file_path = ?, import_mode = 'copy' WHERE id = ?`
+        );
+        for (const ref of refs) {
+          try {
+            await fs$1.access(ref.file_path);
+          } catch {
+            skippedReferences.push(ref.file_path);
+            continue;
+          }
+          const rel = `files/referenced/${ref.id}_${path.basename(ref.file_path)}`;
+          rewrite.run(rel, ref.id);
+          referencedFiles.push({ abs: ref.file_path, rel });
+        }
+      }
+      const metadataJson = dumpMetadata(snap, type);
+      await fs$1.writeFile(path.join(tmpDir, "metadata.json"), metadataJson, "utf-8");
+      const count = (table) => snap.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+      const manifest = {
+        format: MANIFEST_FORMAT,
+        formatVersion: FORMAT_VERSION,
+        exportType: type,
+        appVersion: electron.app.getVersion(),
+        exportedAt: Date.now(),
+        includesFiles: type === "full",
+        counts: {
+          entries: count("entries"),
+          groups: count("groups"),
+          tags: count("tags"),
+          events: count("events")
+        }
+      };
+      await fs$1.writeFile(path.join(tmpDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
+      const zipEntries = [
+        { abs: path.join(tmpDir, "manifest.json"), rel: "manifest.json" },
+        { abs: path.join(tmpDir, "metadata.json"), rel: "metadata.json" },
+        { abs: snapshotPath, rel: "timeline.db" }
+      ];
+      await walkForZip(path.join(libraryPath, "thumbnails"), "thumbnails", zipEntries);
+      if (type === "full") {
+        await walkForZip(path.join(libraryPath, "files"), "files", zipEntries);
+        zipEntries.push(...referencedFiles);
+      }
+      await writeZip(destZip, zipEntries, onProgress);
+      onProgress({ phase: "done", completed: zipEntries.length, total: zipEntries.length, current: "" });
+      return {
+        entries: manifest.counts.entries,
+        filesIncluded: type === "full" ? zipEntries.length - 3 : 0,
+        skippedReferences
+      };
+    } finally {
+      snap.close();
+    }
+  } catch (err) {
+    await fs$1.rm(destZip, { force: true }).catch(() => {
+    });
+    throw err;
+  } finally {
+    await fs$1.rm(tmpDir, { recursive: true, force: true }).catch(() => {
+    });
+    startWatcher();
+  }
+}
+function writeZip(destZip, entries, onProgress) {
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(destZip);
+    const archive = archiver("zip", { zlib: { level: 6 } });
+    let completed = 0;
+    output.on("close", () => resolve());
+    output.on("error", reject);
+    archive.on("error", reject);
+    archive.on("warning", (err) => {
+      if (err.code !== "ENOENT") reject(err);
+    });
+    archive.on("entry", (entry) => {
+      completed++;
+      onProgress({ phase: "archiving", completed, total: entries.length, current: entry.name });
+    });
+    archive.pipe(output);
+    for (const e of entries) {
+      const store = STORED_EXTS.has(path.extname(e.rel).toLowerCase());
+      archive.file(e.abs, { name: e.rel, store });
+    }
+    archive.finalize();
+  });
+}
+async function importBackup(zipPath, destDir, onProgress) {
+  if (isCurrentlySyncing()) {
+    throw new Error("A library sync is in progress — wait for it to finish before importing.");
+  }
+  await fs$1.mkdir(destDir, { recursive: true });
+  if ((await fs$1.readdir(destDir)).length > 0) {
+    throw new Error("The destination folder must be empty.");
+  }
+  let extracted = 0;
+  await extractZip(zipPath, {
+    dir: destDir,
+    onEntry: (entry, zipfile) => {
+      extracted++;
+      onProgress({ phase: "extracting", completed: extracted, total: zipfile.entryCount, current: entry.fileName });
+    }
+  });
+  let manifest;
+  try {
+    manifest = JSON.parse(await fs$1.readFile(path.join(destDir, "manifest.json"), "utf-8"));
+    if (manifest.format !== MANIFEST_FORMAT) throw new Error("bad format");
+    if (manifest.formatVersion > FORMAT_VERSION) {
+      throw new Error("This backup was created by a newer version of the app.");
+    }
+    await fs$1.access(path.join(destDir, "timeline.db"));
+  } catch (err) {
+    for (const name of await fs$1.readdir(destDir)) {
+      await fs$1.rm(path.join(destDir, name), { recursive: true, force: true });
+    }
+    const detail = err instanceof Error && err.message.includes("newer version") ? ` ${err.message}` : "";
+    throw new Error(`This file is not a valid Timeline backup archive.${detail}`);
+  }
+  stopWatcher();
+  closeDb();
+  saveSettings({ ...getSettings(), libraryPath: destDir });
+  ensureLibraryDirs();
+  getDb();
+  const entries = getAllEntriesWithFilePaths();
+  const missingIds = [];
+  const foundIds = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const abs = entry.import_mode === "reference" ? entry.file_path : path.join(destDir, entry.file_path);
+    try {
+      await fs$1.access(abs);
+      foundIds.push(entry.id);
+    } catch {
+      missingIds.push(entry.id);
+    }
+    if (i % 50 === 0 || i === entries.length - 1) {
+      onProgress({ phase: "checking", completed: i + 1, total: entries.length, current: path.basename(entry.file_path) });
+    }
+  }
+  markEntriesFound(foundIds);
+  markEntriesMissing(missingIds);
+  startWatcher();
+  onProgress({ phase: "done", completed: entries.length, total: entries.length, current: "" });
+  return {
+    libraryPath: destDir,
+    exportType: manifest.exportType,
+    entries: manifest.counts.entries,
+    missingFiles: missingIds.length
+  };
+}
+function progressSender(sender) {
+  return (e) => {
+    if (!sender.isDestroyed()) sender.send("backup:progress", e);
+  };
+}
+function registerBackupHandlers() {
+  electron.ipcMain.handle("backup:export", async (event, type) => {
+    const win = electron.BrowserWindow.fromWebContents(event.sender) ?? electron.BrowserWindow.getAllWindows()[0];
+    const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const result = await electron.dialog.showSaveDialog(win, {
+      title: type === "full" ? "Export full backup" : "Export metadata-only backup",
+      defaultPath: `timeline-${type === "full" ? "backup" : "metadata"}-${date}.zip`,
+      filters: [{ name: "Zip archive", extensions: ["zip"] }]
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    const summary = await exportBackup(result.filePath, type, progressSender(event.sender));
+    return { canceled: false, path: result.filePath, ...summary };
+  });
+  electron.ipcMain.handle("backup:pickArchive", async (event) => {
+    const win = electron.BrowserWindow.fromWebContents(event.sender) ?? electron.BrowserWindow.getAllWindows()[0];
+    const result = await electron.dialog.showOpenDialog(win, {
+      title: "Select backup archive",
+      filters: [{ name: "Timeline backup", extensions: ["zip"] }],
+      properties: ["openFile"]
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  electron.ipcMain.handle("backup:import", async (event, zipPath, destDir) => {
+    return importBackup(zipPath, destDir, progressSender(event.sender));
+  });
+}
+function registerEntryHandlers() {
+  electron.ipcMain.handle("entries:histogram", (_, from, to, zoomLevel, groupId) => getHistogram(from, to, zoomLevel, groupId ?? void 0));
+  electron.ipcMain.handle("entries:forDay", (_, dateMs) => getEntriesForDay(dateMs));
+  electron.ipcMain.handle("entries:forPeriod", (_, from, to, groupId) => getEntriesForPeriod(from, to, groupId ?? void 0));
+  electron.ipcMain.handle("entries:extent", () => getDataExtent());
+  electron.ipcMain.handle("entries:search", (_, filters) => searchEntries(filters ?? {}));
+  electron.ipcMain.handle("entries:listAll", (_, opts) => listAllEntries(opts));
+  electron.ipcMain.handle("entries:get", (_, id) => getEntry(id));
+  electron.ipcMain.handle("entries:update", (_, id, patch) => updateEntry(id, patch));
+  electron.ipcMain.handle("entries:delete", async (_, ids) => {
+    const entries = ids.map((id) => getEntry(id)).filter(Boolean);
+    deleteEntries(ids);
+    const libraryPath = getLibraryPath();
+    for (const entry of entries) {
+      for (const key of ["thumbnail_small", "thumbnail_medium", "thumbnail_large"]) {
+        const rel = entry[key];
+        if (!rel) continue;
+        try {
+          await fs$1.unlink(path.join(libraryPath, rel));
+        } catch {
+        }
+      }
+      if (entry.import_mode === "copy" && entry.file_path) {
+        try {
+          await electron.shell.trashItem(path.join(libraryPath, entry.file_path));
+        } catch {
+        }
+      }
+    }
+  });
+  electron.ipcMain.handle("entries:create", (_, data) => insertEntry({
+    type: data.type,
+    timestamp: data.timestamp,
+    title: data.title ?? null,
+    file_path: null,
+    thumbnail_small: null,
+    thumbnail_medium: null,
+    thumbnail_large: null,
+    duration_seconds: null,
+    rich_text_json: data.rich_text_json ?? null,
+    group_id: data.group_id ?? null,
+    needs_date_review: 0,
+    is_missing: 0,
+    content_hash: null,
+    import_mode: "copy",
+    created_at: Date.now()
+  }));
+}
+function listEvents() {
+  return getDb().prepare("SELECT * FROM events ORDER BY date_from, title").all();
+}
+function createEvent(data) {
+  const db2 = getDb();
+  const result = db2.prepare(`
+    INSERT INTO events (title, description, color, date_from, date_to, created_at)
+    VALUES (@title, @description, @color, @date_from, @date_to, @created_at)
+  `).run({
+    title: data.title,
+    description: data.description ?? null,
+    color: data.color,
+    date_from: data.date_from,
+    date_to: data.date_to ?? null,
+    created_at: Date.now()
+  });
+  return db2.prepare("SELECT * FROM events WHERE id = ?").get(result.lastInsertRowid);
+}
+function updateEvent(id, patch) {
+  const db2 = getDb();
+  const fields = Object.keys(patch).map((k) => `${k} = @${k}`).join(", ");
+  db2.prepare(`UPDATE events SET ${fields} WHERE id = @id`).run({ ...patch, id });
+  return db2.prepare("SELECT * FROM events WHERE id = ?").get(id);
+}
+function deleteEvent(id) {
+  getDb().prepare("DELETE FROM events WHERE id = ?").run(id);
+}
+function registerEventHandlers() {
+  electron.ipcMain.handle("events:list", () => listEvents());
+  electron.ipcMain.handle("events:create", (_, data) => createEvent(data));
+  electron.ipcMain.handle("events:update", (_, id, patch) => updateEvent(id, patch));
+  electron.ipcMain.handle("events:delete", (_, id) => deleteEvent(id));
+}
+function listGroups() {
+  return getDb().prepare("SELECT * FROM groups ORDER BY name").all();
+}
+function getGroupStatsForPeriod(from, to) {
+  return getDb().prepare(`
+    SELECT group_id, COUNT(*) AS count, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts
+    FROM entries
+    WHERE group_id IS NOT NULL AND timestamp >= ? AND timestamp < ?
+    GROUP BY group_id
+  `).all(from, to);
+}
+function createGroup(data) {
+  const db2 = getDb();
+  const result = db2.prepare(`
+    INSERT INTO groups (name, parent_id, color, description, date_from, date_to, created_at)
+    VALUES (@name, @parent_id, @color, @description, @date_from, @date_to, @created_at)
+  `).run({
+    name: data.name,
+    parent_id: data.parent_id,
+    color: data.color,
+    description: data.description ?? null,
+    date_from: data.date_from ?? null,
+    date_to: data.date_to ?? null,
+    created_at: Date.now()
+  });
+  return db2.prepare("SELECT * FROM groups WHERE id = ?").get(result.lastInsertRowid);
+}
+function updateGroup(id, patch) {
+  const db2 = getDb();
+  const fields = Object.keys(patch).map((k) => `${k} = @${k}`).join(", ");
+  db2.prepare(`UPDATE groups SET ${fields} WHERE id = @id`).run({ ...patch, id });
+  return db2.prepare("SELECT * FROM groups WHERE id = ?").get(id);
+}
+function deleteGroup(id) {
+  getDb().prepare("DELETE FROM groups WHERE id = ?").run(id);
+}
+function assignEntriesToGroup(groupId, entryIds) {
+  if (entryIds.length === 0) return;
+  const db2 = getDb();
+  const stmt = db2.prepare("UPDATE entries SET group_id = ? WHERE id = ?");
+  db2.transaction((ids) => {
+    for (const id of ids) stmt.run(groupId, id);
+  })(entryIds);
+}
+function assignEntriesForPeriod(groupId, from, to) {
+  const result = getDb().prepare(`UPDATE entries SET group_id = ? WHERE timestamp >= ? AND timestamp < ?`).run(groupId, from, to);
+  return result.changes;
+}
+function registerGroupHandlers() {
+  electron.ipcMain.handle("groups:list", () => listGroups());
+  electron.ipcMain.handle("groups:statsForPeriod", (_, from, to) => getGroupStatsForPeriod(from, to));
+  electron.ipcMain.handle("groups:create", (_, data) => createGroup(data));
+  electron.ipcMain.handle("groups:update", (_, id, patch) => updateGroup(id, patch));
+  electron.ipcMain.handle("groups:delete", (_, id) => deleteGroup(id));
+  electron.ipcMain.handle("groups:assignEntries", (_, groupId, entryIds) => assignEntriesToGroup(groupId, entryIds));
+  electron.ipcMain.handle("groups:assignEntriesForPeriod", (_, groupId, from, to) => assignEntriesForPeriod(groupId, from, to));
 }
 function listTags() {
   return getDb().prepare("SELECT * FROM tags ORDER BY name").all();
@@ -1300,7 +1636,9 @@ function registerFileHandlers() {
   });
 }
 function registerAllHandlers() {
+  registerBackupHandlers();
   registerEntryHandlers();
+  registerEventHandlers();
   registerFileHandlers();
   registerGroupHandlers();
   registerIngestHandlers();

@@ -3,6 +3,8 @@
 import type {
   IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, Bucket, Group, GroupStats, Entry, NewGroup,
   EntryType, Tag, SearchFilters, AppSettings, DuplicateGroup, FileInfo,
+  LifeEvent, NewLifeEvent,
+  BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
 } from '../shared/types'
 
 interface Api {
@@ -42,6 +44,12 @@ interface Api {
     assignEntries: (groupId: number | null, entryIds: number[]) => Promise<void>
     assignEntriesForPeriod: (groupId: number, from: number, to: number) => Promise<number>
   }
+  events: {
+    list: () => Promise<LifeEvent[]>
+    create: (data: NewLifeEvent) => Promise<LifeEvent>
+    update: (id: number, patch: Partial<Omit<LifeEvent, 'id'>>) => Promise<LifeEvent>
+    delete: (id: number) => Promise<void>
+  }
   tags: {
     list: () => Promise<Tag[]>
     create: (name: string) => Promise<Tag>
@@ -70,6 +78,12 @@ interface Api {
     relocateLibrary: (newPath: string) => Promise<{ found: number; total: number }>
     resetLibrary: () => Promise<{ success: boolean }>
     generateTestData: () => Promise<{ entries: number; tags: number; denseDays: number }>
+  }
+  backup: {
+    export: (type: BackupExportType) => Promise<BackupExportResult>
+    pickArchive: () => Promise<string | null>
+    import: (zipPath: string, destDir: string) => Promise<BackupImportResult>
+    onProgress: (cb: (event: BackupProgressEvent) => void) => () => void
   }
 }
 

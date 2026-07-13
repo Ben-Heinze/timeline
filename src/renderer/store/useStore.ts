@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AppSettings, Bucket, Group, IngestProgress, Entry, ZoomLevel, Tag, SyncProgressEvent } from '../../shared/types'
+import type { AppSettings, Bucket, Group, IngestProgress, Entry, ZoomLevel, Tag, SyncProgressEvent, LifeEvent } from '../../shared/types'
 
 interface TimelineStore {
   tags: Tag[]
@@ -49,6 +49,20 @@ interface TimelineStore {
   journalEditEntry: Entry | null
   openJournalModal: (entry?: Entry | null) => void
   closeJournalModal: () => void
+
+  events: LifeEvent[]
+  setEvents: (events: LifeEvent[]) => void
+  eventsPanelOpen: boolean
+  setEventsPanelOpen: (open: boolean) => void
+  groupSidebarOpen: boolean
+  setGroupSidebarOpen: (open: boolean) => void
+  focusedEventId: number | null
+  setFocusedEventId: (id: number | null) => void
+  eventModalOpen: boolean
+  eventEditEvent: LifeEvent | null
+  eventModalDefaults: [number, number] | null   // [from, to) prefill for a new event
+  openEventModal: (event?: LifeEvent | null, defaults?: [number, number] | null) => void
+  closeEventModal: () => void
 }
 
 const now = Date.now()
@@ -101,4 +115,18 @@ export const useStore = create<TimelineStore>((set) => ({
   journalEditEntry: null,
   openJournalModal: (entry) => set({ journalModalOpen: true, journalEditEntry: entry ?? null }),
   closeJournalModal: () => set({ journalModalOpen: false, journalEditEntry: null }),
+
+  events: [],
+  setEvents: (events) => set({ events }),
+  eventsPanelOpen: true,
+  setEventsPanelOpen: (open) => set({ eventsPanelOpen: open }),
+  groupSidebarOpen: true,
+  setGroupSidebarOpen: (open) => set({ groupSidebarOpen: open }),
+  focusedEventId: null,
+  setFocusedEventId: (id) => set({ focusedEventId: id }),
+  eventModalOpen: false,
+  eventEditEvent: null,
+  eventModalDefaults: null,
+  openEventModal: (event, defaults) => set({ eventModalOpen: true, eventEditEvent: event ?? null, eventModalDefaults: defaults ?? null }),
+  closeEventModal: () => set({ eventModalOpen: false, eventEditEvent: null, eventModalDefaults: null }),
 }))

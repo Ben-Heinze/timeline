@@ -54,6 +54,24 @@ export interface NewGroup {
   date_to?: number | null
 }
 
+export interface LifeEvent {
+  id: number
+  title: string
+  description: string | null
+  color: string                // hex, e.g. '#6366f1'
+  date_from: number            // Unix ms — start of first day
+  date_to: number | null       // Unix ms exclusive — null = ongoing
+  created_at: number
+}
+
+export interface NewLifeEvent {
+  title: string
+  description?: string | null
+  color: string
+  date_from: number
+  date_to?: number | null
+}
+
 export interface Tag {
   id: number
   name: string
@@ -136,4 +154,38 @@ export interface DuplicateGroup {
   key: string        // hash or title
   count: number
   entryIds: number[]
+}
+
+export type BackupExportType = 'full' | 'metadata'
+
+export interface BackupManifest {
+  format: 'timeline-backup'
+  formatVersion: 1
+  exportType: BackupExportType
+  appVersion: string
+  exportedAt: number           // Unix ms
+  includesFiles: boolean
+  counts: { entries: number; groups: number; tags: number; events: number }
+}
+
+export interface BackupProgressEvent {
+  phase: 'preparing' | 'archiving' | 'extracting' | 'checking' | 'done'
+  completed: number
+  total: number
+  current: string
+}
+
+export interface BackupExportResult {
+  canceled: boolean
+  path?: string
+  entries?: number
+  filesIncluded?: number
+  skippedReferences?: string[] // absolute paths of referenced files that could not be read
+}
+
+export interface BackupImportResult {
+  libraryPath: string
+  exportType: BackupExportType
+  entries: number
+  missingFiles: number         // entries whose file is not present yet (re-sync to relink)
 }

@@ -53,6 +53,12 @@ electron.contextBridge.exposeInMainWorld("api", {
     assignEntries: (groupId, entryIds) => electron.ipcRenderer.invoke("groups:assignEntries", groupId, entryIds),
     assignEntriesForPeriod: (groupId, from, to) => electron.ipcRenderer.invoke("groups:assignEntriesForPeriod", groupId, from, to)
   },
+  events: {
+    list: () => electron.ipcRenderer.invoke("events:list"),
+    create: (data) => electron.ipcRenderer.invoke("events:create", data),
+    update: (id, patch) => electron.ipcRenderer.invoke("events:update", id, patch),
+    delete: (id) => electron.ipcRenderer.invoke("events:delete", id)
+  },
   tags: {
     list: () => electron.ipcRenderer.invoke("tags:list"),
     create: (name) => electron.ipcRenderer.invoke("tags:create", name),
@@ -81,5 +87,15 @@ electron.contextBridge.exposeInMainWorld("api", {
     relocateLibrary: (newPath) => electron.ipcRenderer.invoke("settings:relocateLibrary", newPath),
     resetLibrary: () => electron.ipcRenderer.invoke("settings:resetLibrary"),
     generateTestData: () => electron.ipcRenderer.invoke("settings:generateTestData")
+  },
+  backup: {
+    export: (type) => electron.ipcRenderer.invoke("backup:export", type),
+    pickArchive: () => electron.ipcRenderer.invoke("backup:pickArchive"),
+    import: (zipPath, destDir) => electron.ipcRenderer.invoke("backup:import", zipPath, destDir),
+    onProgress: (cb) => {
+      const handler = (_, data) => cb(data);
+      electron.ipcRenderer.on("backup:progress", handler);
+      return () => electron.ipcRenderer.removeListener("backup:progress", handler);
+    }
   }
 });

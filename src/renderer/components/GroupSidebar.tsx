@@ -229,6 +229,7 @@ export default function GroupSidebar() {
   const {
     groups, setGroups, selectedGroupId, setSelectedGroupId,
     zoomLevel, visibleRange, selectedPeriod, dataExtent, refreshKey,
+    groupSidebarOpen,
   } = useStore()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [mode, setMode] = useState<'idle' | 'create' | 'edit'>('idle')
@@ -383,6 +384,8 @@ export default function GroupSidebar() {
 
   const tree = buildTree(visibleGroups, cmp)
   const scopeLabel = isScoped && scope ? scope.label : 'All groups'
+
+  if (!groupSidebarOpen) return null
 
   return (
     <aside style={{

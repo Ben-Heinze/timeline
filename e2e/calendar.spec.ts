@@ -67,8 +67,7 @@ test.describe('Calendar view', () => {
     await expect(page.getByRole('button', { name: 'Calendar' })).toBeVisible()
   })
 
-  test('drag across days opens DateRangeGroupModal', async ({ appPage: page }) => {
-    const currentYear = new Date().getFullYear()
+  test('drag across days opens the New Event modal', async ({ appPage: page }) => {
     // Find January grid by navigating if needed
     const janLabel = page.locator('div', { hasText: 'January' }).first()
     await janLabel.scrollIntoViewIfNeeded()
@@ -90,26 +89,23 @@ test.describe('Calendar view', () => {
     await page.mouse.move(box10.x + box10.width / 2, box10.y + box10.height / 2)
     await page.mouse.up()
 
-    await expect(page.getByText('New Date Range Group')).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByText('New Event')).toBeVisible({ timeout: 5_000 })
   })
 
-  test('DateRangeGroupModal shows title input', async ({ appPage: page }) => {
+  test('event modal shows title input and dates prefilled from the drag', async ({ appPage: page }) => {
     // Modal should still be open from previous drag test
-    await expect(page.getByPlaceholder('Title (required)')).toBeVisible()
+    const year = new Date().getFullYear()
+    await expect(page.getByPlaceholder(/Title \(required\)/)).toBeVisible()
+    await expect(page.locator('input[type="date"]').first()).toHaveValue(`${year}-01-05`)
+    await expect(page.locator('input[type="date"]').nth(1)).toHaveValue(`${year}-01-10`)
   })
 
-  test('DateRangeGroupModal shows the date range', async ({ appPage: page }) => {
-    // The modal shows the selected date range (month abbreviations like "Jan")
-    const modalContent = page.locator('div', { hasText: 'New Date Range Group' }).last()
-    await expect(modalContent).toBeVisible()
-  })
-
-  test('Escape closes DateRangeGroupModal', async ({ appPage: page }) => {
+  test('Escape closes the event modal', async ({ appPage: page }) => {
     await page.keyboard.press('Escape')
-    await expect(page.getByText('New Date Range Group')).not.toBeVisible()
+    await expect(page.getByText('New Event')).not.toBeVisible()
   })
 
-  test('cancelling DateRangeGroupModal via button closes it', async ({ appPage: page }) => {
+  test('cancelling the event modal via button closes it', async ({ appPage: page }) => {
     // Re-open the modal with another drag
     const janContainer = page.locator('div', { hasText: 'January' }).first().locator('..')
     const day3 = janContainer.locator('div', { hasText: /^3$/ }).first()
@@ -121,12 +117,12 @@ test.describe('Calendar view', () => {
     await page.mouse.down()
     await page.mouse.move(box8.x + box8.width / 2, box8.y + box8.height / 2)
     await page.mouse.up()
-    await expect(page.getByText('New Date Range Group')).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByText('New Event')).toBeVisible({ timeout: 5_000 })
     await page.getByRole('button', { name: 'Cancel' }).click()
-    await expect(page.getByText('New Date Range Group')).not.toBeVisible()
+    await expect(page.getByText('New Event')).not.toBeVisible()
   })
 
-  test('creating a DateRange group shows it in the sidebar', async ({ appPage: page }) => {
+  test('creating an event from a drag shows it in the calendar legend', async ({ appPage: page }) => {
     const janContainer = page.locator('div', { hasText: 'January' }).first().locator('..')
     const day14 = janContainer.locator('div', { hasText: /^14$/ }).first()
     const day20 = janContainer.locator('div', { hasText: /^20$/ }).first()
@@ -137,15 +133,12 @@ test.describe('Calendar view', () => {
     await page.mouse.down()
     await page.mouse.move(box20.x + box20.width / 2, box20.y + box20.height / 2)
     await page.mouse.up()
-    await expect(page.getByText('New Date Range Group')).toBeVisible({ timeout: 5_000 })
+    await expect(page.getByText('New Event')).toBeVisible({ timeout: 5_000 })
 
-    await page.getByPlaceholder('Title (required)').fill('Mid January')
-    await page.getByRole('button', { name: 'Create Group' }).click()
+    await page.getByPlaceholder(/Title \(required\)/).fill('Mid January')
+    await page.getByRole('button', { name: 'Create Event' }).click()
 
-    await expect(page.getByText('New Date Range Group')).not.toBeVisible()
-    // The sidebar is scoped to the day pinned by the earlier DayView test —
-    // close the file browser to unpin it so all groups are visible again
-    await page.locator('button[title="Close file browser"]').click()
-    await expect(page.locator('aside').getByText('Mid January', { exact: true })).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText('New Event')).not.toBeVisible()
+    await expect(page.getByText('Mid January', { exact: true })).toBeVisible({ timeout: 8_000 })
   })
 })

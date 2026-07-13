@@ -1,7 +1,12 @@
 import React, { useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
-import type { AppSettings, DuplicateGroup } from '../../shared/types'
+import type { AppSettings, BackupExportType, BackupProgressEvent, DuplicateGroup } from '../../shared/types'
 import { THEMES } from '../theme'
+
+function ipcErrorMessage(e: unknown): string {
+  const msg = (e as Error)?.message ?? String(e)
+  return msg.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+}
 
 export default function SettingsView() {
   const { settings, setSettings } = useStore()
@@ -17,6 +22,11 @@ export default function SettingsView() {
   const [resetting, setResetting] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
+  const [backupBusy, setBackupBusy] = useState<null | BackupExportType | 'import'>(null)
+  const [backupProgress, setBackupProgress] = useState<BackupProgressEvent | null>(null)
+  const [backupMessage, setBackupMessage] = useState<string | null>(null)
+  const [backupError, setBackupError] = useState<string | null>(null)
+  const [pendingImport, setPendingImport] = useState<{ zipPath: string; destDir: string } | null>(null)
 
   type PathHealth = { exists: boolean; foundRatio: number | null }
   const [pathHealth, setPathHealth] = useState<Record<string, PathHealth>>({})
@@ -54,6 +64,11 @@ export default function SettingsView() {
       setPathHealth(next)
     })
   }, [setSettings])
+
+  useEffect(() => {
+    if (typeof window.api.backup?.onProgress !== 'function') return
+    return window.api.backup.onProgress(setBackupProgress)
+  }, [])
 
   if (!settings) {
     return <div style={{ padding: 32, color: 'var(--text-3)', fontSize: 13 }}>Loading settings…</div>
@@ -179,6 +194,60 @@ export default function SettingsView() {
     } catch (e: any) {
       setGenerateError(e?.message ?? 'Test data generation failed')
       setGenerating(false)
+    }
+  }
+
+  async function runExport(type: BackupExportType) {
+    setBackupBusy(type)
+    setBackupError(null)
+    setBackupMessage(null)
+    setBackupProgress(null)
+    try {
+      if (typeof window.api.backup?.export !== 'function') {
+        throw new Error('Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).')
+      }
+      const res = await window.api.backup.export(type)
+      if (!res.canceled) {
+        let msg = `Exported ${res.entries} entr${res.entries === 1 ? 'y' : 'ies'} to ${res.path}`
+        if (res.skippedReferences && res.skippedReferences.length > 0) {
+          msg += ` — ${res.skippedReferences.length} referenced file${res.skippedReferences.length === 1 ? '' : 's'} could not be read and were skipped`
+        }
+        setBackupMessage(msg)
+      }
+    } catch (e) {
+      setBackupError(ipcErrorMessage(e))
+    } finally {
+      setBackupBusy(null)
+      setBackupProgress(null)
+    }
+  }
+
+  async function startRestore() {
+    setBackupError(null)
+    setBackupMessage(null)
+    if (typeof window.api.backup?.pickArchive !== 'function') {
+      setBackupError('Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).')
+      return
+    }
+    const zipPath = await window.api.backup.pickArchive()
+    if (!zipPath) return
+    const destDir = await window.api.settings.pickFolder()
+    if (!destDir) return
+    setPendingImport({ zipPath, destDir })
+  }
+
+  async function confirmRestore() {
+    if (!pendingImport) return
+    setBackupBusy('import')
+    setBackupError(null)
+    setBackupProgress(null)
+    try {
+      await window.api.backup.import(pendingImport.zipPath, pendingImport.destDir)
+      window.location.reload()
+    } catch (e) {
+      setBackupError(ipcErrorMessage(e))
+      setBackupBusy(null)
+      setBackupProgress(null)
     }
   }
 
@@ -376,6 +445,128 @@ export default function SettingsView() {
           </div>
         </div>
       )}
+
+      {/* Backup & restore */}
+      <div style={section}>
+        <div style={sectionLabel}>Backup &amp; restore</div>
+        <div style={card}>
+          <div style={{ ...row, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Full backup</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                One .zip with everything: database, all media files, thumbnails, and a plain-text
+                metadata.json. Files referenced in place are copied into the archive too.
+              </div>
+            </div>
+            <button
+              style={{ ...btn('default'), flexShrink: 0, opacity: backupBusy ? 0.6 : 1 }}
+              onClick={() => runExport('full')}
+              disabled={backupBusy !== null}
+            >
+              {backupBusy === 'full' ? 'Exporting…' : 'Export…'}
+            </button>
+          </div>
+          <div style={{ ...row, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Metadata-only backup</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                Everything except the media files themselves: database, thumbnails, and metadata.json.
+                Much smaller. After restoring, re-import your files and they are matched back to their
+                entries by content hash.
+              </div>
+            </div>
+            <button
+              style={{ ...btn('default'), flexShrink: 0, opacity: backupBusy ? 0.6 : 1 }}
+              onClick={() => runExport('metadata')}
+              disabled={backupBusy !== null}
+            >
+              {backupBusy === 'metadata' ? 'Exporting…' : 'Export…'}
+            </button>
+          </div>
+          <div style={{ ...rowLast, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Restore from backup</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                Unpacks a backup archive into an empty folder and switches the app to it.
+                Your current library is left untouched on disk.
+              </div>
+            </div>
+            <button
+              style={{ ...btn('default'), flexShrink: 0, opacity: backupBusy ? 0.6 : 1 }}
+              onClick={startRestore}
+              disabled={backupBusy !== null}
+            >
+              {backupBusy === 'import' ? 'Restoring…' : 'Restore…'}
+            </button>
+          </div>
+
+          {pendingImport && (
+            <div style={{
+              ...rowLast,
+              flexDirection: 'column', alignItems: 'flex-start', gap: 10,
+              background: '#fffbeb', borderTop: '1px solid #fde68a',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <span style={{ fontSize: 16, lineHeight: 1, marginTop: 1 }}>⚠️</span>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: '#92400e', marginBottom: 4 }}>
+                    Restore backup and switch library?
+                  </div>
+                  <div style={{ fontSize: 12, color: '#78350f', lineHeight: 1.5 }}>
+                    <span style={{ fontFamily: 'monospace' }}>{pendingImport.zipPath}</span>
+                    <br />
+                    will be unpacked into
+                    <br />
+                    <span style={{ fontFamily: 'monospace' }}>{pendingImport.destDir}</span>
+                    <br />
+                    and the app will switch to that library. The destination must be empty.
+                    Your current library at{' '}
+                    <span style={{ fontFamily: 'monospace' }}>{settings.libraryPath}</span> stays on disk.
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  style={{ ...btn('danger'), background: '#b45309', color: '#fff', opacity: backupBusy ? 0.6 : 1 }}
+                  onClick={confirmRestore}
+                  disabled={backupBusy !== null}
+                >
+                  {backupBusy === 'import' ? 'Restoring…' : 'Restore backup'}
+                </button>
+                <button
+                  style={btn('ghost')}
+                  onClick={() => setPendingImport(null)}
+                  disabled={backupBusy !== null}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {(backupBusy !== null && backupProgress) && (
+            <div style={{ ...rowLast, borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-3)' }}>
+              {backupProgress.phase === 'preparing' && backupProgress.current}
+              {backupProgress.phase === 'archiving' && `Archiving ${backupProgress.completed}/${backupProgress.total} — ${backupProgress.current}`}
+              {backupProgress.phase === 'extracting' && `Extracting ${backupProgress.completed}/${backupProgress.total} — ${backupProgress.current}`}
+              {backupProgress.phase === 'checking' && `Checking files ${backupProgress.completed}/${backupProgress.total}`}
+              {backupProgress.phase === 'done' && 'Finishing…'}
+            </div>
+          )}
+          {backupMessage && (
+            <div style={{ ...rowLast, borderTop: '1px solid var(--border-light)', fontSize: 12, color: '#16a34a', wordBreak: 'break-all' }}>
+              {backupMessage}
+            </div>
+          )}
+          {backupError && (
+            <div style={{ ...rowLast, borderTop: '1px solid var(--border-light)' }}>
+              <div style={{ fontSize: 12, color: '#b91c1c', background: '#fee2e2', padding: '6px 10px', borderRadius: 4, width: '100%', boxSizing: 'border-box' }}>
+                {backupError}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Duplicate scan */}
       <div style={section}>

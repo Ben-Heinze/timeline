@@ -13,6 +13,8 @@ import SearchBar from './components/SearchBar'
 import SettingsView from './components/SettingsView'
 import ImportTagModal from './components/ImportTagModal'
 import DateRangeGroupModal from './components/DateRangeGroupModal'
+import EventsPanel from './components/EventsPanel'
+import LifeEventModal from './components/LifeEventModal'
 
 function ResizeDivider({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
   const [hovered, setHovered] = useState(false)
@@ -34,12 +36,13 @@ function ResizeDivider({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => 
 }
 
 export default function App() {
-  const { setGroups, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings } = useStore()
+  const { setGroups, setEvents, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings } = useStore()
 
   useEffect(() => {
     window.api.groups.list().then(setGroups)
+    window.api.events.list().then(setEvents)
     window.api.settings.get().then(setSettings)
-  }, [setGroups, setSettings])
+  }, [setGroups, setEvents, setSettings])
 
   // Apply theme to document root whenever settings.theme changes
   useEffect(() => {
@@ -429,10 +432,15 @@ function Main() {
         minHeight: bottomOpen ? 140 : undefined,
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
-        {activeView === 'timeline' ? <TimelineCanvas />
-         : activeView === 'calendar' ? <CalendarHeatmap />
-         : activeView === 'settings' ? <SettingsView />
-         : <FilesView />}
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {activeView === 'timeline' ? <TimelineCanvas />
+             : activeView === 'calendar' ? <CalendarHeatmap />
+             : activeView === 'settings' ? <SettingsView />
+             : <FilesView />}
+          </div>
+          {activeView === 'timeline' && <EventsPanel />}
+        </div>
       </div>
 
       {activeView === 'timeline' && !bottomOpen && isFixedHistogram && (
@@ -444,6 +452,7 @@ function Main() {
       <EntryModal />
       <JournalModal />
       <DateRangeGroupModal />
+      <LifeEventModal />
       {importPending && (
         <ImportTagModal
           fileCount={importPending.count}

@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { timeYear, timeMonth, timeDay } from 'd3-time'
 import { useStore } from '../store/useStore'
-import type { ZoomLevel } from '../../shared/types'
+import type { LifeEvent, ZoomLevel } from '../../shared/types'
 
 const MS_DAY = 86_400_000
 const AXIS_H = 38
 const BAND_H = 14   // height reserved below bars for date-range group bands
+const EVENT_LANE_H = 14   // height of one life-event lane below the bars
+const MAX_EVENT_LANES = 6 // overflow events are omitted from the canvas (still in the panel)
 const BAR_FILL = 0.55
 const YAXIS_W = 40  // left margin reserved for Y axis labels
 
@@ -174,6 +176,10 @@ export default function TimelineCanvas() {
     dateRangeSelection, setDateRangeSelection,
     setPendingDateRange,
     settings,
+    events,
+    eventsPanelOpen, setEventsPanelOpen,
+    groupSidebarOpen, setGroupSidebarOpen,
+    setFocusedEventId,
   } = useStore()
 
   const theme = settings?.theme ?? 'light'
@@ -214,6 +220,48 @@ export default function TimelineCanvas() {
     }
     return byStart
   }, [histogramBuckets])
+
+  // Greedy interval packing: assign each life event visible in the current
+  // range to the first lane whose previous event has already ended. Shared by
+  // the draw pass and the mouse hit tests so geometry stays identical.
+  const eventLanes = useMemo(() => {
+    const [from, to] = visibleRange
+    const visible = events
+      .filter(e => e.date_from < to && (e.date_to ?? Infinity) > from)
+      .sort((a, b) => a.date_from - b.date_from || (a.date_to ?? Infinity) - (b.date_to ?? Infinity))
+    const laneEnds: number[] = []
+    const placed: { ev: LifeEvent; lane: number }[] = []
+    for (const ev of visible) {
+      const end = ev.date_to ?? Infinity
+      let lane = laneEnds.findIndex(le => le <= ev.date_from)
+      if (lane === -1) {
+        if (laneEnds.length >= MAX_EVENT_LANES) continue
+        lane = laneEnds.length
+        laneEnds.push(end)
+      } else {
+        laneEnds[lane] = end
+      }
+      placed.push({ ev, lane })
+    }
+    return { placed, laneCount: laneEnds.length }
+  }, [events, visibleRange])
+
+  const eventBandH = eventLanes.laneCount * EVENT_LANE_H
+
+  // Event band under the cursor, using the same lane geometry as the draw pass
+  const eventAt = useCallback((cx: number, cy: number, rect: DOMRect): LifeEvent | null => {
+    if (eventBandH === 0 || cx < YAXIS_W) return null
+    const barsBottom = rect.height - AXIS_H - BAND_H - eventBandH
+    if (cy <= barsBottom || cy > barsBottom + eventBandH) return null
+    const lane = Math.min(eventLanes.laneCount - 1, Math.floor((cy - barsBottom) / EVENT_LANE_H))
+    const [from, to] = rangeRef.current
+    const tsToX = (ts: number) => YAXIS_W + ((ts - from) / (to - from)) * (rect.width - YAXIS_W)
+    for (const p of eventLanes.placed) {
+      if (p.lane !== lane) continue
+      if (cx >= tsToX(p.ev.date_from) && cx <= tsToX(p.ev.date_to ?? Date.now())) return p.ev
+    }
+    return null
+  }, [eventLanes, eventBandH])
 
   // Fetch histogram with fixed bucket for this zoom level
   useEffect(() => {
@@ -256,8 +304,8 @@ export default function TimelineCanvas() {
 
     const dpr = window.devicePixelRatio || 1
     const { w, h } = size
-    const chartH = h - AXIS_H          // axis line position
-    const barsH  = chartH - BAND_H     // bar area height
+    const chartH = h - AXIS_H                       // axis line position
+    const barsH  = chartH - BAND_H - eventBandH     // bar area height
 
     const [from, to] = visibleRange
     const rangeMs = to - from
@@ -384,7 +432,32 @@ export default function TimelineCanvas() {
       }
     }
 
-    // Date-range group bands
+    // Life-event lanes (between the bars and the group band)
+    for (const { ev, lane } of eventLanes.placed) {
+      const x1 = tsToX(ev.date_from)
+      const x2 = tsToX(ev.date_to ?? Date.now())
+      const bx = Math.max(YAXIS_W, Math.floor(x1))
+      const bw = Math.min(w, Math.ceil(x2)) - bx
+      if (bw <= 0) continue
+      const by = barsH + 1 + lane * EVENT_LANE_H
+      ctx.fillStyle = ev.color
+      ctx.fillRect(bx, by, bw, EVENT_LANE_H - 2)
+      if (bw > 36) {
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(bx + 1, by, bw - 2, EVENT_LANE_H - 2)
+        ctx.clip()
+        ctx.fillStyle = '#fff'
+        ctx.font = 'bold 9px system-ui, sans-serif'
+        ctx.textBaseline = 'middle'
+        ctx.textAlign = 'left'
+        ctx.fillText(ev.title, bx + 4, by + (EVENT_LANE_H - 2) / 2)
+        ctx.restore()
+      }
+    }
+
+    // Date-range group bands (bottom row, just above the axis)
+    const groupBandY = chartH - BAND_H
     const dateRangeGroups = groups.filter(g => g.date_from != null && g.date_to != null)
     for (const g of dateRangeGroups) {
       const x1 = tsToX(g.date_from!)
@@ -393,17 +466,17 @@ export default function TimelineCanvas() {
       const bw = Math.min(w, Math.ceil(x2)) - bx
       if (bw <= 0) continue
       ctx.fillStyle = g.color
-      ctx.fillRect(bx, barsH + 1, bw, BAND_H - 2)
+      ctx.fillRect(bx, groupBandY + 1, bw, BAND_H - 2)
       if (bw > 36) {
         ctx.save()
         ctx.beginPath()
-        ctx.rect(bx + 1, barsH + 1, bw - 2, BAND_H - 2)
+        ctx.rect(bx + 1, groupBandY + 1, bw - 2, BAND_H - 2)
         ctx.clip()
         ctx.fillStyle = '#fff'
         ctx.font = 'bold 9px system-ui, sans-serif'
         ctx.textBaseline = 'middle'
         ctx.textAlign = 'left'
-        ctx.fillText(g.name, bx + 4, barsH + BAND_H / 2)
+        ctx.fillText(g.name, bx + 4, groupBandY + BAND_H / 2)
         ctx.restore()
       }
     }
@@ -468,7 +541,7 @@ export default function TimelineCanvas() {
     ctx.moveTo(YAXIS_W - 0.5, 0)
     ctx.lineTo(YAXIS_W - 0.5, chartH)
     ctx.stroke()
-  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension])
+  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension, eventLanes, eventBandH])
 
   // Wheel → pan
   const handleWheel = useCallback((e: WheelEvent) => {
@@ -561,9 +634,10 @@ export default function TimelineCanvas() {
   const drag = useRef<{ startX: number; fromMs: number; toMs: number; moved: boolean } | null>(null)
   const [grabbing, setGrabbing] = useState(false)
 
-  // Hovered bucket for the tooltip (cursor position is relative to the canvas
-  // container); groupId is set when the cursor is over a group's stacked segment
-  const [hover, setHover] = useState<{ x: number; y: number; bucketStart: number; groupId?: number } | null>(null)
+  // Hovered bucket or event band for the tooltip (cursor position is relative
+  // to the canvas container); groupId is set when the cursor is over a group's
+  // stacked segment, eventId when it's over a life-event lane
+  const [hover, setHover] = useState<{ x: number; y: number; bucketStart?: number; groupId?: number; eventId?: number } | null>(null)
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (rangeSelectMode) {
@@ -615,8 +689,15 @@ export default function TimelineCanvas() {
     const rect = canvas.getBoundingClientRect()
     const cx = e.clientX - rect.left
     const cy = e.clientY - rect.top
+
+    const hitEvent = eventAt(cx, cy, rect)
+    if (hitEvent) {
+      setHover({ x: cx, y: cy, eventId: hitEvent.id })
+      return
+    }
+
     const chartW = rect.width - YAXIS_W
-    const barsBottom = rect.height - AXIS_H - BAND_H
+    const barsBottom = rect.height - AXIS_H - BAND_H - eventBandH
     let found: { bucketStart: number; groupId?: number } | null = null
     if (cx >= YAXIS_W && cy <= barsBottom) {
       const [from, to] = rangeRef.current
@@ -657,7 +738,7 @@ export default function TimelineCanvas() {
       }
     }
     setHover(found !== null ? { x: cx, y: cy, ...found } : null)
-  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, bucketSegments, zoomLevel, curveMode])
+  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, bucketSegments, zoomLevel, curveMode, eventAt, eventBandH])
 
   // Click: drill down / open the file browser (not used in range select mode — handled globally)
   const onMouseUp = useCallback((e: React.MouseEvent) => {
@@ -671,6 +752,15 @@ export default function TimelineCanvas() {
     const rect = canvas.getBoundingClientRect()
     const cx   = e.clientX - rect.left
     if (cx < YAXIS_W) return
+
+    // Clicking an event band opens the panel with that event expanded
+    const hitEvent = eventAt(cx, e.clientY - rect.top, rect)
+    if (hitEvent) {
+      setEventsPanelOpen(true)
+      setFocusedEventId(hitEvent.id)
+      return
+    }
+
     const [from, to] = rangeRef.current
     const ts    = from + ((cx - YAXIS_W) / (rect.width - YAXIS_W)) * (to - from)
     const level = zoomRef.current
@@ -710,7 +800,7 @@ export default function TimelineCanvas() {
       setZoomLevel('day')
       return
     }
-  }, [rangeSelectMode, setSelectedPeriod, setZoomLevel, setVisibleRange, setYearRange, setMonthRange, histogramBuckets])
+  }, [rangeSelectMode, setSelectedPeriod, setZoomLevel, setVisibleRange, setYearRange, setMonthRange, histogramBuckets, eventAt, setEventsPanelOpen, setFocusedEventId])
 
   const onMouseLeave = useCallback(() => {
     setHover(null)
@@ -807,8 +897,13 @@ export default function TimelineCanvas() {
 
   // Total and per-type counts for the hovered bucket, plus details of the
   // group whose stacked segment is under the cursor (if any)
+  const hoverEvent = useMemo(
+    () => hover?.eventId != null ? events.find(e => e.id === hover.eventId) ?? null : null,
+    [hover, events]
+  )
+
   const hoverInfo = useMemo(() => {
-    if (!hover) return null
+    if (!hover || hover.bucketStart === undefined) return null
     let total = 0
     let groupCount = 0
     const typeCounts = new Map<string, number>()
@@ -875,6 +970,20 @@ export default function TimelineCanvas() {
           title="Show the files within the current view"
         >
           ☰ Files
+        </button>
+        <button
+          onClick={() => setGroupSidebarOpen(!groupSidebarOpen)}
+          style={{ ...btnStyle(groupSidebarOpen), marginRight: 6 }}
+          title="Show the groups sidebar"
+        >
+          ◧ Groups
+        </button>
+        <button
+          onClick={() => setEventsPanelOpen(!eventsPanelOpen)}
+          style={{ ...btnStyle(eventsPanelOpen), marginRight: 6 }}
+          title="Show life events for the current view"
+        >
+          ◨ Events
         </button>
         <button
           onClick={() => {
@@ -956,7 +1065,7 @@ export default function TimelineCanvas() {
           onMouseUp={onMouseUp}
           onMouseLeave={onMouseLeave}
         />
-        {hover && hoverInfo && (
+        {hover && (hoverInfo || hoverEvent) && (
           <div style={{
             position: 'absolute',
             left: hover.x > size.w - 200 ? hover.x - 12 : hover.x + 12,
@@ -973,18 +1082,39 @@ export default function TimelineCanvas() {
             whiteSpace: 'nowrap',
             zIndex: 10,
           }}>
-            <div style={{ fontWeight: 600, color: 'var(--text)' }}>
-              {HOVER_DATE_FMT[zoomLevel](hover.bucketStart)}
-            </div>
-            <div style={{ fontWeight: 600, color: 'var(--text)' }}>
+            {hoverEvent && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: 'var(--text)' }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: hoverEvent.color, flexShrink: 0 }} />
+                  {hoverEvent.title}
+                </div>
+                <div style={{ color: 'var(--text-3)' }}>
+                  {new Date(hoverEvent.date_from).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {' – '}
+                  {hoverEvent.date_to != null
+                    ? new Date(hoverEvent.date_to - MS_DAY / 2).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                    : 'present'}
+                </div>
+                {hoverEvent.description && (
+                  <div style={{ color: 'var(--text-3)', maxWidth: 240, whiteSpace: 'normal' }}>
+                    {hoverEvent.description}
+                  </div>
+                )}
+                <div style={{ color: 'var(--text-4)', marginTop: 2 }}>click for details</div>
+              </>
+            )}
+            {hoverInfo && <div style={{ fontWeight: 600, color: 'var(--text)' }}>
+              {HOVER_DATE_FMT[zoomLevel](hover.bucketStart!)}
+            </div>}
+            {hoverInfo && <div style={{ fontWeight: 600, color: 'var(--text)' }}>
               {hoverInfo.total} {hoverInfo.total === 1 ? 'file' : 'files'} total
-            </div>
-            {hoverInfo.types.map(([type, count]) => (
+            </div>}
+            {hoverInfo?.types.map(([type, count]) => (
               <div key={type} style={{ color: 'var(--text-2)' }}>
                 {count} {(TYPE_LABELS[type] ?? [type, type])[count === 1 ? 0 : 1]}
               </div>
             ))}
-            {hoverInfo.group && (
+            {hoverInfo?.group && (
               <div style={{ borderTop: '1px solid var(--border-light)', marginTop: 5, paddingTop: 5 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: 'var(--text)' }}>
                   <span style={{ width: 9, height: 9, borderRadius: 2, background: hoverInfo.group.color, flexShrink: 0 }} />

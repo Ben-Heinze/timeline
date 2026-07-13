@@ -2,10 +2,10 @@ import fs from 'fs/promises'
 import path from 'path'
 import crypto from 'crypto'
 import sharp from 'sharp'
-import { getFilesPath, getThumbnailPath } from '../library'
-import { insertEntry, findEntryByHash, findEntryByTitle } from '../db/queries/entries'
+import { getFilesPath, getLibraryPath, getThumbnailPath } from '../library'
+import { insertEntry, findEntryByHash, findEntryByTitle, updateEntry } from '../db/queries/entries'
 import { getSettings } from '../settings'
-import type { EntryType, IngestProgressEvent, IngestFailure } from '../../shared/types'
+import type { Entry, EntryType, IngestProgressEvent, IngestFailure } from '../../shared/types'
 
 const HASH_THRESHOLD = 100 * 1024 * 1024  // 100 MB
 
@@ -44,13 +44,36 @@ async function computeFileHash(filePath: string): Promise<string> {
   return hash.digest('hex')
 }
 
-async function isDuplicate(sourcePath: string, fileName: string): Promise<boolean> {
+async function findExistingEntry(sourcePath: string, fileName: string): Promise<Entry | null> {
   const stat = await fs.stat(sourcePath)
   if (stat.size < HASH_THRESHOLD) {
     const hash = await computeFileHash(sourcePath)
-    return !!findEntryByHash(hash)
+    return findEntryByHash(hash)
   }
-  return !!findEntryByTitle(fileName)
+  return findEntryByTitle(fileName)
+}
+
+/**
+ * Re-attach a file to an entry whose file went missing (e.g. after restoring
+ * a metadata-only backup). Keeps the entry's metadata, tags and thumbnails.
+ */
+async function relinkEntry(entry: Entry, sourcePath: string, relDir: string, fileName: string): Promise<void> {
+  let storedFilePath: string
+  if (entry.import_mode === 'reference') {
+    storedFilePath = sourcePath
+  } else {
+    const relToFiles = path.relative(getFilesPath(), sourcePath)
+    const alreadyInLibrary = !relToFiles.startsWith('..') && !path.isAbsolute(relToFiles)
+    if (alreadyInLibrary) {
+      storedFilePath = path.relative(getLibraryPath(), sourcePath).split(path.sep).join('/')
+    } else {
+      const destDir = path.join(getFilesPath(), relDir)
+      await fs.mkdir(destDir, { recursive: true })
+      const destName = await copyWithUniqueName(sourcePath, destDir, fileName)
+      storedFilePath = path.join('files', relDir, destName).split(path.sep).join('/')
+    }
+  }
+  updateEntry(entry.id, { file_path: storedFilePath, is_missing: 0 })
 }
 
 async function generateImageThumbnails(
@@ -111,7 +134,11 @@ async function ingestOne(sourcePath: string, relDir: string): Promise<OneResult>
   const ext = path.extname(fileName)
   const type = detectType(ext)
 
-  if (await isDuplicate(sourcePath, fileName)) {
+  const existing = await findExistingEntry(sourcePath, fileName)
+  if (existing) {
+    if (existing.is_missing && existing.file_path) {
+      await relinkEntry(existing, sourcePath, relDir, fileName)
+    }
     return { ok: true, skipped: true }
   }
 

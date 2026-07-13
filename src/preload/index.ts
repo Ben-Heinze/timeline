@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, NewGroup, Group,
   EntryType, SearchFilters, AppSettings, DuplicateGroup, FileInfo,
+  LifeEvent, NewLifeEvent,
+  BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -81,6 +83,16 @@ contextBridge.exposeInMainWorld('api', {
     assignEntriesForPeriod: (groupId: number, from: number, to: number): Promise<number> =>
       ipcRenderer.invoke('groups:assignEntriesForPeriod', groupId, from, to),
   },
+  events: {
+    list: (): Promise<LifeEvent[]> =>
+      ipcRenderer.invoke('events:list'),
+    create: (data: NewLifeEvent): Promise<LifeEvent> =>
+      ipcRenderer.invoke('events:create', data),
+    update: (id: number, patch: Partial<Omit<LifeEvent, 'id'>>): Promise<LifeEvent> =>
+      ipcRenderer.invoke('events:update', id, patch),
+    delete: (id: number): Promise<void> =>
+      ipcRenderer.invoke('events:delete', id),
+  },
   tags: {
     list: () =>
       ipcRenderer.invoke('tags:list'),
@@ -132,5 +144,18 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('settings:resetLibrary'),
     generateTestData: (): Promise<{ entries: number; tags: number; denseDays: number }> =>
       ipcRenderer.invoke('settings:generateTestData'),
+  },
+  backup: {
+    export: (type: BackupExportType): Promise<BackupExportResult> =>
+      ipcRenderer.invoke('backup:export', type),
+    pickArchive: (): Promise<string | null> =>
+      ipcRenderer.invoke('backup:pickArchive'),
+    import: (zipPath: string, destDir: string): Promise<BackupImportResult> =>
+      ipcRenderer.invoke('backup:import', zipPath, destDir),
+    onProgress: (cb: (event: BackupProgressEvent) => void) => {
+      const handler = (_: unknown, data: BackupProgressEvent) => cb(data)
+      ipcRenderer.on('backup:progress', handler)
+      return () => ipcRenderer.removeListener('backup:progress', handler)
+    },
   },
 })

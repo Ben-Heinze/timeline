@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useStore } from '../store/useStore'
-import type { Group } from '../../shared/types'
+import type { Group, LifeEvent } from '../../shared/types'
 
 const MS_DAY = 86_400_000
 
@@ -33,7 +33,7 @@ function textColor(count: number, effectiveMax: number, scale: 'log' | 'linear')
 
 type DateRangeGroup = Pick<Group, 'date_from' | 'date_to' | 'color' | 'name'>
 
-function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateRangeGroups, onDayClick, onDayMouseDown, onDayMouseEnter, onMonthClick, cellSize = 22 }: {
+function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateRangeGroups, events, onDayClick, onDayMouseDown, onDayMouseEnter, onMonthClick, cellSize = 22 }: {
   year: number
   month: number
   countMap: Map<string, number>
@@ -41,6 +41,7 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
   scale: 'log' | 'linear'
   selRange: [number, number] | null
   dateRangeGroups: DateRangeGroup[]
+  events: LifeEvent[]
   onDayClick: (ts: number) => void
   onDayMouseDown: (ts: number, e: React.MouseEvent) => void
   onDayMouseEnter: (ts: number) => void
@@ -88,12 +89,14 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
           const dayTs = new Date(year, month, day).getTime()
 
           const inSel = selRange !== null && dayTs >= selRange[0] && dayTs <= selRange[1]
+          const eventForDay = events.find(ev => dayTs >= ev.date_from && dayTs < (ev.date_to ?? Infinity))
           const groupForDay = dateRangeGroups.find(gr => dayTs >= gr.date_from! && dayTs < gr.date_to!)
+          const rangeForDay = eventForDay ?? (groupForDay ? { color: groupForDay.color, title: groupForDay.name } : null)
 
           const bg = inSel
             ? '#c7d2fe'
-            : groupForDay
-              ? `${groupForDay.color}55`
+            : rangeForDay
+              ? `${rangeForDay.color}55`
               : heatColor(count, effectiveMax, scale)
 
           const fg = inSel ? '#3730a3' : textColor(count, effectiveMax, scale)
@@ -104,8 +107,8 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
               onClick={() => onDayClick(dayTs)}
               onMouseDown={e => onDayMouseDown(dayTs, e)}
               onMouseEnter={() => onDayMouseEnter(dayTs)}
-              title={groupForDay
-                ? `${key}: ${count} entr${count === 1 ? 'y' : 'ies'} · ${groupForDay.name}`
+              title={rangeForDay
+                ? `${key}: ${count} entr${count === 1 ? 'y' : 'ies'} · ${rangeForDay.title}`
                 : count > 0 ? `${key}: ${count} entr${count === 1 ? 'y' : 'ies'}` : key}
               style={{
                 height: cellSize, borderRadius: radius, background: bg,
@@ -126,7 +129,7 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
 }
 
 export default function CalendarHeatmap() {
-  const { selectedGroupId, refreshKey, setSelectedPeriod, groups, setPendingDateRange, settings } = useStore()
+  const { selectedGroupId, refreshKey, setSelectedPeriod, groups, events, openEventModal, settings } = useStore()
   const [year, setYear]         = useState(new Date().getFullYear())
   const [countMap, setCM]       = useState(new Map<string, number>())
   const [dataMax, setMax]       = useState(0)
@@ -177,7 +180,7 @@ export default function CalendarHeatmap() {
       const to    = Math.max(start, end)
       if (to > from) {
         didSelectRef.current = true
-        setPendingDateRange([from, to + MS_DAY])
+        openEventModal(null, [from, to + MS_DAY])
       }
       selStartRef.current = null
       selEndRef.current   = null
@@ -185,7 +188,7 @@ export default function CalendarHeatmap() {
     }
     window.addEventListener('mouseup', handleMouseUp)
     return () => window.removeEventListener('mouseup', handleMouseUp)
-  }, [setPendingDateRange])
+  }, [openEventModal])
 
   const handleDayMouseDown = useCallback((ts: number, e: React.MouseEvent) => {
     e.preventDefault()
@@ -236,6 +239,11 @@ export default function CalendarHeatmap() {
     g => g.date_from != null && g.date_to != null
   )
 
+  // Only events overlapping the shown year matter for cell tint and legend
+  const yearStart = new Date(year, 0, 1).getTime()
+  const yearEnd   = new Date(year + 1, 0, 1).getTime()
+  const yearEvents = events.filter(ev => ev.date_from < yearEnd && (ev.date_to ?? Infinity) > yearStart)
+
   const legendFs = [0, 0.2, 0.45, 0.7, 1.0]
 
   const navBtnStyle: React.CSSProperties = {
@@ -266,6 +274,7 @@ export default function CalendarHeatmap() {
               scale={scale}
               selRange={selRange}
               dateRangeGroups={dateRangeGroups}
+              events={yearEvents}
               onDayClick={handleDayClick}
               onDayMouseDown={handleDayMouseDown}
               onDayMouseEnter={handleDayMouseEnter}
@@ -295,12 +304,18 @@ export default function CalendarHeatmap() {
           {totalYear > 0 ? `${totalYear} entr${totalYear === 1 ? 'y' : 'ies'} this year` : 'No entries this year'}
         </span>
         <span style={{ fontSize: 12, color: 'var(--text-4)' }}>
-          · drag across days to create a group
+          · drag across days to create an event
         </span>
         <div style={{ flex: 1 }} />
-        {/* Date-range group legend */}
-        {dateRangeGroups.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* Event and date-range group legend */}
+        {(yearEvents.length > 0 || dateRangeGroups.length > 0) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {yearEvents.map(ev => (
+              <div key={`e${ev.id}`} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <div style={{ width: 10, height: 10, borderRadius: 2, background: ev.color }} />
+                <span style={{ fontSize: 10, color: 'var(--text-2)' }}>{ev.title}</span>
+              </div>
+            ))}
             {dateRangeGroups.map(g => (
               <div key={g.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <div style={{ width: 10, height: 10, borderRadius: 2, background: g.color }} />
@@ -334,6 +349,7 @@ export default function CalendarHeatmap() {
             scale={scale}
             selRange={selRange}
             dateRangeGroups={dateRangeGroups}
+            events={yearEvents}
             onDayClick={handleDayClick}
             onDayMouseDown={handleDayMouseDown}
             onDayMouseEnter={handleDayMouseEnter}
