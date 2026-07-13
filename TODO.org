@@ -7,7 +7,7 @@
 ** TODO If there are multiple files being tagged, all removed tags apply to every file with that tag, and all added tags are added to each file. Make sure no dupe tags exist.
 
 ** TODO Let files have a description feature to them?
-
+** TODO add button that lets referenced folders be copeid
 * Known Bugs
 ** TODO When moving the copied folder, number count may be off
 ** TODO Fix flashing status bar when importing
