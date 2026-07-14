@@ -8,6 +8,7 @@ import { registerTagHandlers } from './tags'
 import { registerSettingsHandlers } from './settings'
 import { registerFileHandlers } from './files'
 import { registerSpotifyHandlers } from './spotify'
+import { registerVolumeHandlers } from './volumes'
 
 export function registerAllHandlers(): void {
   registerBackupHandlers()
@@ -20,4 +21,5 @@ export function registerAllHandlers(): void {
   registerTagHandlers()
   registerSettingsHandlers()
   registerSpotifyHandlers()
+  registerVolumeHandlers()
 }

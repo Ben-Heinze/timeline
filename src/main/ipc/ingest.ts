@@ -45,7 +45,7 @@ export function registerIngestHandlers(): void {
       if (!sender.isDestroyed()) sender.send(channel, data)
     }
     try {
-      const { insertedIds, failures, total } = await ingestFiles(filePaths, (progress: IngestProgressEvent) => {
+      const { insertedIds, failures, total } = await ingestFiles(filePaths, 'copy', null, (progress: IngestProgressEvent) => {
         send('ingest:progress', progress)
       })
       if (tagNames.length > 0 && insertedIds.length > 0) {

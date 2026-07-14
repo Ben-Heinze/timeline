@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { timeYear, timeMonth, timeDay } from 'd3-time'
 import { useStore } from '../store/useStore'
-import type { LifeEvent, ZoomLevel } from '../../shared/types'
+import type { LifeEvent, ListeningBucket, ZoomLevel } from '../../shared/types'
 
 const MS_DAY = 86_400_000
 const AXIS_H = 38
@@ -192,6 +192,7 @@ export default function TimelineCanvas() {
     return new Date(now.getFullYear(), now.getMonth(), 1).getTime()
   })
   const [curveMode, setCurveMode] = useState(false)
+  const [listeningBuckets, setListeningBuckets] = useState<ListeningBucket[]>([])
 
   const rangeRef      = useRef(visibleRange)
   const extentRef     = useRef(dataExtent)
@@ -279,6 +280,17 @@ export default function TimelineCanvas() {
       }
     })
   }, [visibleRange, zoomLevel, selectedGroupId, refreshKey, setHistogramBuckets, setVisibleRange, setZoomLevel])
+
+  // Listening-density ribbon data — only needed while the Spotify panel is open
+  useEffect(() => {
+    if (!spotifyPanelOpen) { setListeningBuckets([]); return }
+    const [from, to] = visibleRange
+    let cancelled = false
+    window.api.spotify.histogram(from, to, zoomLevel).then(buckets => {
+      if (!cancelled) setListeningBuckets(buckets)
+    })
+    return () => { cancelled = true }
+  }, [spotifyPanelOpen, visibleRange, zoomLevel, refreshKey])
 
   // ResizeObserver
   useEffect(() => {
@@ -433,6 +445,53 @@ export default function TimelineCanvas() {
       }
     }
 
+    // Listening-density ribbon — translucent overlay, independently scaled to its own max
+    // so it stays legible whether the entry bars for that period are tall or short.
+    if (spotifyPanelOpen && listeningBuckets.length > 0) {
+      let maxMs = 1
+      for (const b of listeningBuckets) if (b.ms_played > maxMs) maxMs = b.ms_played
+      const sorted = [...listeningBuckets].sort((a, b) => a.bucket_start - b.bucket_start)
+      const ribbonPts = sorted.map(b => ({
+        x: tsToX((b.bucket_start + bucketEndMs(b.bucket_start, zoomLevel)) / 2),
+        y: barsH - (b.ms_played / maxMs) * barsH * 0.9,
+      }))
+
+      if (ribbonPts.length > 0) {
+        const drawRibbonSpline = (close: boolean) => {
+          ctx.moveTo(ribbonPts[0].x, close ? barsH : ribbonPts[0].y)
+          if (close) ctx.lineTo(ribbonPts[0].x, ribbonPts[0].y)
+          for (let i = 1; i < ribbonPts.length - 1; i++) {
+            const mx = (ribbonPts[i].x + ribbonPts[i + 1].x) / 2
+            const my = (ribbonPts[i].y + ribbonPts[i + 1].y) / 2
+            ctx.quadraticCurveTo(ribbonPts[i].x, ribbonPts[i].y, mx, my)
+          }
+          const last = ribbonPts[ribbonPts.length - 1]
+          ctx.lineTo(last.x, last.y)
+          if (close) {
+            ctx.lineTo(last.x, barsH)
+            ctx.closePath()
+          }
+        }
+
+        ctx.beginPath()
+        drawRibbonSpline(true)
+        ctx.globalAlpha = 0.18
+        ctx.fillStyle = '#1DB954'
+        ctx.fill()
+        ctx.globalAlpha = 1
+
+        ctx.beginPath()
+        drawRibbonSpline(false)
+        ctx.strokeStyle = '#1DB954'
+        ctx.lineWidth = 1.5
+        ctx.lineJoin = 'round'
+        ctx.lineCap = 'round'
+        ctx.globalAlpha = 0.75
+        ctx.stroke()
+        ctx.globalAlpha = 1
+      }
+    }
+
     // Life-event lanes (between the bars and the group band)
     for (const { ev, lane } of eventLanes.placed) {
       const x1 = tsToX(ev.date_from)
@@ -542,7 +601,7 @@ export default function TimelineCanvas() {
     ctx.moveTo(YAXIS_W - 0.5, 0)
     ctx.lineTo(YAXIS_W - 0.5, chartH)
     ctx.stroke()
-  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension, eventLanes, eventBandH])
+  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets])
 
   // Wheel → pan
   const handleWheel = useCallback((e: WheelEvent) => {

@@ -24,7 +24,7 @@ export function registerSettingsHandlers(): void {
 
   ipcMain.handle('settings:set', (_, patch: Partial<Omit<AppSettings, 'libraryPath'>>) => {
     saveSettings({ ...getSettings(), ...patch })
-    if ('importMode' in patch || 'watchedFolders' in patch) restartWatcher()
+    if ('watchedFolders' in patch) restartWatcher()
   })
 
   ipcMain.handle('settings:pickFolder', async () => {
@@ -49,7 +49,7 @@ export function registerSettingsHandlers(): void {
     const s = getSettings()
     const libraryExists = await pathExists(s.libraryPath)
     const watchedFolders = await Promise.all(
-      s.watchedFolders.map(async f => ({ path: f, exists: await pathExists(f) }))
+      s.watchedFolders.map(async f => ({ path: f.path, exists: await pathExists(f.path) }))
     )
     return { libraryExists, watchedFolders }
   })
@@ -73,7 +73,10 @@ export function registerSettingsHandlers(): void {
     if (missingIds.length > 0) markEntriesMissing(missingIds)
 
     const s = getSettings()
-    saveSettings({ ...s, watchedFolders: s.watchedFolders.map(f => f === oldPath ? newPath : f) })
+    saveSettings({
+      ...s,
+      watchedFolders: s.watchedFolders.map(f => f.path === oldPath ? { ...f, path: newPath } : f),
+    })
     restartWatcher()
 
     return { found: foundIds.length, total: entries.length }

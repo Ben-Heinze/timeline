@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react'
 import { useStore } from '../store/useStore'
 import type { Entry } from '../../shared/types'
+import { VolumeBadgeDot } from './VolumeBadge'
 
 const TYPE_COLORS: Record<string, string> = {
   photo: '#3b82f6', video: '#8b5cf6', audio: '#10b981', document: '#f59e0b', journal: '#ec4899',
@@ -55,6 +56,7 @@ function ResultCard({ entry, onOpen }: { entry: Entry; onOpen: (id: number) => v
             </div>
           </div>
         )}
+        <VolumeBadgeDot volumeId={entry.volume_id} />
       </div>
       <div style={{ padding: '7px 8px 8px' }}>
         <div style={{

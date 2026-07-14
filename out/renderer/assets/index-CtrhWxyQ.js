@@ -7183,11 +7183,13 @@ const useStore = create((set) => ({
   syncProgress: null,
   refreshKey: 0,
   tags: [],
+  volumes: [],
   searchResults: null,
   rangeSelectMode: false,
   dateRangeSelection: null,
   pendingDateRange: null,
   setTags: (tags) => set({ tags }),
+  setVolumes: (volumes) => set({ volumes }),
   setSearchResults: (results) => set({ searchResults: results }),
   setVisibleRange: (range) => set({ visibleRange: range }),
   setZoomLevel: (level) => set({ zoomLevel: level }),
@@ -7560,6 +7562,7 @@ function TimelineCanvas() {
     return new Date(now2.getFullYear(), now2.getMonth(), 1).getTime();
   });
   const [curveMode, setCurveMode] = reactExports.useState(false);
+  const [listeningBuckets, setListeningBuckets] = reactExports.useState([]);
   const rangeRef = reactExports.useRef(visibleRange);
   const extentRef = reactExports.useRef(dataExtent);
   const zoomRef = reactExports.useRef(zoomLevel);
@@ -7640,6 +7643,20 @@ function TimelineCanvas() {
       }
     });
   }, [visibleRange, zoomLevel, selectedGroupId, refreshKey, setHistogramBuckets, setVisibleRange, setZoomLevel]);
+  reactExports.useEffect(() => {
+    if (!spotifyPanelOpen) {
+      setListeningBuckets([]);
+      return;
+    }
+    const [from2, to] = visibleRange;
+    let cancelled = false;
+    window.api.spotify.histogram(from2, to, zoomLevel).then((buckets) => {
+      if (!cancelled) setListeningBuckets(buckets);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [spotifyPanelOpen, visibleRange, zoomLevel, refreshKey]);
   reactExports.useEffect(() => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
@@ -7763,6 +7780,47 @@ function TimelineCanvas() {
         ctx.stroke();
       }
     }
+    if (spotifyPanelOpen && listeningBuckets.length > 0) {
+      let maxMs = 1;
+      for (const b of listeningBuckets) if (b.ms_played > maxMs) maxMs = b.ms_played;
+      const sorted = [...listeningBuckets].sort((a, b) => a.bucket_start - b.bucket_start);
+      const ribbonPts = sorted.map((b) => ({
+        x: tsToX((b.bucket_start + bucketEndMs(b.bucket_start, zoomLevel)) / 2),
+        y: barsH - b.ms_played / maxMs * barsH * 0.9
+      }));
+      if (ribbonPts.length > 0) {
+        const drawRibbonSpline = (close2) => {
+          ctx.moveTo(ribbonPts[0].x, close2 ? barsH : ribbonPts[0].y);
+          if (close2) ctx.lineTo(ribbonPts[0].x, ribbonPts[0].y);
+          for (let i = 1; i < ribbonPts.length - 1; i++) {
+            const mx = (ribbonPts[i].x + ribbonPts[i + 1].x) / 2;
+            const my = (ribbonPts[i].y + ribbonPts[i + 1].y) / 2;
+            ctx.quadraticCurveTo(ribbonPts[i].x, ribbonPts[i].y, mx, my);
+          }
+          const last = ribbonPts[ribbonPts.length - 1];
+          ctx.lineTo(last.x, last.y);
+          if (close2) {
+            ctx.lineTo(last.x, barsH);
+            ctx.closePath();
+          }
+        };
+        ctx.beginPath();
+        drawRibbonSpline(true);
+        ctx.globalAlpha = 0.18;
+        ctx.fillStyle = "#1DB954";
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        drawRibbonSpline(false);
+        ctx.strokeStyle = "#1DB954";
+        ctx.lineWidth = 1.5;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.globalAlpha = 0.75;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
     for (const { ev, lane } of eventLanes.placed) {
       const x1 = tsToX(ev.date_from);
       const x2 = tsToX(ev.date_to ?? Date.now());
@@ -7860,7 +7918,7 @@ function TimelineCanvas() {
     ctx.moveTo(YAXIS_W - 0.5, 0);
     ctx.lineTo(YAXIS_W - 0.5, chartH);
     ctx.stroke();
-  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension, eventLanes, eventBandH]);
+  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets]);
   const handleWheel = reactExports.useCallback((e) => {
     e.preventDefault();
     if (zoomRef.current === "month") {
@@ -95548,6 +95606,40 @@ const modalBtn = (primary) => ({
   background: primary ? "var(--accent)" : "transparent",
   color: primary ? "#fff" : "var(--text)"
 });
+function useVolumeStatus(volumeId) {
+  const volumes = useStore((s) => s.volumes);
+  if (volumeId == null) return null;
+  return volumes.find((v2) => v2.id === volumeId) ?? null;
+}
+function volumeTitle(status) {
+  return status.connected ? `On drive: ${status.label}` : `On drive: ${status.label} — not connected`;
+}
+function VolumeBadgeDot({ volumeId }) {
+  const status = useVolumeStatus(volumeId);
+  if (!status) return null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      title: volumeTitle(status),
+      style: {
+        position: "absolute",
+        top: 3,
+        right: 3,
+        width: 9,
+        height: 9,
+        borderRadius: "50%",
+        background: status.connected ? "rgba(0,0,0,0.4)" : "#ef4444",
+        border: "1.5px solid #fff",
+        boxSizing: "border-box"
+      }
+    }
+  );
+}
+function VolumeBadgeInline({ volumeId }) {
+  const status = useVolumeStatus(volumeId);
+  if (!status) return null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: status.connected ? "var(--text-3)" : "#ef4444" }, children: volumeTitle(status) });
+}
 const THUMB_SIZE = {
   small: 84,
   medium: 132,
@@ -95570,37 +95662,45 @@ const TYPE_LABELS$1 = {
 const Thumb = React$2.memo(function Thumb2({ entry, size }) {
   const src = entry.thumbnail_medium ?? entry.thumbnail_small ?? entry.thumbnail_large;
   if (src) {
-    return /* @__PURE__ */ jsxRuntimeExports.jsx(
-      "img",
-      {
-        src: `timeline:///${src}`,
-        style: { width: size, height: size, objectFit: "cover", display: "block", borderRadius: 6, background: "var(--bg-thumb)" },
-        draggable: false
-      }
-    );
+    return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { position: "relative", width: size, height: size, flexShrink: 0 }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "img",
+        {
+          src: `timeline:///${src}`,
+          style: { width: size, height: size, objectFit: "cover", display: "block", borderRadius: 6, background: "var(--bg-thumb)" },
+          draggable: false
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(VolumeBadgeDot, { volumeId: entry.volume_id })
+    ] });
   }
   const badge = Math.round(size * 0.4);
-  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+    position: "relative",
     width: size,
     height: size,
     borderRadius: 6,
     background: "var(--bg-thumb)",
     display: "flex",
     alignItems: "center",
-    justifyContent: "center"
-  }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-    width: badge,
-    height: badge,
-    borderRadius: badge * 0.22,
-    background: TYPE_COLORS$2[entry.type] ?? "#555",
-    display: "flex",
-    alignItems: "center",
     justifyContent: "center",
-    fontSize: Math.round(badge * 0.32),
-    fontWeight: 700,
-    color: "#fff",
-    letterSpacing: 0.5
-  }, children: TYPE_LABELS$1[entry.type] ?? "?" }) });
+    flexShrink: 0
+  }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+      width: badge,
+      height: badge,
+      borderRadius: badge * 0.22,
+      background: TYPE_COLORS$2[entry.type] ?? "#555",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: Math.round(badge * 0.32),
+      fontWeight: 700,
+      color: "#fff",
+      letterSpacing: 0.5
+    }, children: TYPE_LABELS$1[entry.type] ?? "?" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(VolumeBadgeDot, { volumeId: entry.volume_id })
+  ] });
 });
 const GridCell = React$2.memo(function GridCell2({ entry, selected, onSelect, onActivate, onContextMenu, size }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(
@@ -95912,6 +96012,105 @@ const selectStyle = {
   background: "var(--bg-input)",
   color: "var(--text)"
 };
+const MONTH_LABELS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+function formatPlaytime$1(ms) {
+  const totalMin = Math.round(ms / 6e4);
+  if (totalMin < 60) return `${totalMin}m`;
+  const h = Math.floor(totalMin / 60);
+  const m2 = totalMin % 60;
+  return m2 === 0 ? `${h}h` : `${h}h ${m2}m`;
+}
+function YearCard({ summary }) {
+  const maxArtistMs = summary.topArtists[0]?.ms_played ?? 0;
+  const maxMonthMs = Math.max(1, ...summary.monthly);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+    background: "var(--bg-surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    padding: 18,
+    display: "flex",
+    gap: 24,
+    flexWrap: "wrap"
+  }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { minWidth: 140, flexShrink: 0 }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 26, fontWeight: 800, color: "var(--text)" }, children: summary.year }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-3)", marginTop: 2 }, children: [
+        formatPlaytime$1(summary.msPlayed),
+        " · ",
+        summary.playCount.toLocaleString(),
+        " plays"
+      ] }),
+      summary.topTrack && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: 12 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--text-4)" }, children: "Most played" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12.5, fontWeight: 600, color: "var(--text)", marginTop: 3 }, children: summary.topTrack.track_name }),
+        summary.topTrack.artist_name && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-3)" }, children: summary.topTrack.artist_name }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 10.5, color: "var(--text-4)", marginTop: 1 }, children: [
+          summary.topTrack.play_count,
+          " play",
+          summary.topTrack.play_count === 1 ? "" : "s"
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "flex-end", gap: 2, height: 32, marginTop: 14 }, children: summary.monthly.map((ms, i) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "div",
+        {
+          title: `${formatPlaytime$1(ms)}`,
+          style: {
+            flex: 1,
+            height: `${Math.max(2, ms / maxMonthMs * 32)}px`,
+            background: "#1DB954",
+            opacity: ms > 0 ? 0.75 : 0.15,
+            borderRadius: 1.5
+          }
+        },
+        i
+      )) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 2, marginTop: 3 }, children: MONTH_LABELS.map((m2, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, fontSize: 8, textAlign: "center", color: "var(--text-4)" }, children: m2 }, i)) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 220 }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--text-4)", marginBottom: 6 }, children: "Top artists" }),
+      summary.topArtists.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-4)" }, children: "No music plays this year." }) : summary.topArtists.map((a, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 6 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "baseline", gap: 8 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", fontWeight: 600, width: 14, flexShrink: 0 }, children: i + 1 }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: "var(--text)",
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap"
+          }, children: a.artist_name }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-3)", flexShrink: 0 }, children: formatPlaytime$1(a.ms_played) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 4, background: "var(--bg-subtle)", borderRadius: 2, marginTop: 3, marginLeft: 22, overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+          width: `${maxArtistMs > 0 ? a.ms_played / maxArtistMs * 100 : 0}%`,
+          height: "100%",
+          background: "#1DB954",
+          borderRadius: 2
+        } }) })
+      ] }, a.artist_name))
+    ] })
+  ] });
+}
+function SpotifyView() {
+  const { activeView, refreshKey } = useStore();
+  const [summaries, setSummaries] = reactExports.useState(null);
+  reactExports.useEffect(() => {
+    if (activeView !== "spotify") return;
+    let cancelled = false;
+    window.api.spotify.yearlySummaries().then((res) => {
+      if (!cancelled) setSummaries(res);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, refreshKey]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: 20 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }, children: summaries === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 32, color: "var(--text-3)", fontSize: 13 }, children: "Loading…" }) : summaries.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: 32, textAlign: "center", color: "var(--text-4)", fontSize: 13, lineHeight: 1.6 }, children: [
+    "No listening history imported yet.",
+    /* @__PURE__ */ jsxRuntimeExports.jsx("br", {}),
+    'Import your Spotify "Extended streaming history" export from Settings to see yearly recaps here.'
+  ] }) : summaries.map((s) => /* @__PURE__ */ jsxRuntimeExports.jsx(YearCard, { summary: s }, s.year)) }) });
+}
 const MS_DAY$1 = 864e5;
 function periodLabel(from2, to) {
   const rangeMs = to - from2;
@@ -115318,6 +115517,7 @@ function formatDateTime(ms) {
 }
 function MetadataPanel({ entry }) {
   const [info, setInfo] = reactExports.useState(null);
+  const volumeStatus = useVolumeStatus(entry.volume_id);
   reactExports.useEffect(() => {
     let alive = true;
     setInfo(null);
@@ -115348,6 +115548,7 @@ function MetadataPanel({ entry }) {
     rows.push(["Location", info?.absolutePath ?? entry.file_path]);
     rows.push(["Import mode", entry.import_mode === "copy" ? "Copied into library" : "Referenced in place"]);
   }
+  if (volumeStatus) rows.push(["Drive", /* @__PURE__ */ jsxRuntimeExports.jsx(VolumeBadgeInline, { volumeId: entry.volume_id })]);
   if (entry.content_hash) {
     rows.push(["SHA-256", /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { title: entry.content_hash, style: { fontFamily: "monospace", fontSize: 11 }, children: [
       entry.content_hash.slice(0, 16),
@@ -115390,6 +115591,9 @@ const fileBtnStyle = {
 };
 function FileActions({ entry }) {
   const [error, setError] = reactExports.useState(null);
+  const volumeStatus = useVolumeStatus(entry.volume_id);
+  const disconnected = volumeStatus !== null && !volumeStatus.connected;
+  const unreachable = !!entry.is_missing || disconnected;
   const run2 = async (action) => {
     setError(null);
     const err = await action();
@@ -115403,10 +115607,10 @@ function FileActions({ entry }) {
     gap: 8,
     flexWrap: "wrap"
   }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: fileBtnStyle, onClick: () => run2(() => window.api.files.showInFolder(entry.id)), children: "📁 Show in Folder" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: fileBtnStyle, onClick: () => run2(() => window.api.files.openDefault(entry.id)), children: "Open" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: fileBtnStyle, onClick: () => run2(() => window.api.files.openWith(entry.id)), children: "Open With…" }),
-    entry.is_missing ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)" }, children: "File is missing" }) : null,
+    /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: { ...fileBtnStyle, opacity: unreachable ? 0.5 : 1 }, disabled: unreachable, onClick: () => run2(() => window.api.files.showInFolder(entry.id)), children: "📁 Show in Folder" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: { ...fileBtnStyle, opacity: unreachable ? 0.5 : 1 }, disabled: unreachable, onClick: () => run2(() => window.api.files.openDefault(entry.id)), children: "Open" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: { ...fileBtnStyle, opacity: unreachable ? 0.5 : 1 }, disabled: unreachable, onClick: () => run2(() => window.api.files.openWith(entry.id)), children: "Open With…" }),
+    entry.is_missing ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)" }, children: "File is missing" }) : disconnected ? /* @__PURE__ */ jsxRuntimeExports.jsx(VolumeBadgeInline, { volumeId: entry.volume_id }) : null,
     error && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "#ef4444" }, children: error })
   ] });
 }
@@ -115615,6 +115819,37 @@ function buildTree(groups, cmp2) {
   };
   return sort(roots);
 }
+function GroupSoundtrack({ from: from2, to, depth }) {
+  const [artists, setArtists] = reactExports.useState(null);
+  reactExports.useEffect(() => {
+    let cancelled = false;
+    setArtists(null);
+    window.api.spotify.topArtists(from2, to, 3).then((res) => {
+      if (!cancelled) setArtists(res);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [from2, to]);
+  if (!artists || artists.length === 0) return null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+    paddingLeft: 6 + depth * 14 + 26,
+    paddingRight: 6,
+    paddingBottom: 6,
+    display: "flex",
+    alignItems: "center",
+    gap: 5
+  }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, color: "#1DB954", flexShrink: 0 }, children: "♫" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+      fontSize: 11,
+      color: "var(--text-3)",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }, children: artists.map((a) => a.artist_name).join(" · ") })
+  ] });
+}
 function GroupNode(props) {
   const {
     node,
@@ -115762,6 +115997,7 @@ function GroupNode(props) {
         ]
       }
     ),
+    isSelected && group.date_from != null && group.date_to != null && /* @__PURE__ */ jsxRuntimeExports.jsx(GroupSoundtrack, { from: group.date_from, to: group.date_to, depth }),
     isExpanded && children.map((child) => /* @__PURE__ */ jsxRuntimeExports.jsx(GroupNode, { ...props, node: child, depth: depth + 1 }, child.group.id))
   ] });
 }
@@ -116660,25 +116896,28 @@ function ResultCard({ entry, onOpen }) {
         flexShrink: 0
       },
       children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: 140, height: 110, position: "relative", overflow: "hidden", background: "var(--bg-thumb)" }, children: thumbSrc ? /* @__PURE__ */ jsxRuntimeExports.jsx("img", { src: thumbSrc, style: { width: "100%", height: "100%", objectFit: "cover" }, draggable: false }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center"
-        }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-          width: 44,
-          height: 44,
-          borderRadius: 10,
-          background: TYPE_COLORS[entry.type] ?? "#555",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 13,
-          fontWeight: 700,
-          color: "#fff",
-          letterSpacing: 0.5
-        }, children: TYPE_LABELS[entry.type] ?? "?" }) }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { width: 140, height: 110, position: "relative", overflow: "hidden", background: "var(--bg-thumb)" }, children: [
+          thumbSrc ? /* @__PURE__ */ jsxRuntimeExports.jsx("img", { src: thumbSrc, style: { width: "100%", height: "100%", objectFit: "cover" }, draggable: false }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center"
+          }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+            width: 44,
+            height: 44,
+            borderRadius: 10,
+            background: TYPE_COLORS[entry.type] ?? "#555",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 13,
+            fontWeight: 700,
+            color: "#fff",
+            letterSpacing: 0.5
+          }, children: TYPE_LABELS[entry.type] ?? "?" }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(VolumeBadgeDot, { volumeId: entry.volume_id })
+        ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "7px 8px 8px" }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
             fontSize: 12,
@@ -117091,7 +117330,11 @@ function ipcErrorMessage(e) {
   return msg.replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
 }
 function SettingsView() {
-  const { settings, setSettings } = useStore();
+  const { settings, setSettings, volumes, setVolumes } = useStore();
+  const [refreshingDrives, setRefreshingDrives] = reactExports.useState(false);
+  const [pendingVolumeFolder, setPendingVolumeFolder] = reactExports.useState(null);
+  const [renamingVolumeId, setRenamingVolumeId] = reactExports.useState(null);
+  const [renameText, setRenameText] = reactExports.useState("");
   const [pendingLibraryPath, setPendingLibraryPath] = reactExports.useState(null);
   const [fileCount, setFileCount] = reactExports.useState(0);
   const [migrating, setMigrating] = reactExports.useState(false);
@@ -117144,7 +117387,30 @@ function SettingsView() {
       }
       setPathHealth(next);
     });
-  }, [setSettings]);
+    window.api.volumes.refresh().then(setVolumes);
+  }, [setSettings, setVolumes]);
+  async function refreshDrives() {
+    setRefreshingDrives(true);
+    try {
+      const list = await window.api.volumes.refresh();
+      setVolumes(list);
+    } finally {
+      setRefreshingDrives(false);
+    }
+  }
+  async function startRenameVolume(id2, currentLabel) {
+    setRenamingVolumeId(id2);
+    setRenameText(currentLabel);
+  }
+  async function commitRenameVolume() {
+    if (renamingVolumeId == null) return;
+    const label = renameText.trim();
+    if (label) {
+      await window.api.volumes.setLabel(renamingVolumeId, label);
+      setVolumes(volumes.map((v2) => v2.id === renamingVolumeId ? { ...v2, label } : v2));
+    }
+    setRenamingVolumeId(null);
+  }
   reactExports.useEffect(() => {
     if (typeof window.api.backup?.onProgress !== "function") return;
     return window.api.backup.onProgress(setBackupProgress);
@@ -117155,11 +117421,6 @@ function SettingsView() {
   }, []);
   if (!settings) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 32, color: "var(--text-3)", fontSize: 13 }, children: "Loading settings…" });
-  }
-  async function setMode(mode) {
-    const next = { ...settings, importMode: mode };
-    await window.api.settings.set({ importMode: mode });
-    setSettings(next);
   }
   async function setTheme(theme) {
     const next = { ...settings, theme };
@@ -117192,10 +117453,27 @@ function SettingsView() {
   async function addWatchedFolder() {
     const chosen = await window.api.settings.pickFolder();
     if (!chosen) return;
-    if (settings.watchedFolders.includes(chosen)) return;
-    const next = { ...settings, watchedFolders: [...settings.watchedFolders, chosen] };
+    if (settings.watchedFolders.some((f2) => f2.path === chosen)) return;
+    const { volumeId, osLabel } = await window.api.volumes.matchPath(chosen);
+    if (volumeId != null) {
+      setPendingVolumeFolder({ path: chosen, volumeId, label: osLabel ?? "" });
+      window.api.volumes.list().then(setVolumes);
+      return;
+    }
+    const next = { ...settings, watchedFolders: [...settings.watchedFolders, { path: chosen, volumeId: null }] };
     await window.api.settings.set({ watchedFolders: next.watchedFolders });
     setSettings(next);
+  }
+  async function confirmVolumeFolder() {
+    if (!pendingVolumeFolder) return;
+    const { path: chosen, volumeId, label } = pendingVolumeFolder;
+    const trimmed = label.trim();
+    if (trimmed) await window.api.volumes.setLabel(volumeId, trimmed);
+    const next = { ...settings, watchedFolders: [...settings.watchedFolders, { path: chosen, volumeId }] };
+    await window.api.settings.set({ watchedFolders: next.watchedFolders });
+    setSettings(next);
+    setPendingVolumeFolder(null);
+    window.api.volumes.list().then(setVolumes);
   }
   async function resolveWatchedFolder(oldPath) {
     const chosen = await window.api.settings.pickFolder();
@@ -117204,7 +117482,7 @@ function SettingsView() {
     try {
       const { found: found2, total } = await window.api.settings.resolveWatchedFolder(oldPath, chosen);
       const foundRatio = total === 0 ? 1 : found2 / total;
-      const next = { ...settings, watchedFolders: settings.watchedFolders.map((f2) => f2 === oldPath ? chosen : f2) };
+      const next = { ...settings, watchedFolders: settings.watchedFolders.map((f2) => f2.path === oldPath ? { ...f2, path: chosen } : f2) };
       setSettings(next);
       setPathHealth((prev) => {
         const copy2 = { ...prev };
@@ -117249,8 +117527,8 @@ function SettingsView() {
     setDupGroups(groups);
     setDupScanning(false);
   }
-  async function removeWatchedFolder(folder) {
-    const next = { ...settings, watchedFolders: settings.watchedFolders.filter((f2) => f2 !== folder) };
+  async function removeWatchedFolder(folderPath) {
+    const next = { ...settings, watchedFolders: settings.watchedFolders.filter((f2) => f2.path !== folderPath) };
     await window.api.settings.set({ watchedFolders: next.watchedFolders });
     setSettings(next);
   }
@@ -117319,14 +117597,14 @@ function SettingsView() {
       setBackupProgress(null);
     }
   }
-  async function importSpotifyHistory() {
+  async function importSpotifyHistory(mode) {
     setSpotifyError(null);
     setSpotifyMessage(null);
     if (typeof window.api.spotify?.pickExport !== "function") {
       setSpotifyError("Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).");
       return;
     }
-    const paths = await window.api.spotify.pickExport();
+    const paths = await window.api.spotify.pickExport(mode);
     if (!paths.length) return;
     setSpotifyBusy(true);
     setSpotifyProgress(null);
@@ -117435,44 +117713,8 @@ function SettingsView() {
       }) })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Import mode" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "div",
-          {
-            style: row,
-            onClick: () => setMode("copy"),
-            role: "radio",
-            "aria-checked": settings.importMode === "copy",
-            children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: radioBtn(settings.importMode === "copy") }),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Copy files into library" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Files are duplicated into the managed library. Safe and portable — the library is self-contained." })
-              ] })
-            ]
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "div",
-          {
-            style: rowLast,
-            onClick: () => setMode("reference"),
-            role: "radio",
-            "aria-checked": settings.importMode === "reference",
-            children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: radioBtn(settings.importMode === "reference") }),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Reference files in place" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Original files are not copied. No extra disk usage, but the app depends on files staying at their current paths." })
-              ] })
-            ]
-          }
-        )
-      ] })
-    ] }),
-    settings.importMode === "copy" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Library location" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-3)", marginBottom: 10, marginTop: -6 }, children: "Files you manually import, or that are dropped directly into the library folder, are copied here." }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: row, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { flex: 1, fontFamily: "monospace", fontSize: 12, wordBreak: "break-all", color: pathColor(settings.libraryPath) }, children: [
@@ -117669,17 +117911,28 @@ function SettingsView() {
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, alignItems: "flex-start" }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Import Spotify history" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: 'Select the folder from your Spotify "Extended streaming history" data export — the one containing files named Streaming_History_Audio_*.json. Plays show up when you click on the day you listened to them on the timeline.' })
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: 'Point this at your Spotify "Extended streaming history" data export — either the folder itself, or the individual files named Streaming_History_Audio_*.json inside it. Plays show up when you click on the day you listened to them on the timeline.' })
           ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              style: { ...btn("default"), flexShrink: 0, opacity: spotifyBusy ? 0.6 : 1 },
-              onClick: importSpotifyHistory,
-              disabled: spotifyBusy,
-              children: spotifyBusy ? "Importing…" : "Import…"
-            }
-          )
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8, flexShrink: 0 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: { ...btn("default"), opacity: spotifyBusy ? 0.6 : 1 },
+                onClick: () => importSpotifyHistory("folder"),
+                disabled: spotifyBusy,
+                children: spotifyBusy ? "Importing…" : "Choose folder…"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: { ...btn("default"), opacity: spotifyBusy ? 0.6 : 1 },
+                onClick: () => importSpotifyHistory("files"),
+                disabled: spotifyBusy,
+                children: spotifyBusy ? "Importing…" : "Choose files…"
+              }
+            )
+          ] })
         ] }),
         spotifyBusy && spotifyProgress && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, borderTop: "1px solid var(--border-light)", fontSize: 12, color: "var(--text-3)" }, children: [
           "Processing file ",
@@ -117868,34 +118121,75 @@ function SettingsView() {
         ] })
       ] })
     ] }),
-    settings.importMode === "reference" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Watched folders" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: card, children: settings.watchedFolders.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...rowLast, color: "var(--text-3)", fontStyle: "italic" }, children: "No folders added yet." }) : settings.watchedFolders.map((folder, i) => {
-        const isLast = i === settings.watchedFolders.length - 1;
-        const health = pathHealth[folder];
-        return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: isLast ? rowLast : row, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 0 }, children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontFamily: "monospace", fontSize: 12, wordBreak: "break-all", color: pathColor(folder) }, children: folder }),
-            health && !health.exists && health.foundRatio === null && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, fontSize: 11, color: "var(--text-4)" }, children: "— folder not found" }),
-            health?.foundRatio !== null && health?.foundRatio !== void 0 && health.foundRatio < 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: 8, fontSize: 11, color: health.foundRatio === 0 ? "var(--text-4)" : "#d97706" }, children: [
-              "— ",
-              health.foundRatio === 0 ? "no files found" : `${Math.round(health.foundRatio * 100)}% of files found`
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-3)", marginBottom: 10, marginTop: -6 }, children: "Folders below are watched continuously and their files are referenced in place — never copied." }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
+        settings.watchedFolders.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...rowLast, color: "var(--text-3)", fontStyle: "italic" }, children: "No folders added yet." }) : settings.watchedFolders.map((folder, i) => {
+          const isLast = i === settings.watchedFolders.length - 1 && !pendingVolumeFolder;
+          const health = pathHealth[folder.path];
+          const onDrive = folder.volumeId != null;
+          return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: isLast ? rowLast : row, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 0 }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontFamily: "monospace", fontSize: 12, wordBreak: "break-all", color: pathColor(folder.path) }, children: folder.path }),
+              onDrive ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(VolumeBadgeInline, { volumeId: folder.volumeId }) }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                health && !health.exists && health.foundRatio === null && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, fontSize: 11, color: "var(--text-4)" }, children: "— folder not found" }),
+                health?.foundRatio !== null && health?.foundRatio !== void 0 && health.foundRatio < 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: 8, fontSize: 11, color: health.foundRatio === 0 ? "var(--text-4)" : "#d97706" }, children: [
+                  "— ",
+                  health.foundRatio === 0 ? "no files found" : `${Math.round(health.foundRatio * 100)}% of files found`
+                ] })
+              ] })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 6, flexShrink: 0 }, children: [
+              !onDrive && needsResolve(folder.path) && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "button",
+                {
+                  style: btn("default"),
+                  onClick: () => resolveWatchedFolder(folder.path),
+                  disabled: resolving === folder.path,
+                  children: resolving === folder.path ? "Resolving…" : "Resolve…"
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: btn("danger"), onClick: () => removeWatchedFolder(folder.path), children: "Remove" })
             ] })
+          ] }, folder.path);
+        }),
+        pendingVolumeFolder && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          ...rowLast,
+          flexDirection: "column",
+          alignItems: "flex-start",
+          gap: 10,
+          background: "#fffbeb",
+          borderTop: "1px solid #fde68a"
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "#78350f", lineHeight: 1.5 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontFamily: "monospace" }, children: pendingVolumeFolder.path }),
+            " is on a removable drive. Give it a name to help you recognize it later — this is just a label and won't affect how the drive is recognized when reconnected."
           ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 6, flexShrink: 0 }, children: [
-            needsResolve(folder) && /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                style: btn("default"),
-                onClick: () => resolveWatchedFolder(folder),
-                disabled: resolving === folder,
-                children: resolving === folder ? "Resolving…" : "Resolve…"
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              autoFocus: true,
+              value: pendingVolumeFolder.label,
+              onChange: (e) => setPendingVolumeFolder({ ...pendingVolumeFolder, label: e.target.value }),
+              placeholder: "e.g. Rugged HDD 1",
+              style: {
+                padding: "6px 10px",
+                fontSize: 13,
+                borderRadius: 5,
+                width: 220,
+                border: "1px solid var(--border-strong)",
+                background: "var(--bg-input)",
+                color: "var(--text)"
               }
-            ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: btn("danger"), onClick: () => removeWatchedFolder(folder), children: "Remove" })
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: { ...btn("default"), background: "#b45309", color: "#fff" }, onClick: confirmVolumeFolder, children: "Add drive folder" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: btn("ghost"), onClick: () => setPendingVolumeFolder(null), children: "Cancel" })
           ] })
-        ] }, folder);
-      }) }),
+        ] })
+      ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
@@ -117907,6 +118201,64 @@ function SettingsView() {
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)" }, children: "Thumbnails are always stored in your library." })
       ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Known drives" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: card, children: volumes.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...rowLast, color: "var(--text-3)", fontStyle: "italic" }, children: "No drives linked yet — add a watched folder on an external drive above." }) : volumes.map((v2, i) => {
+        const isLast = i === volumes.length - 1;
+        return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: isLast ? rowLast : row, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            flexShrink: 0,
+            background: v2.connected ? "#16a34a" : "#ef4444"
+          } }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 0 }, children: [
+            renamingVolumeId === v2.id ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                autoFocus: true,
+                value: renameText,
+                onChange: (e) => setRenameText(e.target.value),
+                onBlur: commitRenameVolume,
+                onKeyDown: (e) => {
+                  if (e.key === "Enter") commitRenameVolume();
+                  if (e.key === "Escape") setRenamingVolumeId(null);
+                },
+                style: {
+                  padding: "3px 6px",
+                  fontSize: 13,
+                  borderRadius: 4,
+                  width: 200,
+                  border: "1px solid var(--border-strong)",
+                  background: "var(--bg-input)",
+                  color: "var(--text)"
+                }
+              }
+            ) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "span",
+              {
+                style: { fontWeight: 600, cursor: "pointer" },
+                title: "Click to rename",
+                onClick: () => startRenameVolume(v2.id, v2.label),
+                children: v2.label
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-3)", marginTop: 2 }, children: v2.connected ? `Connected${v2.mountPath ? ` at ${v2.mountPath}` : ""}` : "Not connected" })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: btn("default"), onClick: () => startRenameVolume(v2.id, v2.label), children: "Rename" })
+        ] }, v2.id);
+      }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginTop: 10 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          style: { ...btn("default"), padding: "7px 14px", opacity: refreshingDrives ? 0.6 : 1 },
+          onClick: refreshDrives,
+          disabled: refreshingDrives,
+          children: refreshingDrives ? "Refreshing…" : "Refresh drives"
+        }
+      ) })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Testing" }),
@@ -118806,12 +119158,13 @@ function ResizeDivider({ onMouseDown }) {
   );
 }
 function App() {
-  const { setGroups, setEvents, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings } = useStore();
+  const { setGroups, setEvents, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings, setVolumes } = useStore();
   reactExports.useEffect(() => {
     window.api.groups.list().then(setGroups);
     window.api.events.list().then(setEvents);
     window.api.settings.get().then(setSettings);
-  }, [setGroups, setEvents, setSettings]);
+    window.api.volumes.list().then(setVolumes);
+  }, [setGroups, setEvents, setSettings, setVolumes]);
   reactExports.useEffect(() => {
     document.documentElement.setAttribute("data-theme", settings?.theme ?? "light");
   }, [settings?.theme]);
@@ -118865,6 +119218,7 @@ function App() {
           setSyncProgress(null);
           refreshExtent();
           bumpRefreshKey();
+          window.api.volumes.list().then(setVolumes);
         }, 1200);
       }
     });
@@ -118876,7 +119230,7 @@ function App() {
       offProgress();
       offWatcher();
     };
-  }, [setSyncProgress, refreshExtent, bumpRefreshKey]);
+  }, [setSyncProgress, refreshExtent, bumpRefreshKey, setVolumes]);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", height: "100vh" }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx(GroupSidebar, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(Main, {})
@@ -119126,6 +119480,7 @@ function Main() {
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "calendar"), onClick: () => setActiveView("calendar"), children: "Calendar" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "map"), onClick: () => setActiveView("map"), children: "Map" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "files"), onClick: () => setActiveView("files"), children: "Files" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "spotify"), onClick: () => setActiveView("spotify"), children: "Spotify" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "settings"), onClick: () => setActiveView("settings"), children: "Settings" })
           ] }),
           activeView !== "settings" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }, children: [
@@ -119186,7 +119541,7 @@ function Main() {
           flexDirection: "column",
           overflow: "hidden"
         }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "map" ? /* @__PURE__ */ jsxRuntimeExports.jsx(MapView, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "map" ? /* @__PURE__ */ jsxRuntimeExports.jsx(MapView, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : activeView === "spotify" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
           activeView === "timeline" && /* @__PURE__ */ jsxRuntimeExports.jsx(EventsPanel, {}),
           activeView === "timeline" && /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyPanel, {})
         ] }) }),

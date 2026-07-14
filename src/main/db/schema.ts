@@ -35,6 +35,15 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_entries_group_id  ON entries(group_id);
 
+    CREATE TABLE IF NOT EXISTS volumes (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      label           TEXT    NOT NULL,
+      volume_serial   TEXT    NOT NULL UNIQUE,
+      last_mount_path TEXT,
+      last_seen_at    INTEGER,
+      created_at      INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS tags (
       id   INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT    NOT NULL COLLATE NOCASE UNIQUE
@@ -96,7 +105,9 @@ function applyMigrations(db: Database.Database): void {
   if (!entryCols.has('latitude'))     db.exec(`ALTER TABLE entries ADD COLUMN latitude  REAL`)
   if (!entryCols.has('longitude'))    db.exec(`ALTER TABLE entries ADD COLUMN longitude REAL`)
   if (!entryCols.has('gps_scanned'))  db.exec(`ALTER TABLE entries ADD COLUMN gps_scanned INTEGER NOT NULL DEFAULT 0`)
+  if (!entryCols.has('volume_id'))    db.exec(`ALTER TABLE entries ADD COLUMN volume_id INTEGER REFERENCES volumes(id) ON DELETE SET NULL`)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_entries_content_hash ON entries(content_hash)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_entries_volume_id ON entries(volume_id)`)
 
   const groupCols = new Set(
     (db.prepare('PRAGMA table_info(groups)').all() as { name: string }[]).map(r => r.name)

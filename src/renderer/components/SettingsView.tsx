@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
-import type { AppSettings, BackupExportType, BackupProgressEvent, DuplicateGroup, SpotifyImportProgressEvent } from '../../shared/types'
+import type { BackupExportType, BackupProgressEvent, DuplicateGroup, SpotifyImportProgressEvent } from '../../shared/types'
 import { THEMES } from '../theme'
+import { VolumeBadgeInline } from './VolumeBadge'
 
 function ipcErrorMessage(e: unknown): string {
   const msg = (e as Error)?.message ?? String(e)
@@ -9,7 +10,11 @@ function ipcErrorMessage(e: unknown): string {
 }
 
 export default function SettingsView() {
-  const { settings, setSettings } = useStore()
+  const { settings, setSettings, volumes, setVolumes } = useStore()
+  const [refreshingDrives, setRefreshingDrives] = useState(false)
+  const [pendingVolumeFolder, setPendingVolumeFolder] = useState<{ path: string; volumeId: number; label: string } | null>(null)
+  const [renamingVolumeId, setRenamingVolumeId] = useState<number | null>(null)
+  const [renameText, setRenameText] = useState('')
   const [pendingLibraryPath, setPendingLibraryPath] = useState<string | null>(null)
   const [fileCount, setFileCount] = useState<number>(0)
   const [migrating, setMigrating] = useState(false)
@@ -67,7 +72,38 @@ export default function SettingsView() {
       }
       setPathHealth(next)
     })
-  }, [setSettings])
+    window.api.volumes.refresh().then(setVolumes)
+  }, [setSettings, setVolumes])
+
+  async function refreshDrives() {
+    setRefreshingDrives(true)
+    try {
+      const list = await window.api.volumes.refresh()
+      setVolumes(list)
+    } finally {
+      setRefreshingDrives(false)
+    }
+  }
+
+  function volumeFor(volumeId: number | null) {
+    if (volumeId == null) return null
+    return volumes.find(v => v.id === volumeId) ?? null
+  }
+
+  async function startRenameVolume(id: number, currentLabel: string) {
+    setRenamingVolumeId(id)
+    setRenameText(currentLabel)
+  }
+
+  async function commitRenameVolume() {
+    if (renamingVolumeId == null) return
+    const label = renameText.trim()
+    if (label) {
+      await window.api.volumes.setLabel(renamingVolumeId, label)
+      setVolumes(volumes.map(v => v.id === renamingVolumeId ? { ...v, label } : v))
+    }
+    setRenamingVolumeId(null)
+  }
 
   useEffect(() => {
     if (typeof window.api.backup?.onProgress !== 'function') return
@@ -81,12 +117,6 @@ export default function SettingsView() {
 
   if (!settings) {
     return <div style={{ padding: 32, color: 'var(--text-3)', fontSize: 13 }}>Loading settings…</div>
-  }
-
-  async function setMode(mode: AppSettings['importMode']) {
-    const next = { ...settings!, importMode: mode }
-    await window.api.settings.set({ importMode: mode })
-    setSettings(next)
   }
 
   async function setTheme(theme: string) {
@@ -123,10 +153,31 @@ export default function SettingsView() {
   async function addWatchedFolder() {
     const chosen = await window.api.settings.pickFolder()
     if (!chosen) return
-    if (settings!.watchedFolders.includes(chosen)) return
-    const next = { ...settings!, watchedFolders: [...settings!.watchedFolders, chosen] }
+    if (settings!.watchedFolders.some(f => f.path === chosen)) return
+
+    const { volumeId, osLabel } = await window.api.volumes.matchPath(chosen)
+    if (volumeId != null) {
+      // Lives on a removable/external drive — confirm the cosmetic label before saving.
+      setPendingVolumeFolder({ path: chosen, volumeId, label: osLabel ?? '' })
+      window.api.volumes.list().then(setVolumes)
+      return
+    }
+
+    const next = { ...settings!, watchedFolders: [...settings!.watchedFolders, { path: chosen, volumeId: null }] }
     await window.api.settings.set({ watchedFolders: next.watchedFolders })
     setSettings(next)
+  }
+
+  async function confirmVolumeFolder() {
+    if (!pendingVolumeFolder) return
+    const { path: chosen, volumeId, label } = pendingVolumeFolder
+    const trimmed = label.trim()
+    if (trimmed) await window.api.volumes.setLabel(volumeId, trimmed)
+    const next = { ...settings!, watchedFolders: [...settings!.watchedFolders, { path: chosen, volumeId }] }
+    await window.api.settings.set({ watchedFolders: next.watchedFolders })
+    setSettings(next)
+    setPendingVolumeFolder(null)
+    window.api.volumes.list().then(setVolumes)
   }
 
   async function resolveWatchedFolder(oldPath: string) {
@@ -136,7 +187,7 @@ export default function SettingsView() {
     try {
       const { found, total } = await window.api.settings.resolveWatchedFolder(oldPath, chosen)
       const foundRatio = total === 0 ? 1 : found / total
-      const next = { ...settings!, watchedFolders: settings!.watchedFolders.map(f => f === oldPath ? chosen : f) }
+      const next = { ...settings!, watchedFolders: settings!.watchedFolders.map(f => f.path === oldPath ? { ...f, path: chosen } : f) }
       setSettings(next)
       setPathHealth(prev => {
         const copy = { ...prev }
@@ -185,8 +236,8 @@ export default function SettingsView() {
     setDupScanning(false)
   }
 
-  async function removeWatchedFolder(folder: string) {
-    const next = { ...settings!, watchedFolders: settings!.watchedFolders.filter(f => f !== folder) }
+  async function removeWatchedFolder(folderPath: string) {
+    const next = { ...settings!, watchedFolders: settings!.watchedFolders.filter(f => f.path !== folderPath) }
     await window.api.settings.set({ watchedFolders: next.watchedFolders })
     setSettings(next)
   }
@@ -260,14 +311,14 @@ export default function SettingsView() {
     }
   }
 
-  async function importSpotifyHistory() {
+  async function importSpotifyHistory(mode: 'files' | 'folder') {
     setSpotifyError(null)
     setSpotifyMessage(null)
     if (typeof window.api.spotify?.pickExport !== 'function') {
       setSpotifyError('Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).')
       return
     }
-    const paths = await window.api.spotify.pickExport()
+    const paths = await window.api.spotify.pickExport(mode)
     if (!paths.length) return
     setSpotifyBusy(true)
     setSpotifyProgress(null)
@@ -360,126 +411,92 @@ export default function SettingsView() {
         </div>
       </div>
 
-      {/* Import mode */}
+      {/* Library location */}
       <div style={section}>
-        <div style={sectionLabel}>Import mode</div>
-        <div style={card}>
-          <div
-            style={row}
-            onClick={() => setMode('copy')}
-            role="radio"
-            aria-checked={settings.importMode === 'copy'}
-          >
-            <div style={radioBtn(settings.importMode === 'copy')} />
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>Copy files into library</div>
-              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
-                Files are duplicated into the managed library. Safe and portable — the library is self-contained.
-              </div>
-            </div>
-          </div>
-          <div
-            style={rowLast}
-            onClick={() => setMode('reference')}
-            role="radio"
-            aria-checked={settings.importMode === 'reference'}
-          >
-            <div style={radioBtn(settings.importMode === 'reference')} />
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>Reference files in place</div>
-              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
-                Original files are not copied. No extra disk usage, but the app depends on files staying at their current paths.
-              </div>
-            </div>
-          </div>
+        <div style={sectionLabel}>Library location</div>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, marginTop: -6 }}>
+          Files you manually import, or that are dropped directly into the library folder, are copied here.
         </div>
-      </div>
-
-      {/* Copy mode: library location */}
-      {settings.importMode === 'copy' && (
-        <div style={section}>
-          <div style={sectionLabel}>Library location</div>
-          <div style={card}>
-            <div style={row}>
-              <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', color: pathColor(settings.libraryPath) }}>
-                {settings.libraryPath}
-                {pathHealth[settings.libraryPath] && !pathHealth[settings.libraryPath].exists && pathHealth[settings.libraryPath].foundRatio === null && (
-                  <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-4)' }}>— folder not found</span>
-                )}
-                {pathHealth[settings.libraryPath]?.foundRatio !== null && pathHealth[settings.libraryPath]?.foundRatio! < 1 && (
-                  <span style={{ marginLeft: 8, fontSize: 11, color: '#d97706' }}>
-                    — {Math.round(pathHealth[settings.libraryPath].foundRatio! * 100)}% of files found
-                  </span>
-                )}
-              </span>
-              {needsResolve(settings.libraryPath) ? (
-                <button
-                  style={btn('default')}
-                  onClick={resolveLibraryPath}
-                  disabled={resolving === settings.libraryPath || migrating}
-                >
-                  {resolving === settings.libraryPath ? 'Resolving…' : 'Resolve…'}
-                </button>
-              ) : (
-                <button
-                  style={btn('default')}
-                  onClick={pickLibraryPath}
-                  disabled={migrating}
-                >
-                  Change…
-                </button>
+        <div style={card}>
+          <div style={row}>
+            <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', color: pathColor(settings.libraryPath) }}>
+              {settings.libraryPath}
+              {pathHealth[settings.libraryPath] && !pathHealth[settings.libraryPath].exists && pathHealth[settings.libraryPath].foundRatio === null && (
+                <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-4)' }}>— folder not found</span>
               )}
-            </div>
-
-            {pendingLibraryPath && (
-              <div style={{
-                ...rowLast,
-                flexDirection: 'column', alignItems: 'flex-start', gap: 10,
-                background: '#fffbeb', borderTop: '1px solid #fde68a',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                  <span style={{ fontSize: 16, lineHeight: 1, marginTop: 1 }}>⚠️</span>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: '#92400e', marginBottom: 4 }}>
-                      Move library to new location?
-                    </div>
-                    <div style={{ fontSize: 12, color: '#78350f', lineHeight: 1.5 }}>
-                      This will move{' '}
-                      <strong>{fileCount} file{fileCount !== 1 ? 's' : ''}</strong> and all thumbnails
-                      from the current location to:
-                      <br />
-                      <span style={{ fontFamily: 'monospace' }}>{pendingLibraryPath}</span>
-                      <br />
-                      The app will be unavailable during the move. This cannot be undone.
-                    </div>
-                  </div>
-                </div>
-                {migrateError && (
-                  <div style={{ fontSize: 12, color: '#b91c1c', background: '#fee2e2', padding: '6px 10px', borderRadius: 4, width: '100%', boxSizing: 'border-box' }}>
-                    {migrateError}
-                  </div>
-                )}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    style={{ ...btn('danger'), background: '#b91c1c', color: '#fff', opacity: migrating ? 0.6 : 1 }}
-                    onClick={confirmMigration}
-                    disabled={migrating}
-                  >
-                    {migrating ? 'Moving…' : 'Move library'}
-                  </button>
-                  <button
-                    style={btn('ghost')}
-                    onClick={() => { setPendingLibraryPath(null); setMigrateError(null) }}
-                    disabled={migrating}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
+              {pathHealth[settings.libraryPath]?.foundRatio !== null && pathHealth[settings.libraryPath]?.foundRatio! < 1 && (
+                <span style={{ marginLeft: 8, fontSize: 11, color: '#d97706' }}>
+                  — {Math.round(pathHealth[settings.libraryPath].foundRatio! * 100)}% of files found
+                </span>
+              )}
+            </span>
+            {needsResolve(settings.libraryPath) ? (
+              <button
+                style={btn('default')}
+                onClick={resolveLibraryPath}
+                disabled={resolving === settings.libraryPath || migrating}
+              >
+                {resolving === settings.libraryPath ? 'Resolving…' : 'Resolve…'}
+              </button>
+            ) : (
+              <button
+                style={btn('default')}
+                onClick={pickLibraryPath}
+                disabled={migrating}
+              >
+                Change…
+              </button>
             )}
           </div>
+
+          {pendingLibraryPath && (
+            <div style={{
+              ...rowLast,
+              flexDirection: 'column', alignItems: 'flex-start', gap: 10,
+              background: '#fffbeb', borderTop: '1px solid #fde68a',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <span style={{ fontSize: 16, lineHeight: 1, marginTop: 1 }}>⚠️</span>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: '#92400e', marginBottom: 4 }}>
+                    Move library to new location?
+                  </div>
+                  <div style={{ fontSize: 12, color: '#78350f', lineHeight: 1.5 }}>
+                    This will move{' '}
+                    <strong>{fileCount} file{fileCount !== 1 ? 's' : ''}</strong> and all thumbnails
+                    from the current location to:
+                    <br />
+                    <span style={{ fontFamily: 'monospace' }}>{pendingLibraryPath}</span>
+                    <br />
+                    The app will be unavailable during the move. This cannot be undone.
+                  </div>
+                </div>
+              </div>
+              {migrateError && (
+                <div style={{ fontSize: 12, color: '#b91c1c', background: '#fee2e2', padding: '6px 10px', borderRadius: 4, width: '100%', boxSizing: 'border-box' }}>
+                  {migrateError}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  style={{ ...btn('danger'), background: '#b91c1c', color: '#fff', opacity: migrating ? 0.6 : 1 }}
+                  onClick={confirmMigration}
+                  disabled={migrating}
+                >
+                  {migrating ? 'Moving…' : 'Move library'}
+                </button>
+                <button
+                  style={btn('ghost')}
+                  onClick={() => { setPendingLibraryPath(null); setMigrateError(null) }}
+                  disabled={migrating}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Backup & restore */}
       <div style={section}>
@@ -611,18 +628,27 @@ export default function SettingsView() {
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 600, marginBottom: 2 }}>Import Spotify history</div>
               <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
-                Select the folder from your Spotify "Extended streaming history" data export — the one
-                containing files named Streaming_History_Audio_*.json. Plays show up when you click on the
-                day you listened to them on the timeline.
+                Point this at your Spotify "Extended streaming history" data export — either the
+                folder itself, or the individual files named Streaming_History_Audio_*.json inside it.
+                Plays show up when you click on the day you listened to them on the timeline.
               </div>
             </div>
-            <button
-              style={{ ...btn('default'), flexShrink: 0, opacity: spotifyBusy ? 0.6 : 1 }}
-              onClick={importSpotifyHistory}
-              disabled={spotifyBusy}
-            >
-              {spotifyBusy ? 'Importing…' : 'Import…'}
-            </button>
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              <button
+                style={{ ...btn('default'), opacity: spotifyBusy ? 0.6 : 1 }}
+                onClick={() => importSpotifyHistory('folder')}
+                disabled={spotifyBusy}
+              >
+                {spotifyBusy ? 'Importing…' : 'Choose folder…'}
+              </button>
+              <button
+                style={{ ...btn('default'), opacity: spotifyBusy ? 0.6 : 1 }}
+                onClick={() => importSpotifyHistory('files')}
+                disabled={spotifyBusy}
+              >
+                {spotifyBusy ? 'Importing…' : 'Choose files…'}
+              </button>
+            </div>
           </div>
           {spotifyBusy && spotifyProgress && (
             <div style={{ ...rowLast, borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-3)' }}>
@@ -827,66 +853,171 @@ export default function SettingsView() {
         </div>
       </div>
 
-      {/* Reference mode: watched folders */}
-      {settings.importMode === 'reference' && (
-        <div style={section}>
-          <div style={sectionLabel}>Watched folders</div>
-          <div style={card}>
-            {settings.watchedFolders.length === 0 ? (
-              <div style={{ ...rowLast, color: 'var(--text-3)', fontStyle: 'italic' }}>
-                No folders added yet.
-              </div>
-            ) : (
-              settings.watchedFolders.map((folder, i) => {
-                const isLast = i === settings.watchedFolders.length - 1
-                const health = pathHealth[folder]
-                return (
-                  <div key={folder} style={isLast ? rowLast : row}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', color: pathColor(folder) }}>
-                        {folder}
+      {/* Watched folders */}
+      <div style={section}>
+        <div style={sectionLabel}>Watched folders</div>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, marginTop: -6 }}>
+          Folders below are watched continuously and their files are referenced in place — never copied.
+        </div>
+        <div style={card}>
+          {settings.watchedFolders.length === 0 ? (
+            <div style={{ ...rowLast, color: 'var(--text-3)', fontStyle: 'italic' }}>
+              No folders added yet.
+            </div>
+          ) : (
+            settings.watchedFolders.map((folder, i) => {
+              const isLast = i === settings.watchedFolders.length - 1 && !pendingVolumeFolder
+              const health = pathHealth[folder.path]
+              const onDrive = folder.volumeId != null
+              return (
+                <div key={folder.path} style={isLast ? rowLast : row}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all', color: pathColor(folder.path) }}>
+                      {folder.path}
+                    </span>
+                    {onDrive ? (
+                      <span style={{ marginLeft: 8 }}>
+                        <VolumeBadgeInline volumeId={folder.volumeId} />
                       </span>
-                      {health && !health.exists && health.foundRatio === null && (
-                        <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-4)' }}>— folder not found</span>
-                      )}
-                      {health?.foundRatio !== null && health?.foundRatio !== undefined && health.foundRatio < 1 && (
-                        <span style={{ marginLeft: 8, fontSize: 11, color: health.foundRatio === 0 ? 'var(--text-4)' : '#d97706' }}>
-                          — {health.foundRatio === 0 ? 'no files found' : `${Math.round(health.foundRatio * 100)}% of files found`}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                      {needsResolve(folder) && (
-                        <button
-                          style={btn('default')}
-                          onClick={() => resolveWatchedFolder(folder)}
-                          disabled={resolving === folder}
-                        >
-                          {resolving === folder ? 'Resolving…' : 'Resolve…'}
-                        </button>
-                      )}
-                      <button style={btn('danger')} onClick={() => removeWatchedFolder(folder)}>
-                        Remove
+                    ) : (
+                      <>
+                        {health && !health.exists && health.foundRatio === null && (
+                          <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-4)' }}>— folder not found</span>
+                        )}
+                        {health?.foundRatio !== null && health?.foundRatio !== undefined && health.foundRatio < 1 && (
+                          <span style={{ marginLeft: 8, fontSize: 11, color: health.foundRatio === 0 ? 'var(--text-4)' : '#d97706' }}>
+                            — {health.foundRatio === 0 ? 'no files found' : `${Math.round(health.foundRatio * 100)}% of files found`}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    {/* A drive-backed folder that isn't found just means "unplugged" —
+                        self-heals on reconnect, so no manual re-pointing action here. */}
+                    {!onDrive && needsResolve(folder.path) && (
+                      <button
+                        style={btn('default')}
+                        onClick={() => resolveWatchedFolder(folder.path)}
+                        disabled={resolving === folder.path}
+                      >
+                        {resolving === folder.path ? 'Resolving…' : 'Resolve…'}
                       </button>
+                    )}
+                    <button style={btn('danger')} onClick={() => removeWatchedFolder(folder.path)}>
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              )
+            })
+          )}
+          {pendingVolumeFolder && (
+            <div style={{
+              ...rowLast,
+              flexDirection: 'column', alignItems: 'flex-start', gap: 10,
+              background: '#fffbeb', borderTop: '1px solid #fde68a',
+            }}>
+              <div style={{ fontSize: 12, color: '#78350f', lineHeight: 1.5 }}>
+                <span style={{ fontFamily: 'monospace' }}>{pendingVolumeFolder.path}</span> is on a
+                removable drive. Give it a name to help you recognize it later — this is just a label
+                and won't affect how the drive is recognized when reconnected.
+              </div>
+              <input
+                autoFocus
+                value={pendingVolumeFolder.label}
+                onChange={e => setPendingVolumeFolder({ ...pendingVolumeFolder, label: e.target.value })}
+                placeholder="e.g. Rugged HDD 1"
+                style={{
+                  padding: '6px 10px', fontSize: 13, borderRadius: 5, width: 220,
+                  border: '1px solid var(--border-strong)', background: 'var(--bg-input)', color: 'var(--text)',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={{ ...btn('default'), background: '#b45309', color: '#fff' }} onClick={confirmVolumeFolder}>
+                  Add drive folder
+                </button>
+                <button style={btn('ghost')} onClick={() => setPendingVolumeFolder(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <button
+            style={{ ...btn('default'), padding: '7px 14px' }}
+            onClick={addWatchedFolder}
+          >
+            + Add folder
+          </button>
+          <span style={{ fontSize: 11, color: 'var(--text-4)' }}>
+            Thumbnails are always stored in your library.
+          </span>
+        </div>
+      </div>
+
+      {/* Known drives */}
+      <div style={section}>
+        <div style={sectionLabel}>Known drives</div>
+        <div style={card}>
+          {volumes.length === 0 ? (
+            <div style={{ ...rowLast, color: 'var(--text-3)', fontStyle: 'italic' }}>
+              No drives linked yet — add a watched folder on an external drive above.
+            </div>
+          ) : (
+            volumes.map((v, i) => {
+              const isLast = i === volumes.length - 1
+              return (
+                <div key={v.id} style={isLast ? rowLast : row}>
+                  <div style={{
+                    width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                    background: v.connected ? '#16a34a' : '#ef4444',
+                  }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {renamingVolumeId === v.id ? (
+                      <input
+                        autoFocus
+                        value={renameText}
+                        onChange={e => setRenameText(e.target.value)}
+                        onBlur={commitRenameVolume}
+                        onKeyDown={e => { if (e.key === 'Enter') commitRenameVolume(); if (e.key === 'Escape') setRenamingVolumeId(null) }}
+                        style={{
+                          padding: '3px 6px', fontSize: 13, borderRadius: 4, width: 200,
+                          border: '1px solid var(--border-strong)', background: 'var(--bg-input)', color: 'var(--text)',
+                        }}
+                      />
+                    ) : (
+                      <span
+                        style={{ fontWeight: 600, cursor: 'pointer' }}
+                        title="Click to rename"
+                        onClick={() => startRenameVolume(v.id, v.label)}
+                      >
+                        {v.label}
+                      </span>
+                    )}
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                      {v.connected ? `Connected${v.mountPath ? ` at ${v.mountPath}` : ''}` : 'Not connected'}
                     </div>
                   </div>
-                )
-              })
-            )}
-          </div>
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <button
-              style={{ ...btn('default'), padding: '7px 14px' }}
-              onClick={addWatchedFolder}
-            >
-              + Add folder
-            </button>
-            <span style={{ fontSize: 11, color: 'var(--text-4)' }}>
-              Thumbnails are always stored in your library.
-            </span>
-          </div>
+                  <button style={btn('default')} onClick={() => startRenameVolume(v.id, v.label)}>
+                    Rename
+                  </button>
+                </div>
+              )
+            })
+          )}
         </div>
-      )}
+        <div style={{ marginTop: 10 }}>
+          <button
+            style={{ ...btn('default'), padding: '7px 14px', opacity: refreshingDrives ? 0.6 : 1 }}
+            onClick={refreshDrives}
+            disabled={refreshingDrives}
+          >
+            {refreshingDrives ? 'Refreshing…' : 'Refresh drives'}
+          </button>
+        </div>
+      </div>
 
       {/* Testing */}
       <div style={section}>

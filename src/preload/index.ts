@@ -6,6 +6,7 @@ import type {
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
+  ListeningBucket, YearlySpotifySummary, VolumeStatus,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -176,18 +177,32 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
   spotify: {
-    pickExport: (): Promise<string[]> =>
-      ipcRenderer.invoke('spotify:pickExport'),
+    pickExport: (mode?: 'files' | 'folder'): Promise<string[]> =>
+      ipcRenderer.invoke('spotify:pickExport', mode),
     import: (paths: string[]): Promise<SpotifyImportResult> =>
       ipcRenderer.invoke('spotify:import', paths),
     forPeriod: (from: number, to: number): Promise<SpotifyPlay[]> =>
       ipcRenderer.invoke('spotify:forPeriod', from, to),
     topArtists: (from: number, to: number, limit?: number): Promise<ArtistPlaytime[]> =>
       ipcRenderer.invoke('spotify:topArtists', from, to, limit ?? 50),
+    histogram: (from: number, to: number, zoomLevel: string): Promise<ListeningBucket[]> =>
+      ipcRenderer.invoke('spotify:histogram', from, to, zoomLevel),
+    yearlySummaries: (): Promise<YearlySpotifySummary[]> =>
+      ipcRenderer.invoke('spotify:yearlySummaries'),
     onProgress: (cb: (event: SpotifyImportProgressEvent) => void) => {
       const handler = (_: unknown, data: SpotifyImportProgressEvent) => cb(data)
       ipcRenderer.on('spotify:progress', handler)
       return () => ipcRenderer.removeListener('spotify:progress', handler)
     },
+  },
+  volumes: {
+    list: (): Promise<VolumeStatus[]> =>
+      ipcRenderer.invoke('volumes:list'),
+    refresh: (): Promise<VolumeStatus[]> =>
+      ipcRenderer.invoke('volumes:refresh'),
+    matchPath: (path: string): Promise<{ volumeId: number | null; osLabel: string | null }> =>
+      ipcRenderer.invoke('volumes:matchPath', path),
+    setLabel: (id: number, label: string): Promise<void> =>
+      ipcRenderer.invoke('volumes:setLabel', id, label),
   },
 })

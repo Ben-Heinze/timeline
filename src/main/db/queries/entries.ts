@@ -1,5 +1,6 @@
 import { getDb } from '../index'
 import { getGroupSubtreeIds } from './groups'
+import { bucketExprSql } from './bucketing'
 import type { Entry, Bucket, SearchFilters, DuplicateGroup } from '../../../shared/types'
 
 // Selecting a group includes its whole subtree. Ids come from our own table,
@@ -9,16 +10,7 @@ function groupFilterSql(groupId: number): string {
 }
 
 export function getHistogram(from: number, to: number, zoomLevel: string, groupId?: number): Bucket[] {
-  // All expressions bucket by LOCAL calendar date and return the LOCAL midnight as a UTC ms
-  // timestamp (using the 'utc' modifier so the result matches new Date(y,m,d).getTime() in JS).
-  let bucketExpr: string
-  if (zoomLevel === 'year') {
-    bucketExpr = `CAST(strftime('%s', strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01-01', 'utc') AS INTEGER) * 1000`
-  } else if (zoomLevel === 'month') {
-    bucketExpr = `CAST(strftime('%s', strftime('%Y-%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01', 'utc') AS INTEGER) * 1000`
-  } else {
-    bucketExpr = `CAST(strftime('%s', date(datetime(timestamp/1000, 'unixepoch', 'localtime')), 'utc') AS INTEGER) * 1000`
-  }
+  const bucketExpr = bucketExprSql(zoomLevel)
 
   const sql = `
     SELECT
@@ -164,11 +156,11 @@ export function insertEntry(entry: Omit<Entry, 'id'>): number {
     INSERT INTO entries
       (type, timestamp, title, file_path, thumbnail_small, thumbnail_medium,
        thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review,
-       is_missing, content_hash, import_mode, latitude, longitude, gps_scanned, created_at)
+       is_missing, content_hash, import_mode, volume_id, latitude, longitude, gps_scanned, created_at)
     VALUES
       (@type, @timestamp, @title, @file_path, @thumbnail_small, @thumbnail_medium,
        @thumbnail_large, @duration_seconds, @rich_text_json, @group_id, @needs_date_review,
-       @is_missing, @content_hash, @import_mode, @latitude, @longitude, @gps_scanned, @created_at)
+       @is_missing, @content_hash, @import_mode, @volume_id, @latitude, @longitude, @gps_scanned, @created_at)
   `).run(entry)
   return result.lastInsertRowid as number
 }

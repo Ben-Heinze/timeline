@@ -1,10 +1,10 @@
 import http from 'http'
 import crypto from 'crypto'
-import path, { extname } from 'path'
+import { extname } from 'path'
 import { createReadStream, statSync } from 'fs'
 import type { AddressInfo } from 'net'
 import { getEntry } from './db/queries/entries'
-import { getLibraryPath } from './library'
+import { resolveEntryAbsolutePath } from './volumes/paths'
 
 const MEDIA_MIME: Record<string, string> = {
   '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime',
@@ -13,13 +13,11 @@ const MEDIA_MIME: Record<string, string> = {
   '.ogg': 'audio/ogg', '.opus': 'audio/opus', '.wav': 'audio/wav', '.flac': 'audio/flac',
 }
 
-/** Absolute path to the entry's file on disk, or null if it has none. */
+/** Absolute path to the entry's file on disk, or null if it has none / its volume isn't connected. */
 export function resolveEntryFilePath(entryId: number): string | null {
   const entry = getEntry(entryId)
-  if (!entry?.file_path) return null
-  return entry.import_mode === 'reference'
-    ? entry.file_path
-    : path.join(getLibraryPath(), entry.file_path)
+  if (!entry) return null
+  return resolveEntryAbsolutePath(entry)
 }
 
 // Media is served over a loopback HTTP server rather than a custom protocol:

@@ -4,6 +4,7 @@ import StarterKit from '@tiptap/starter-kit'
 import { useStore } from '../store/useStore'
 import type { Entry, Tag, FileInfo } from '../../shared/types'
 import TagEditor from './TagEditor'
+import { useVolumeStatus, VolumeBadgeInline } from './VolumeBadge'
 
 const TYPE_COLORS: Record<string, string> = {
   photo:    '#3b82f6',
@@ -200,6 +201,7 @@ function formatDateTime(ms: number): string {
 
 function MetadataPanel({ entry }: { entry: Entry }) {
   const [info, setInfo] = useState<FileInfo | null>(null)
+  const volumeStatus = useVolumeStatus(entry.volume_id)
 
   useEffect(() => {
     let alive = true
@@ -229,6 +231,7 @@ function MetadataPanel({ entry }: { entry: Entry }) {
     rows.push(['Location', info?.absolutePath ?? entry.file_path])
     rows.push(['Import mode', entry.import_mode === 'copy' ? 'Copied into library' : 'Referenced in place'])
   }
+  if (volumeStatus) rows.push(['Drive', <VolumeBadgeInline volumeId={entry.volume_id} />])
   if (entry.content_hash) {
     rows.push(['SHA-256', (
       <span title={entry.content_hash} style={{ fontFamily: 'monospace', fontSize: 11 }}>
@@ -269,6 +272,9 @@ const fileBtnStyle: React.CSSProperties = {
 
 function FileActions({ entry }: { entry: Entry }) {
   const [error, setError] = useState<string | null>(null)
+  const volumeStatus = useVolumeStatus(entry.volume_id)
+  const disconnected = volumeStatus !== null && !volumeStatus.connected
+  const unreachable = !!entry.is_missing || disconnected
 
   const run = async (action: () => Promise<string | void>) => {
     setError(null)
@@ -281,17 +287,19 @@ function FileActions({ entry }: { entry: Entry }) {
       padding: '10px 16px', borderTop: '1px solid var(--border-light)',
       display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
     }}>
-      <button style={fileBtnStyle} onClick={() => run(() => window.api.files.showInFolder(entry.id))}>
+      <button style={{ ...fileBtnStyle, opacity: unreachable ? 0.5 : 1 }} disabled={unreachable} onClick={() => run(() => window.api.files.showInFolder(entry.id))}>
         📁 Show in Folder
       </button>
-      <button style={fileBtnStyle} onClick={() => run(() => window.api.files.openDefault(entry.id))}>
+      <button style={{ ...fileBtnStyle, opacity: unreachable ? 0.5 : 1 }} disabled={unreachable} onClick={() => run(() => window.api.files.openDefault(entry.id))}>
         Open
       </button>
-      <button style={fileBtnStyle} onClick={() => run(() => window.api.files.openWith(entry.id))}>
+      <button style={{ ...fileBtnStyle, opacity: unreachable ? 0.5 : 1 }} disabled={unreachable} onClick={() => run(() => window.api.files.openWith(entry.id))}>
         Open With…
       </button>
       {entry.is_missing ? (
         <span style={{ fontSize: 11, color: 'var(--text-4)' }}>File is missing</span>
+      ) : disconnected ? (
+        <VolumeBadgeInline volumeId={entry.volume_id} />
       ) : null}
       {error && <span style={{ fontSize: 11, color: '#ef4444' }}>{error}</span>}
     </div>

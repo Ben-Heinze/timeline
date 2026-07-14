@@ -5,6 +5,7 @@ import TimelineCanvas, { yearViewRange } from './components/TimelineCanvas'
 import CalendarHeatmap from './components/CalendarHeatmap'
 import MapView from './components/MapView'
 import FilesView from './components/FilesView'
+import SpotifyView from './components/SpotifyView'
 import FileBrowser from './components/FileBrowser'
 import EntryModal from './components/EntryModal'
 import GroupSidebar from './components/GroupSidebar'
@@ -38,13 +39,14 @@ function ResizeDivider({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => 
 }
 
 export default function App() {
-  const { setGroups, setEvents, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings } = useStore()
+  const { setGroups, setEvents, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings, setVolumes } = useStore()
 
   useEffect(() => {
     window.api.groups.list().then(setGroups)
     window.api.events.list().then(setEvents)
     window.api.settings.get().then(setSettings)
-  }, [setGroups, setEvents, setSettings])
+    window.api.volumes.list().then(setVolumes)
+  }, [setGroups, setEvents, setSettings, setVolumes])
 
   // Apply theme to document root whenever settings.theme changes
   useEffect(() => {
@@ -100,6 +102,7 @@ export default function App() {
           setSyncProgress(null)
           refreshExtent()
           bumpRefreshKey()
+          window.api.volumes.list().then(setVolumes)
         }, 1200)
       }
     })
@@ -108,7 +111,7 @@ export default function App() {
       bumpRefreshKey()
     })
     return () => { offProgress(); offWatcher() }
-  }, [setSyncProgress, refreshExtent, bumpRefreshKey])
+  }, [setSyncProgress, refreshExtent, bumpRefreshKey, setVolumes])
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
@@ -391,6 +394,9 @@ function Main() {
           <button style={tabStyle(activeView === 'files')} onClick={() => setActiveView('files')}>
             Files
           </button>
+          <button style={tabStyle(activeView === 'spotify')} onClick={() => setActiveView('spotify')}>
+            Spotify
+          </button>
           <button style={tabStyle(activeView === 'settings')} onClick={() => setActiveView('settings')}>
             Settings
           </button>
@@ -445,6 +451,7 @@ function Main() {
              : activeView === 'calendar' ? <CalendarHeatmap />
              : activeView === 'map' ? <MapView />
              : activeView === 'settings' ? <SettingsView />
+             : activeView === 'spotify' ? <SpotifyView />
              : <FilesView />}
           </div>
           {activeView === 'timeline' && <EventsPanel />}

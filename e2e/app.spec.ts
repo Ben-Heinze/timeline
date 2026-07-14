@@ -47,7 +47,7 @@ test.describe('App launch and navigation', () => {
   test('switches to Settings view and hides action buttons', async ({ appPage: page }) => {
     await page.getByRole('button', { name: 'Settings' }).click()
     await expect(page.getByRole('button', { name: '+ Journal' })).not.toBeVisible()
-    await expect(page.getByText(/import mode/i).first()).toBeVisible()
+    await expect(page.getByText(/library location/i).first()).toBeVisible()
   })
 
   test('returns to Timeline view from Settings', async ({ appPage: page }) => {

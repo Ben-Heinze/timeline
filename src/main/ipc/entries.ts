@@ -58,6 +58,7 @@ export function registerEntryHandlers(): void {
       is_missing: 0,
       content_hash: null,
       import_mode: 'copy',
+      volume_id: null,
       latitude: null,
       longitude: null,
       gps_scanned: 0,

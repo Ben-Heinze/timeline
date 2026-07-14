@@ -1,5 +1,6 @@
 import React from 'react'
 import type { Entry, FileViewMode } from '../../shared/types'
+import { VolumeBadgeDot } from './VolumeBadge'
 
 export const THUMB_SIZE: Record<Exclude<FileViewMode, 'list'>, number> = {
   small: 84, medium: 132, large: 200,
@@ -16,18 +17,21 @@ export const Thumb = React.memo(function Thumb({ entry, size }: { entry: Entry; 
   const src = entry.thumbnail_medium ?? entry.thumbnail_small ?? entry.thumbnail_large
   if (src) {
     return (
-      <img
-        src={`timeline:///${src}`}
-        style={{ width: size, height: size, objectFit: 'cover', display: 'block', borderRadius: 6, background: 'var(--bg-thumb)' }}
-        draggable={false}
-      />
+      <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+        <img
+          src={`timeline:///${src}`}
+          style={{ width: size, height: size, objectFit: 'cover', display: 'block', borderRadius: 6, background: 'var(--bg-thumb)' }}
+          draggable={false}
+        />
+        <VolumeBadgeDot volumeId={entry.volume_id} />
+      </div>
     )
   }
   const badge = Math.round(size * 0.4)
   return (
     <div style={{
-      width: size, height: size, borderRadius: 6, background: 'var(--bg-thumb)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      position: 'relative', width: size, height: size, borderRadius: 6, background: 'var(--bg-thumb)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
     }}>
       <div style={{
         width: badge, height: badge, borderRadius: badge * 0.22,
@@ -37,6 +41,7 @@ export const Thumb = React.memo(function Thumb({ entry, size }: { entry: Entry; 
       }}>
         {TYPE_LABELS[entry.type] ?? '?'}
       </div>
+      <VolumeBadgeDot volumeId={entry.volume_id} />
     </div>
   )
 })

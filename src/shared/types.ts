@@ -6,7 +6,9 @@ export interface Entry {
   type: EntryType
   timestamp: number            // Unix ms
   title: string | null
-  file_path: string | null     // Relative to library root (copy mode) or absolute path (reference mode)
+  // Relative to library root (copy mode); absolute path (reference mode, no volume);
+  // or relative to the volume's mount root (reference mode, volume_id set)
+  file_path: string | null
   thumbnail_small: string | null
   thumbnail_medium: string | null
   thumbnail_large: string | null
@@ -17,10 +19,33 @@ export interface Entry {
   is_missing: number           // 0 | 1
   content_hash: string | null
   import_mode: 'copy' | 'reference'
+  volume_id: number | null          // set for reference-mode files tracked on a removable/external drive
   latitude: number | null           // decimal degrees, from photo EXIF GPS
   longitude: number | null
   gps_scanned: number               // 0 | 1 — file has been checked for GPS EXIF
   created_at: number
+}
+
+export interface WatchedFolder {
+  path: string
+  volumeId: number | null      // null = folder lives on the primary/always-available disk
+}
+
+export interface Volume {
+  id: number
+  label: string                     // user-editable, cosmetic only — not used for matching
+  volume_serial: string             // OS-level identifier (filesystem UUID / Windows UniqueId) — matching key
+  last_mount_path: string | null
+  last_seen_at: number | null
+  created_at: number
+}
+
+export interface VolumeStatus {
+  id: number
+  label: string
+  volume_serial: string
+  connected: boolean
+  mountPath: string | null
 }
 
 export interface Group {
@@ -103,9 +128,8 @@ export interface MapDownloadProgressEvent {
 }
 
 export interface AppSettings {
-  importMode: 'copy' | 'reference'
   libraryPath: string
-  watchedFolders: string[]
+  watchedFolders: WatchedFolder[]
   duplicateScanMode: 'hash' | 'name_size'
   histogramHeight: number | null   // null = fullscreen (fills screen)
   theme: string
@@ -232,4 +256,25 @@ export interface ArtistPlaytime {
   artist_name: string
   ms_played: number
   play_count: number
+}
+
+export interface TrackPlaytime {
+  track_name: string
+  artist_name: string | null
+  ms_played: number
+  play_count: number
+}
+
+export interface ListeningBucket {
+  bucket_start: number         // Unix ms, same calendar alignment as Bucket
+  ms_played: number
+}
+
+export interface YearlySpotifySummary {
+  year: number
+  msPlayed: number
+  playCount: number
+  topArtists: ArtistPlaytime[] // up to 5, highest first
+  topTrack: TrackPlaytime | null
+  monthly: number[]            // length 12, ms_played per calendar month (Jan..Dec)
 }

@@ -6,8 +6,16 @@ import exifr from 'exifr'
 import { getFilesPath, getLibraryPath, getThumbnailPath } from '../library'
 import { insertEntry, findEntryByHash, updateEntry, getUnscannedGpsPhotos } from '../db/queries/entries'
 import { findOrCreateGroupPath } from '../db/queries/groups'
-import { getSettings } from '../settings'
+import { getVolumeById } from '../db/queries/volumes'
+import { getMountPathForSerial } from '../volumes'
+import { resolveEntryAbsolutePath } from '../volumes/paths'
 import type { Entry, EntryType, IngestProgressEvent, IngestFailure } from '../../shared/types'
+
+/** Current mount path for a volume id, or null if unknown/not connected. */
+function mountPathForVolumeId(volumeId: number): string | null {
+  const vol = getVolumeById(volumeId)
+  return vol ? getMountPathForSerial(vol.volume_serial) : null
+}
 
 export const IMAGE_EXTS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.webp', '.tiff', '.tif',
@@ -75,7 +83,10 @@ export async function extractExifGps(sourcePath: string): Promise<{ latitude: nu
 async function relinkEntry(entry: Entry, sourcePath: string, relDir: string, fileName: string): Promise<void> {
   let storedFilePath: string
   if (entry.import_mode === 'reference') {
-    storedFilePath = sourcePath
+    const mountPath = entry.volume_id != null ? mountPathForVolumeId(entry.volume_id) : null
+    storedFilePath = mountPath
+      ? path.relative(mountPath, sourcePath).split(path.sep).join('/')
+      : sourcePath
   } else {
     const relToFiles = path.relative(getFilesPath(), sourcePath)
     const alreadyInLibrary = !relToFiles.startsWith('..') && !path.isAbsolute(relToFiles)
@@ -149,7 +160,7 @@ interface OneResult {
 // original's row exists — without this guard that race inserts duplicates.
 const inFlightHashes = new Set<string>()
 
-async function ingestOne(sourcePath: string, relDir: string, groupPath: string[]): Promise<OneResult> {
+async function ingestOne(sourcePath: string, relDir: string, groupPath: string[], mode: 'copy' | 'reference', volumeId: number | null): Promise<OneResult> {
   const fileName = path.basename(sourcePath)
   const ext = path.extname(fileName)
   const type = detectType(ext)
@@ -173,12 +184,14 @@ async function ingestOne(sourcePath: string, relDir: string, groupPath: string[]
     // Thumbnails are keyed by a unique stem, independent of the stored file name
     const baseName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}`
 
-    const settings = getSettings()
-    const isReference = settings.importMode === 'reference'
+    const isReference = mode === 'reference'
     let storedFilePath: string
 
     if (isReference) {
-      storedFilePath = sourcePath
+      const mountPath = volumeId != null ? mountPathForVolumeId(volumeId) : null
+      storedFilePath = mountPath
+        ? path.relative(mountPath, sourcePath).split(path.sep).join('/')
+        : sourcePath
     } else {
       const relToFiles = path.relative(getFilesPath(), sourcePath)
       const alreadyInLibrary = !relToFiles.startsWith('..') && !path.isAbsolute(relToFiles)
@@ -225,6 +238,7 @@ async function ingestOne(sourcePath: string, relDir: string, groupPath: string[]
       is_missing: 0,
       content_hash: contentHash,
       import_mode: isReference ? 'reference' : 'copy',
+      volume_id: isReference ? volumeId : null,
       latitude: gps?.latitude ?? null,
       longitude: gps?.longitude ?? null,
       gps_scanned: 1,
@@ -246,9 +260,8 @@ export async function backfillGps(): Promise<number> {
   const photos = getUnscannedGpsPhotos()
   let found = 0
   for (const entry of photos) {
-    const absPath = entry.import_mode === 'reference'
-      ? entry.file_path!
-      : path.join(getLibraryPath(), entry.file_path!)
+    const absPath = resolveEntryAbsolutePath(entry)
+    if (!absPath) continue // e.g. on a currently-disconnected volume — try again next sync
     const gps = await extractExifGps(absPath)
     if (gps) {
       updateEntry(entry.id, { latitude: gps.latitude, longitude: gps.longitude, gps_scanned: 1 })
@@ -303,6 +316,8 @@ export interface IngestResult {
 
 export async function ingestFiles(
   filePaths: string[],
+  mode: 'copy' | 'reference',
+  volumeId: number | null,
   onProgress: (event: IngestProgressEvent) => void,
 ): Promise<IngestResult> {
   const files = await expandPaths(filePaths)
@@ -324,7 +339,7 @@ export async function ingestFiles(
       const fileName = path.basename(src)
       let error: string | undefined
       try {
-        const result = await ingestOne(src, relDir, groupPath)
+        const result = await ingestOne(src, relDir, groupPath, mode, volumeId)
         if (result.id != null) insertedIds.push(result.id)
       } catch (e) {
         error = (e as Error).message ?? String(e)

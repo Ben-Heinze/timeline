@@ -5,6 +5,7 @@ import { closeDb } from './db'
 import { registerAllHandlers } from './ipc'
 import { startMediaServer } from './media'
 import { startWatcher, stopWatcher } from './sync'
+import { refreshVolumes, backfillWatchedFolderVolumes } from './volumes'
 
 // Allow timeline:// to be used in img src without CSP issues
 protocol.registerSchemesAsPrivileged([
@@ -37,7 +38,7 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   ensureLibraryDirs()
   registerAllHandlers()
 
@@ -47,6 +48,9 @@ app.whenReady().then(() => {
     const filePath = normalize(join(getLibraryPath(), rel))
     return net.fetch(`file://${filePath}`)
   })
+
+  await refreshVolumes()
+  backfillWatchedFolderVolumes()
 
   startMediaServer().then(createWindow)
   startWatcher()

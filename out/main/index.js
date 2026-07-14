@@ -14,6 +14,10 @@ const child_process = require("child_process");
 const http = require("http");
 const settingsFile = () => path.join(electron.app.getPath("userData"), "settings.json");
 let cached = null;
+function migrateWatchedFolders(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((f) => typeof f === "string" ? { path: f, volumeId: null } : f);
+}
 function getSettings() {
   if (cached) return cached;
   const defaultLibrary = path.join(electron.app.getPath("userData"), "library");
@@ -21,9 +25,8 @@ function getSettings() {
     const raw = fs.readFileSync(settingsFile(), "utf-8");
     const parsed = JSON.parse(raw);
     cached = {
-      importMode: parsed.importMode ?? "copy",
       libraryPath: parsed.libraryPath || defaultLibrary,
-      watchedFolders: Array.isArray(parsed.watchedFolders) ? parsed.watchedFolders : [],
+      watchedFolders: migrateWatchedFolders(parsed.watchedFolders),
       duplicateScanMode: parsed.duplicateScanMode ?? "hash",
       histogramHeight: parsed.histogramHeight !== void 0 ? parsed.histogramHeight : 420,
       theme: parsed.theme ?? "light",
@@ -35,7 +38,7 @@ function getSettings() {
       mapMode: parsed.mapMode ?? "offline"
     };
   } catch {
-    cached = { importMode: "copy", libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium", mapMode: "offline" };
+    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium", mapMode: "offline" };
   }
   return cached;
 }
@@ -51,6 +54,10 @@ function getFilesPath() {
 }
 function getThumbnailPath(size) {
   return path.join(getLibraryPath(), "thumbnails", size);
+}
+function isPathUnder(root, target) {
+  const rel = path.relative(root, target);
+  return rel === "" || !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 function ensureLibraryDirs() {
   const dirs = [
@@ -98,6 +105,15 @@ function initSchema(db2) {
 
     CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_entries_group_id  ON entries(group_id);
+
+    CREATE TABLE IF NOT EXISTS volumes (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      label           TEXT    NOT NULL,
+      volume_serial   TEXT    NOT NULL UNIQUE,
+      last_mount_path TEXT,
+      last_seen_at    INTEGER,
+      created_at      INTEGER NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS tags (
       id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,7 +174,9 @@ function applyMigrations(db2) {
   if (!entryCols.has("latitude")) db2.exec(`ALTER TABLE entries ADD COLUMN latitude  REAL`);
   if (!entryCols.has("longitude")) db2.exec(`ALTER TABLE entries ADD COLUMN longitude REAL`);
   if (!entryCols.has("gps_scanned")) db2.exec(`ALTER TABLE entries ADD COLUMN gps_scanned INTEGER NOT NULL DEFAULT 0`);
+  if (!entryCols.has("volume_id")) db2.exec(`ALTER TABLE entries ADD COLUMN volume_id INTEGER REFERENCES volumes(id) ON DELETE SET NULL`);
   db2.exec(`CREATE INDEX IF NOT EXISTS idx_entries_content_hash ON entries(content_hash)`);
+  db2.exec(`CREATE INDEX IF NOT EXISTS idx_entries_volume_id ON entries(volume_id)`);
   const groupCols = new Set(
     db2.prepare("PRAGMA table_info(groups)").all().map((r) => r.name)
   );
@@ -278,18 +296,20 @@ function assignEntriesForPeriod(groupId, from, to) {
   const result = getDb().prepare(`UPDATE entries SET group_id = ? WHERE timestamp >= ? AND timestamp < ?`).run(groupId, from, to);
   return result.changes;
 }
+function bucketExprSql(zoomLevel, column = "timestamp") {
+  if (zoomLevel === "year") {
+    return `CAST(strftime('%s', strftime('%Y', datetime(${column}/1000, 'unixepoch', 'localtime')) || '-01-01', 'utc') AS INTEGER) * 1000`;
+  }
+  if (zoomLevel === "month") {
+    return `CAST(strftime('%s', strftime('%Y-%m', datetime(${column}/1000, 'unixepoch', 'localtime')) || '-01', 'utc') AS INTEGER) * 1000`;
+  }
+  return `CAST(strftime('%s', date(datetime(${column}/1000, 'unixepoch', 'localtime')), 'utc') AS INTEGER) * 1000`;
+}
 function groupFilterSql(groupId) {
   return `group_id IN (${getGroupSubtreeIds(groupId).join(", ")})`;
 }
 function getHistogram(from, to, zoomLevel, groupId) {
-  let bucketExpr;
-  if (zoomLevel === "year") {
-    bucketExpr = `CAST(strftime('%s', strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01-01', 'utc') AS INTEGER) * 1000`;
-  } else if (zoomLevel === "month") {
-    bucketExpr = `CAST(strftime('%s', strftime('%Y-%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) || '-01', 'utc') AS INTEGER) * 1000`;
-  } else {
-    bucketExpr = `CAST(strftime('%s', date(datetime(timestamp/1000, 'unixepoch', 'localtime')), 'utc') AS INTEGER) * 1000`;
-  }
+  const bucketExpr = bucketExprSql(zoomLevel);
   const sql = `
     SELECT
       ${bucketExpr} AS bucket_start,
@@ -419,11 +439,11 @@ function insertEntry(entry) {
     INSERT INTO entries
       (type, timestamp, title, file_path, thumbnail_small, thumbnail_medium,
        thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review,
-       is_missing, content_hash, import_mode, latitude, longitude, gps_scanned, created_at)
+       is_missing, content_hash, import_mode, volume_id, latitude, longitude, gps_scanned, created_at)
     VALUES
       (@type, @timestamp, @title, @file_path, @thumbnail_small, @thumbnail_medium,
        @thumbnail_large, @duration_seconds, @rich_text_json, @group_id, @needs_date_review,
-       @is_missing, @content_hash, @import_mode, @latitude, @longitude, @gps_scanned, @created_at)
+       @is_missing, @content_hash, @import_mode, @volume_id, @latitude, @longitude, @gps_scanned, @created_at)
   `).run(entry);
   return result.lastInsertRowid;
 }
@@ -477,6 +497,109 @@ function findDuplicatesByNameSize() {
     HAVING COUNT(*) > 1
   `).all();
   return rows.map((r) => ({ key: r.key, count: r.count, entryIds: r.ids.split(",").map(Number) }));
+}
+function listVolumes() {
+  return getDb().prepare("SELECT * FROM volumes ORDER BY label").all();
+}
+function getVolumeById(id) {
+  return getDb().prepare("SELECT * FROM volumes WHERE id = ?").get(id);
+}
+function getVolumeBySerial(serial) {
+  return getDb().prepare("SELECT * FROM volumes WHERE volume_serial = ?").get(serial);
+}
+function insertVolume(data) {
+  const result = getDb().prepare(`
+    INSERT INTO volumes (label, volume_serial, last_mount_path, last_seen_at, created_at)
+    VALUES (@label, @volume_serial, @last_mount_path, @last_seen_at, @created_at)
+  `).run(data);
+  return result.lastInsertRowid;
+}
+function touchVolume(id, mountPath, seenAt) {
+  getDb().prepare("UPDATE volumes SET last_mount_path = ?, last_seen_at = ? WHERE id = ?").run(mountPath, seenAt, id);
+}
+function updateVolumeLabel(id, label) {
+  getDb().prepare("UPDATE volumes SET label = ? WHERE id = ?").run(label, id);
+}
+async function listMountedVolumes() {
+  if (process.platform === "win32") return (await Promise.resolve().then(() => require("./windows-G00j6lnD.js"))).detect();
+  if (process.platform === "darwin") return (await Promise.resolve().then(() => require("./darwin-BTiGefM7.js"))).detect();
+  return (await Promise.resolve().then(() => require("./linux-CvC22Gu_.js"))).detect();
+}
+let cache = [];
+let primarySerial = null;
+async function refreshVolumes() {
+  cache = await listMountedVolumes();
+  primarySerial = findVolumeForPath(electron.app.getPath("userData"))?.serial ?? null;
+  const now = Date.now();
+  for (const dv of cache) {
+    const existing = getVolumeBySerial(dv.serial);
+    if (existing) touchVolume(existing.id, dv.mountPath, now);
+  }
+}
+function findVolumeForPath(absPath) {
+  let best = null;
+  for (const v of cache) {
+    if (isPathUnder(v.mountPath, absPath) && (!best || v.mountPath.length > best.mountPath.length)) {
+      best = v;
+    }
+  }
+  return best;
+}
+function getMountPathForSerial(serial) {
+  return cache.find((v) => v.serial === serial)?.mountPath ?? null;
+}
+function getVolumeStatuses() {
+  return listVolumes().map((v) => {
+    const detected = cache.find((dv) => dv.serial === v.volume_serial);
+    return {
+      id: v.id,
+      label: v.label,
+      volume_serial: v.volume_serial,
+      connected: !!detected,
+      mountPath: detected?.mountPath ?? null
+    };
+  });
+}
+function findOrCreateVolumeForPath(absPath) {
+  const detected = findVolumeForPath(absPath);
+  if (!detected || detected.serial === primarySerial) return { volumeId: null, osLabel: null };
+  const existing = getVolumeBySerial(detected.serial);
+  if (existing) return { volumeId: existing.id, osLabel: detected.osLabel };
+  const now = Date.now();
+  const id = insertVolume({
+    label: detected.osLabel,
+    volume_serial: detected.serial,
+    last_mount_path: detected.mountPath,
+    last_seen_at: now,
+    created_at: now
+  });
+  return { volumeId: id, osLabel: detected.osLabel };
+}
+function backfillWatchedFolderVolumes() {
+  const settings = getSettings();
+  let changed = false;
+  const next = settings.watchedFolders.map((f) => {
+    if (f.volumeId != null) return f;
+    const { volumeId } = findOrCreateVolumeForPath(f.path);
+    if (volumeId == null) return f;
+    changed = true;
+    return { ...f, volumeId };
+  });
+  if (changed) saveSettings({ ...settings, watchedFolders: next });
+}
+function resolveEntryAbsolutePath(entry) {
+  if (!entry.file_path) return null;
+  if (entry.import_mode === "copy") return path.join(getLibraryPath(), entry.file_path);
+  if (entry.volume_id == null) return entry.file_path;
+  const vol = getVolumeById(entry.volume_id);
+  if (!vol) return null;
+  const mountPath = getMountPathForSerial(vol.volume_serial);
+  if (!mountPath) return null;
+  return path.join(mountPath, entry.file_path);
+}
+function mountPathForVolumeId(volumeId) {
+  const vol = getVolumeById(volumeId);
+  return vol ? getMountPathForSerial(vol.volume_serial) : null;
 }
 const IMAGE_EXTS = /* @__PURE__ */ new Set([
   ".jpg",
@@ -560,7 +683,8 @@ async function extractExifGps(sourcePath) {
 async function relinkEntry(entry, sourcePath, relDir, fileName) {
   let storedFilePath;
   if (entry.import_mode === "reference") {
-    storedFilePath = sourcePath;
+    const mountPath = entry.volume_id != null ? mountPathForVolumeId(entry.volume_id) : null;
+    storedFilePath = mountPath ? path.relative(mountPath, sourcePath).split(path.sep).join("/") : sourcePath;
   } else {
     const relToFiles = path.relative(getFilesPath(), sourcePath);
     const alreadyInLibrary = !relToFiles.startsWith("..") && !path.isAbsolute(relToFiles);
@@ -608,7 +732,7 @@ async function copyWithUniqueName(sourcePath, destDir, fileName) {
   }
 }
 const inFlightHashes = /* @__PURE__ */ new Set();
-async function ingestOne(sourcePath, relDir, groupPath) {
+async function ingestOne(sourcePath, relDir, groupPath, mode, volumeId) {
   const fileName = path.basename(sourcePath);
   const ext = path.extname(fileName);
   const type = detectType(ext);
@@ -625,11 +749,11 @@ async function ingestOne(sourcePath, relDir, groupPath) {
   try {
     const groupId = groupPath.length > 0 ? findOrCreateGroupPath(groupPath) : null;
     const baseName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
-    const settings = getSettings();
-    const isReference = settings.importMode === "reference";
+    const isReference = mode === "reference";
     let storedFilePath;
     if (isReference) {
-      storedFilePath = sourcePath;
+      const mountPath = volumeId != null ? mountPathForVolumeId(volumeId) : null;
+      storedFilePath = mountPath ? path.relative(mountPath, sourcePath).split(path.sep).join("/") : sourcePath;
     } else {
       const relToFiles = path.relative(getFilesPath(), sourcePath);
       const alreadyInLibrary = !relToFiles.startsWith("..") && !path.isAbsolute(relToFiles);
@@ -671,6 +795,7 @@ async function ingestOne(sourcePath, relDir, groupPath) {
       is_missing: 0,
       content_hash: contentHash,
       import_mode: isReference ? "reference" : "copy",
+      volume_id: isReference ? volumeId : null,
       latitude: gps?.latitude ?? null,
       longitude: gps?.longitude ?? null,
       gps_scanned: 1,
@@ -685,7 +810,8 @@ async function backfillGps() {
   const photos = getUnscannedGpsPhotos();
   let found = 0;
   for (const entry of photos) {
-    const absPath = entry.import_mode === "reference" ? entry.file_path : path.join(getLibraryPath(), entry.file_path);
+    const absPath = resolveEntryAbsolutePath(entry);
+    if (!absPath) continue;
     const gps = await extractExifGps(absPath);
     if (gps) {
       updateEntry(entry.id, { latitude: gps.latitude, longitude: gps.longitude, gps_scanned: 1 });
@@ -722,7 +848,7 @@ async function expandPaths(inputPaths) {
   return out;
 }
 const CONCURRENCY = 4;
-async function ingestFiles(filePaths, onProgress) {
+async function ingestFiles(filePaths, mode, volumeId, onProgress) {
   const files = await expandPaths(filePaths);
   const total = files.length;
   if (total === 0) return { insertedIds: [], failures: [], total: 0 };
@@ -739,7 +865,7 @@ async function ingestFiles(filePaths, onProgress) {
       const fileName = path.basename(src);
       let error;
       try {
-        const result = await ingestOne(src, relDir, groupPath);
+        const result = await ingestOne(src, relDir, groupPath, mode, volumeId);
         if (result.id != null) insertedIds.push(result.id);
       } catch (e) {
         error = e.message ?? String(e);
@@ -762,8 +888,8 @@ async function runSync(onProgress) {
   if (isSyncing) return;
   isSyncing = true;
   try {
+    await refreshVolumes();
     const settings = getSettings();
-    const libraryPath = settings.libraryPath;
     const entries = getAllEntriesWithFilePaths();
     const missingIds = [];
     const recoveredIds = [];
@@ -779,7 +905,20 @@ async function runSync(onProgress) {
     });
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
-      const absPath = entry.import_mode === "reference" ? entry.file_path : path.join(libraryPath, entry.file_path);
+      const absPath = resolveEntryAbsolutePath(entry);
+      if (absPath == null) {
+        onProgress({
+          phase: "checking",
+          checked: i + 1,
+          missing: missingIds.length,
+          recovered: recoveredIds.length,
+          found: 0,
+          ingested: 0,
+          total: entries.length,
+          current: entry.title ?? ""
+        });
+        continue;
+      }
       let exists = false;
       try {
         await fs$1.access(absPath);
@@ -812,30 +951,39 @@ async function runSync(onProgress) {
       total: entries.length,
       current: "Scanning for new files…"
     });
-    const foldersToScan = settings.importMode === "copy" ? [getFilesPath()] : settings.watchedFolders;
     const existingAbsPaths = new Set(
-      entries.filter((e) => e.file_path != null).map(
-        (e) => e.import_mode === "reference" ? e.file_path : path.join(libraryPath, e.file_path)
-      )
+      entries.map((e) => resolveEntryAbsolutePath(e)).filter((p) => p != null)
     );
-    const newFiles = [];
-    for (const folder of foldersToScan) {
-      await scanFolder(folder, existingAbsPaths, newFiles);
+    const newLibraryFiles = [];
+    await scanFolder(getFilesPath(), existingAbsPaths, newLibraryFiles);
+    const newWatchedByFolder = [];
+    for (const folder of settings.watchedFolders) {
+      const files = [];
+      await scanFolder(folder.path, existingAbsPaths, files);
+      if (files.length > 0) newWatchedByFolder.push({ volumeId: folder.volumeId, files });
     }
-    if (newFiles.length > 0) {
-      await ingestFiles(newFiles, (progress) => {
-        onProgress({
-          phase: "ingesting",
-          checked: entries.length,
-          missing: missingIds.length,
-          recovered: recoveredIds.length,
-          found: newFiles.length,
-          ingested: progress.completed,
-          total: newFiles.length,
-          current: progress.current,
-          error: progress.error
-        });
+    const newFiles = [...newLibraryFiles, ...newWatchedByFolder.flatMap((f) => f.files)];
+    let ingested = 0;
+    const reportIngest = (progress) => {
+      onProgress({
+        phase: "ingesting",
+        checked: entries.length,
+        missing: missingIds.length,
+        recovered: recoveredIds.length,
+        found: newFiles.length,
+        ingested: ingested + progress.completed,
+        total: newFiles.length,
+        current: progress.current,
+        error: progress.error
       });
+    };
+    if (newLibraryFiles.length > 0) {
+      await ingestFiles(newLibraryFiles, "copy", null, reportIngest);
+      ingested += newLibraryFiles.length;
+    }
+    for (const { volumeId, files } of newWatchedByFolder) {
+      await ingestFiles(files, "reference", volumeId, reportIngest);
+      ingested += files.length;
     }
     onProgress({
       phase: "done",
@@ -873,8 +1021,7 @@ function scanDuplicates(mode) {
 function startWatcher() {
   if (watcher) return;
   const settings = getSettings();
-  const dirs = settings.importMode === "copy" ? [getFilesPath()] : settings.watchedFolders;
-  if (dirs.length === 0) return;
+  const dirs = [getFilesPath(), ...settings.watchedFolders.map((f) => f.path)];
   watcher = chokidar.watch(dirs, {
     ignoreInitial: true,
     persistent: true,
@@ -883,7 +1030,14 @@ function startWatcher() {
   });
   watcher.on("add", async (filePath) => {
     const wins = electron.BrowserWindow.getAllWindows();
-    await ingestFiles([filePath], () => {
+    let mode = "copy";
+    let volumeId = null;
+    if (!isPathUnder(getFilesPath(), filePath)) {
+      mode = "reference";
+      const folder = settings.watchedFolders.filter((f) => isPathUnder(f.path, filePath)).sort((a, b) => b.path.length - a.path.length)[0];
+      volumeId = folder?.volumeId ?? null;
+    }
+    await ingestFiles([filePath], mode, volumeId, () => {
     });
     for (const win of wins) {
       if (!win.webContents.isDestroyed()) win.webContents.send("sync:watcherIngest");
@@ -1211,6 +1365,7 @@ function registerEntryHandlers() {
     is_missing: 0,
     content_hash: null,
     import_mode: "copy",
+    volume_id: null,
     latitude: null,
     longitude: null,
     gps_scanned: 0,
@@ -1360,7 +1515,7 @@ function registerIngestHandlers() {
       if (!sender.isDestroyed()) sender.send(channel, data);
     };
     try {
-      const { insertedIds, failures, total } = await ingestFiles(filePaths, (progress) => {
+      const { insertedIds, failures, total } = await ingestFiles(filePaths, "copy", null, (progress) => {
         send("ingest:progress", progress);
       });
       if (tagNames.length > 0 && insertedIds.length > 0) {
@@ -1740,7 +1895,7 @@ function registerSettingsHandlers() {
   electron.ipcMain.handle("settings:get", () => getSettings());
   electron.ipcMain.handle("settings:set", (_, patch) => {
     saveSettings({ ...getSettings(), ...patch });
-    if ("importMode" in patch || "watchedFolders" in patch) restartWatcher();
+    if ("watchedFolders" in patch) restartWatcher();
   });
   electron.ipcMain.handle("settings:pickFolder", async () => {
     const win = electron.BrowserWindow.getFocusedWindow() ?? electron.BrowserWindow.getAllWindows()[0];
@@ -1762,7 +1917,7 @@ function registerSettingsHandlers() {
     const s = getSettings();
     const libraryExists = await pathExists(s.libraryPath);
     const watchedFolders = await Promise.all(
-      s.watchedFolders.map(async (f) => ({ path: f, exists: await pathExists(f) }))
+      s.watchedFolders.map(async (f) => ({ path: f.path, exists: await pathExists(f.path) }))
     );
     return { libraryExists, watchedFolders };
   });
@@ -1781,7 +1936,10 @@ function registerSettingsHandlers() {
     if (foundIds.length > 0) markEntriesFound(foundIds);
     if (missingIds.length > 0) markEntriesMissing(missingIds);
     const s = getSettings();
-    saveSettings({ ...s, watchedFolders: s.watchedFolders.map((f) => f === oldPath ? newPath : f) });
+    saveSettings({
+      ...s,
+      watchedFolders: s.watchedFolders.map((f) => f.path === oldPath ? { ...f, path: newPath } : f)
+    });
     restartWatcher();
     return { found: foundIds.length, total: entries.length };
   });
@@ -1853,8 +2011,8 @@ const MEDIA_MIME = {
 };
 function resolveEntryFilePath(entryId) {
   const entry = getEntry(entryId);
-  if (!entry?.file_path) return null;
-  return entry.import_mode === "reference" ? entry.file_path : path.join(getLibraryPath(), entry.file_path);
+  if (!entry) return null;
+  return resolveEntryAbsolutePath(entry);
 }
 let serverPort = 0;
 const serverToken = crypto.randomBytes(16).toString("hex");
@@ -2042,12 +2200,92 @@ function getTopArtists(from, to, limit) {
     LIMIT ?
   `).all(from, to, limit);
 }
+function getListeningHistogram(from, to, zoomLevel) {
+  const bucketExpr = bucketExprSql(zoomLevel);
+  return getDb().prepare(`
+    SELECT ${bucketExpr} AS bucket_start, SUM(ms_played) AS ms_played
+    FROM listening_history
+    WHERE timestamp >= :from AND timestamp < :to
+    GROUP BY bucket_start
+    ORDER BY bucket_start
+  `).all({ from, to });
+}
+function getYearlySummaries() {
+  const db2 = getDb();
+  const yearExpr = `CAST(strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER)`;
+  const totals = db2.prepare(`
+    SELECT ${yearExpr} AS year, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    GROUP BY year
+  `).all();
+  const topArtistRows = db2.prepare(`
+    WITH by_artist_year AS (
+      SELECT ${yearExpr} AS year, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+      FROM listening_history
+      WHERE media_type = 'track' AND artist_name IS NOT NULL
+      GROUP BY year, artist_name
+    ), ranked AS (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY year ORDER BY ms_played DESC) AS rnk
+      FROM by_artist_year
+    )
+    SELECT year, artist_name, ms_played, play_count FROM ranked WHERE rnk <= 5 ORDER BY year, rnk
+  `).all();
+  const topTrackRows = db2.prepare(`
+    WITH by_track_year AS (
+      SELECT ${yearExpr} AS year, track_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+      FROM listening_history
+      WHERE media_type = 'track' AND track_name IS NOT NULL
+      GROUP BY year, track_name, artist_name
+    ), ranked AS (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY year ORDER BY ms_played DESC) AS rnk
+      FROM by_track_year
+    )
+    SELECT year, track_name, artist_name, ms_played, play_count FROM ranked WHERE rnk = 1
+  `).all();
+  const monthlyRows = db2.prepare(`
+    SELECT ${yearExpr} AS year,
+           CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
+           SUM(ms_played) AS ms_played
+    FROM listening_history
+    GROUP BY year, month
+  `).all();
+  const artistsByYear = /* @__PURE__ */ new Map();
+  for (const r of topArtistRows) {
+    const arr = artistsByYear.get(r.year) ?? [];
+    arr.push({ artist_name: r.artist_name, ms_played: r.ms_played, play_count: r.play_count });
+    artistsByYear.set(r.year, arr);
+  }
+  const trackByYear = /* @__PURE__ */ new Map();
+  for (const r of topTrackRows) {
+    trackByYear.set(r.year, { track_name: r.track_name, artist_name: r.artist_name, ms_played: r.ms_played, play_count: r.play_count });
+  }
+  const monthlyByYear = /* @__PURE__ */ new Map();
+  for (const r of monthlyRows) {
+    let arr = monthlyByYear.get(r.year);
+    if (!arr) {
+      arr = new Array(12).fill(0);
+      monthlyByYear.set(r.year, arr);
+    }
+    arr[r.month - 1] = r.ms_played;
+  }
+  return totals.sort((a, b) => b.year - a.year).map((t) => ({
+    year: t.year,
+    msPlayed: t.ms_played,
+    playCount: t.play_count,
+    topArtists: artistsByYear.get(t.year) ?? [],
+    topTrack: trackByYear.get(t.year) ?? null,
+    monthly: monthlyByYear.get(t.year) ?? new Array(12).fill(0)
+  }));
+}
 function registerSpotifyHandlers() {
-  electron.ipcMain.handle("spotify:pickExport", async () => {
+  electron.ipcMain.handle("spotify:pickExport", async (_event, mode = "files") => {
     const win = electron.BrowserWindow.getFocusedWindow() ?? electron.BrowserWindow.getAllWindows()[0];
-    const result = await electron.dialog.showOpenDialog(win, {
-      title: "Select your Spotify extended streaming history folder or JSON files",
-      properties: ["openFile", "openDirectory", "multiSelections"],
+    const result = await electron.dialog.showOpenDialog(win, mode === "folder" ? {
+      title: 'Select your Spotify "Extended streaming history" export folder',
+      properties: ["openDirectory"]
+    } : {
+      title: "Select your Spotify Streaming_History_*.json files",
+      properties: ["openFile", "multiSelections"],
       filters: [{ name: "JSON", extensions: ["json"] }]
     });
     if (result.canceled) return [];
@@ -2074,6 +2312,19 @@ function registerSpotifyHandlers() {
   });
   electron.ipcMain.handle("spotify:forPeriod", (_, from, to) => getPlaysForPeriod(from, to));
   electron.ipcMain.handle("spotify:topArtists", (_, from, to, limit = 50) => getTopArtists(from, to, limit));
+  electron.ipcMain.handle("spotify:histogram", (_, from, to, zoomLevel) => getListeningHistogram(from, to, zoomLevel));
+  electron.ipcMain.handle("spotify:yearlySummaries", () => getYearlySummaries());
+}
+function registerVolumeHandlers() {
+  electron.ipcMain.handle("volumes:list", () => getVolumeStatuses());
+  electron.ipcMain.handle("volumes:refresh", async () => {
+    await refreshVolumes();
+    return getVolumeStatuses();
+  });
+  electron.ipcMain.handle("volumes:matchPath", (_, p) => findOrCreateVolumeForPath(p));
+  electron.ipcMain.handle("volumes:setLabel", (_, id, label) => {
+    updateVolumeLabel(id, label);
+  });
 }
 function registerAllHandlers() {
   registerBackupHandlers();
@@ -2086,6 +2337,7 @@ function registerAllHandlers() {
   registerTagHandlers();
   registerSettingsHandlers();
   registerSpotifyHandlers();
+  registerVolumeHandlers();
 }
 electron.protocol.registerSchemesAsPrivileged([
   { scheme: "timeline", privileges: { secure: true, supportFetchAPI: true, bypassCSP: true } }
@@ -2112,7 +2364,7 @@ function createWindow() {
     win.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 }
-electron.app.whenReady().then(() => {
+electron.app.whenReady().then(async () => {
   ensureLibraryDirs();
   registerAllHandlers();
   electron.protocol.handle("timeline", (request) => {
@@ -2120,6 +2372,8 @@ electron.app.whenReady().then(() => {
     const filePath = path.normalize(path.join(getLibraryPath(), rel));
     return electron.net.fetch(`file://${filePath}`);
   });
+  await refreshVolumes();
+  backfillWatchedFolderVolumes();
   startMediaServer().then(createWindow);
   startWatcher();
   electron.app.on("activate", () => {

@@ -7,6 +7,7 @@ import type {
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
+  ListeningBucket, YearlySpotifySummary, VolumeStatus,
 } from '../shared/types'
 
 interface Api {
@@ -95,11 +96,19 @@ interface Api {
     onProgress: (cb: (event: BackupProgressEvent) => void) => () => void
   }
   spotify: {
-    pickExport: () => Promise<string[]>
+    pickExport: (mode?: 'files' | 'folder') => Promise<string[]>
     import: (paths: string[]) => Promise<SpotifyImportResult>
     forPeriod: (from: number, to: number) => Promise<SpotifyPlay[]>
     topArtists: (from: number, to: number, limit?: number) => Promise<ArtistPlaytime[]>
+    histogram: (from: number, to: number, zoomLevel: string) => Promise<ListeningBucket[]>
+    yearlySummaries: () => Promise<YearlySpotifySummary[]>
     onProgress: (cb: (event: SpotifyImportProgressEvent) => void) => () => void
+  }
+  volumes: {
+    list: () => Promise<VolumeStatus[]>
+    refresh: () => Promise<VolumeStatus[]>
+    matchPath: (path: string) => Promise<{ volumeId: number | null; osLabel: string | null }>
+    setLabel: (id: number, label: string) => Promise<void>
   }
 }
 

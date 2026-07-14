@@ -1,14 +1,16 @@
 import { create } from 'zustand'
-import type { AppSettings, Bucket, Group, IngestProgress, Entry, ZoomLevel, Tag, SyncProgressEvent, LifeEvent } from '../../shared/types'
+import type { AppSettings, Bucket, Group, IngestProgress, Entry, ZoomLevel, Tag, SyncProgressEvent, LifeEvent, VolumeStatus } from '../../shared/types'
 
 interface TimelineStore {
   tags: Tag[]
   setTags: (tags: Tag[]) => void
+  volumes: VolumeStatus[]
+  setVolumes: (volumes: VolumeStatus[]) => void
   searchResults: Entry[] | null
   setSearchResults: (results: Entry[] | null) => void
   visibleRange: [number, number]
   zoomLevel: ZoomLevel
-  activeView: 'timeline' | 'calendar' | 'map' | 'files' | 'settings'
+  activeView: 'timeline' | 'calendar' | 'map' | 'files' | 'spotify' | 'settings'
   settings: AppSettings | null
   setSettings: (s: AppSettings) => void
   histogramBuckets: Bucket[]
@@ -31,7 +33,7 @@ interface TimelineStore {
 
   setVisibleRange: (range: [number, number]) => void
   setZoomLevel: (level: ZoomLevel) => void
-  setActiveView: (view: 'timeline' | 'calendar' | 'map' | 'files' | 'settings') => void
+  setActiveView: (view: 'timeline' | 'calendar' | 'map' | 'files' | 'spotify' | 'settings') => void
   setHistogramBuckets: (buckets: Bucket[]) => void
   setGroups: (groups: Group[]) => void
   setSelection: (ids: Set<number>, lastId: number | null) => void
@@ -75,7 +77,7 @@ const fiveYearsAgo = now - 5 * 365.25 * 24 * 60 * 60 * 1000
 export const useStore = create<TimelineStore>((set) => ({
   visibleRange: [fiveYearsAgo, now],
   zoomLevel: 'year' as ZoomLevel,
-  activeView: 'timeline' as 'timeline' | 'calendar' | 'map' | 'files' | 'settings',
+  activeView: 'timeline' as 'timeline' | 'calendar' | 'map' | 'files' | 'spotify' | 'settings',
   settings: null,
   histogramBuckets: [],
   groups: [],
@@ -91,11 +93,13 @@ export const useStore = create<TimelineStore>((set) => ({
   syncProgress: null,
   refreshKey: 0,
   tags: [],
+  volumes: [],
   searchResults: null,
   rangeSelectMode: false,
   dateRangeSelection: null,
   pendingDateRange: null,
   setTags: (tags) => set({ tags }),
+  setVolumes: (volumes) => set({ volumes }),
   setSearchResults: (results) => set({ searchResults: results }),
 
   setVisibleRange: (range) => set({ visibleRange: range }),

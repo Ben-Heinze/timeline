@@ -110,14 +110,22 @@ electron.contextBridge.exposeInMainWorld("api", {
     }
   },
   spotify: {
-    pickExport: () => electron.ipcRenderer.invoke("spotify:pickExport"),
+    pickExport: (mode) => electron.ipcRenderer.invoke("spotify:pickExport", mode),
     import: (paths) => electron.ipcRenderer.invoke("spotify:import", paths),
     forPeriod: (from, to) => electron.ipcRenderer.invoke("spotify:forPeriod", from, to),
     topArtists: (from, to, limit) => electron.ipcRenderer.invoke("spotify:topArtists", from, to, limit ?? 50),
+    histogram: (from, to, zoomLevel) => electron.ipcRenderer.invoke("spotify:histogram", from, to, zoomLevel),
+    yearlySummaries: () => electron.ipcRenderer.invoke("spotify:yearlySummaries"),
     onProgress: (cb) => {
       const handler = (_, data) => cb(data);
       electron.ipcRenderer.on("spotify:progress", handler);
       return () => electron.ipcRenderer.removeListener("spotify:progress", handler);
     }
+  },
+  volumes: {
+    list: () => electron.ipcRenderer.invoke("volumes:list"),
+    refresh: () => electron.ipcRenderer.invoke("volumes:refresh"),
+    matchPath: (path) => electron.ipcRenderer.invoke("volumes:matchPath", path),
+    setLabel: (id, label) => electron.ipcRenderer.invoke("volumes:setLabel", id, label)
   }
 });

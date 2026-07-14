@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react'
 import { useStore } from '../store/useStore'
-import type { Group, GroupStats, Tag } from '../../shared/types'
+import type { Group, GroupStats, Tag, ArtistPlaytime } from '../../shared/types'
 import TagEditor from './TagEditor'
 import { computeScope } from './scope'
 
@@ -34,6 +34,38 @@ function buildTree(groups: Group[], cmp: (a: Group, b: Group) => number): TreeNo
     return nodes
   }
   return sort(roots)
+}
+
+// Inline "soundtrack" strip for a selected date-range group — top artists heard
+// during that span, reusing the same query the Spotify panel uses for a period.
+function GroupSoundtrack({ from, to, depth }: { from: number; to: number; depth: number }) {
+  const [artists, setArtists] = useState<ArtistPlaytime[] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setArtists(null)
+    window.api.spotify.topArtists(from, to, 3).then(res => {
+      if (!cancelled) setArtists(res)
+    })
+    return () => { cancelled = true }
+  }, [from, to])
+
+  if (!artists || artists.length === 0) return null
+
+  return (
+    <div style={{
+      paddingLeft: 6 + depth * 14 + 26, paddingRight: 6, paddingBottom: 6,
+      display: 'flex', alignItems: 'center', gap: 5,
+    }}>
+      <span style={{ fontSize: 10, color: '#1DB954', flexShrink: 0 }}>♫</span>
+      <span style={{
+        fontSize: 11, color: 'var(--text-3)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {artists.map(a => a.artist_name).join(' · ')}
+      </span>
+    </div>
+  )
 }
 
 // ─── Single group row ────────────────────────────────────────────────────────
@@ -143,6 +175,9 @@ function GroupNode(props: GroupNodeProps) {
           <span style={{ fontSize: 11, color: 'var(--text-4)', flexShrink: 0 }}>{count}</span>
         )}
       </div>
+      {isSelected && group.date_from != null && group.date_to != null && (
+        <GroupSoundtrack from={group.date_from} to={group.date_to} depth={depth} />
+      )}
       {isExpanded && children.map(child => (
         <GroupNode key={child.group.id} {...props} node={child} depth={depth + 1} />
       ))}
