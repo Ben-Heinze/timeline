@@ -299,7 +299,7 @@ function FileActions({ entry }: { entry: Entry }) {
 }
 
 export default function EntryModal() {
-  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedGroupId, openJournalModal } = useStore()
+  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal } = useStore()
   const [entry, setEntry] = useState<Entry | null>(null)
   const [entryTags, setEntryTags] = useState<Tag[]>([])
   const [periodEntries, setPeriodEntries] = useState<Entry[]>([])
@@ -317,9 +317,10 @@ export default function EntryModal() {
   }, [activeEntryId])
 
   useEffect(() => {
+    if (selectedLocation) { setPeriodEntries(selectedLocation); return }
     if (!selectedPeriod) { setPeriodEntries([]); return }
     window.api.entries.forPeriod(selectedPeriod[0], selectedPeriod[1], selectedGroupId ?? undefined).then(setPeriodEntries)
-  }, [selectedPeriod, selectedGroupId])
+  }, [selectedPeriod, selectedGroupId, selectedLocation])
 
   const idx = entry ? periodEntries.findIndex(e => e.id === entry.id) : -1
   const hasPrev = idx > 0

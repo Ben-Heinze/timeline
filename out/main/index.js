@@ -130,6 +130,21 @@ function initSchema(db2) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_events_date_from ON events(date_from);
+
+    CREATE TABLE IF NOT EXISTS listening_history (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp    INTEGER NOT NULL,
+      track_name   TEXT,
+      artist_name  TEXT,
+      album_name   TEXT,
+      ms_played    INTEGER NOT NULL,
+      media_type   TEXT    NOT NULL DEFAULT 'track' CHECK(media_type IN ('track','episode')),
+      spotify_uri  TEXT,
+      created_at   INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_listening_history_timestamp ON listening_history(timestamp);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_listening_history_dedupe ON listening_history(timestamp, spotify_uri, ms_played);
   `);
   applyMigrations(db2);
 }
@@ -1473,18 +1488,11 @@ const DENSE_MIN = 25;
 const DENSE_MAX = 45;
 const SPARSE_YEARS = 5;
 const TEST_DIR = "test-data";
-const TEST_TAGS = [
-  "family",
-  "vacation",
-  "friends",
-  "work",
-  "school",
-  "holidays",
-  "pets",
-  "nature",
-  "birthday",
-  "travel"
-];
+const MS_DAY = 864e5;
+const GENERAL_TAGS = ["friends", "holidays", "pets", "birthday"];
+const HOME_TAGS = ["work", "school", "family"];
+const TRAVEL_TAGS = ["travel", "vacation", "nature", "beach", "hiking"];
+const TEST_TAGS = [...GENERAL_TAGS, ...HOME_TAGS, ...TRAVEL_TAGS];
 const TEST_EXTS = [
   ".jpg",
   ".jpg",
@@ -1507,16 +1515,78 @@ const TEST_EXTS = [
   ".txt",
   ".docx"
 ];
-const MS_DAY = 864e5;
+const WORLD_LOCATIONS = [
+  { name: "New York", lat: 40.7128, lng: -74.006 },
+  { name: "Paris", lat: 48.8566, lng: 2.3522 },
+  { name: "Tokyo", lat: 35.6762, lng: 139.6503 },
+  { name: "Sydney", lat: -33.8688, lng: 151.2093 },
+  { name: "Cape Town", lat: -33.9249, lng: 18.4241 },
+  { name: "Rio de Janeiro", lat: -22.9068, lng: -43.1729 },
+  { name: "London", lat: 51.5074, lng: -0.1278 },
+  { name: "San Francisco", lat: 37.7749, lng: -122.4194 },
+  { name: "Reykjavik", lat: 64.1466, lng: -21.9426 },
+  { name: "Banff", lat: 51.1784, lng: -115.5708 }
+];
+const LOCATION_RATE = 0.35;
+const OUTLIER_RATE = 0.08;
+const JITTER_DEG = 0.12;
+const GROUP_THEMES = [
+  { name: "Paris Trip", color: "#3b82f6", location: WORLD_LOCATIONS[1], tagBias: ["travel", "vacation"] },
+  { name: "Tokyo Trip", color: "#ef4444", location: WORLD_LOCATIONS[2], tagBias: ["travel", "vacation"] },
+  { name: "Rio Carnival", color: "#f59e0b", location: WORLD_LOCATIONS[5], tagBias: ["travel", "friends"] },
+  { name: "Banff Camping", color: "#22c55e", location: WORLD_LOCATIONS[9], tagBias: ["nature", "hiking"] },
+  { name: "Cape Town Safari", color: "#84cc16", location: WORLD_LOCATIONS[4], tagBias: ["travel", "nature"] },
+  { name: "Ben's Birthday", color: "#ec4899", tagBias: ["birthday", "family"] },
+  { name: "Family Reunion", color: "#8b5cf6", tagBias: ["family", "friends"] },
+  { name: "Graduation Day", color: "#06b6d4", tagBias: ["family", "friends"] },
+  { name: "Wedding Weekend", color: "#f97316", tagBias: ["friends", "family"] },
+  { name: "Company Retreat", color: "#6b7280", tagBias: ["work", "friends"] }
+];
+const GROUP_DAY_MIN = 4;
+const GROUP_DAY_MAX = 9;
+const GROUP_ASSIGN_MIN = 0.55;
+const GROUP_ASSIGN_MAX = 1;
 const randInt = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
+const randFloat = (min, max) => min + Math.random() * (max - min);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 function randomTimeInDay(dayStartMs) {
   return dayStartMs + randInt(8, 21) * 36e5 + randInt(0, 3599999);
 }
+function jitteredLocation(center) {
+  return {
+    latitude: center.lat + randFloat(-JITTER_DEG, JITTER_DEG),
+    longitude: center.lng + randFloat(-JITTER_DEG, JITTER_DEG)
+  };
+}
+function randomWorldLocation() {
+  return { latitude: randFloat(-60, 70), longitude: randFloat(-180, 180) };
+}
+function decideLocation(type, theme) {
+  if (type !== "photo" && type !== "video") return { latitude: null, longitude: null };
+  if (theme?.location && Math.random() < 0.9) return jitteredLocation(theme.location);
+  if (Math.random() < LOCATION_RATE) {
+    const loc = Math.random() < OUTLIER_RATE ? randomWorldLocation() : jitteredLocation(pick(WORLD_LOCATIONS));
+    return loc;
+  }
+  return { latitude: null, longitude: null };
+}
+function tagPoolFor(theme, hasLocation) {
+  const bias = theme?.tagBias ?? (hasLocation ? TRAVEL_TAGS : HOME_TAGS);
+  return [...TEST_TAGS, ...bias, ...bias];
+}
+function pickTags(pool, count) {
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const out = [];
+  for (const t of shuffled) {
+    if (!out.includes(t)) out.push(t);
+    if (out.length === count) break;
+  }
+  return out;
+}
 function buildTimestamps() {
   const now = /* @__PURE__ */ new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const timestamps = [];
+  const slots = [];
   const usedDays = /* @__PURE__ */ new Set();
   for (let d = 0; d < DENSE_DAYS; d++) {
     let dayStart;
@@ -1525,38 +1595,57 @@ function buildTimestamps() {
     } while (usedDays.has(dayStart));
     usedDays.add(dayStart);
     const count = randInt(DENSE_MIN, DENSE_MAX);
-    for (let i = 0; i < count && timestamps.length < TOTAL_FILES; i++) {
-      timestamps.push(randomTimeInDay(dayStart));
+    for (let i = 0; i < count && slots.length < TOTAL_FILES; i++) {
+      slots.push({ ts: randomTimeInDay(dayStart), theme: null });
     }
   }
-  while (timestamps.length < TOTAL_FILES) {
-    const dayStart = today - randInt(0, SPARSE_YEARS * 365) * MS_DAY;
-    timestamps.push(randomTimeInDay(dayStart));
+  const themeDayStart = /* @__PURE__ */ new Map();
+  for (const theme of GROUP_THEMES) {
+    let dayStart;
+    do {
+      dayStart = today - randInt(14, 4 * 365) * MS_DAY;
+    } while (usedDays.has(dayStart));
+    usedDays.add(dayStart);
+    themeDayStart.set(theme, dayStart);
+    const count = randInt(GROUP_DAY_MIN, GROUP_DAY_MAX);
+    for (let i = 0; i < count && slots.length < TOTAL_FILES; i++) {
+      slots.push({ ts: randomTimeInDay(dayStart), theme });
+    }
   }
-  return timestamps;
+  while (slots.length < TOTAL_FILES) {
+    const dayStart = today - randInt(0, SPARSE_YEARS * 365) * MS_DAY;
+    slots.push({ ts: randomTimeInDay(dayStart), theme: null });
+  }
+  return { slots, themeDayStart };
 }
 async function generateTestData() {
   ensureLibraryDirs();
   const destDir = path.join(getFilesPath(), TEST_DIR);
   await fs$1.mkdir(destDir, { recursive: true });
-  const timestamps = buildTimestamps();
+  const { slots, themeDayStart } = buildTimestamps();
   const runId = crypto.randomBytes(4).toString("hex");
   const pending = [];
   const WRITE_BATCH = 50;
-  for (let start = 0; start < timestamps.length; start += WRITE_BATCH) {
-    const batch = timestamps.slice(start, start + WRITE_BATCH);
-    await Promise.all(batch.map(async (timestamp, j) => {
+  for (let start = 0; start < slots.length; start += WRITE_BATCH) {
+    const batch = slots.slice(start, start + WRITE_BATCH);
+    await Promise.all(batch.map(async (slot, j) => {
       const n = start + j;
       const ext = pick(TEST_EXTS);
+      const type = detectType(ext);
       const fileName = `test_${runId}_${String(n + 1).padStart(4, "0")}${ext}`;
       const content = `timeline test file ${runId} ${n + 1}
 `;
       await fs$1.writeFile(path.join(destDir, fileName), content);
+      const { latitude, longitude } = decideLocation(type, slot.theme);
       pending.push({
         fileName,
         relPath: ["files", TEST_DIR, fileName].join("/"),
-        timestamp,
-        contentHash: crypto.createHash("sha256").update(content).digest("hex")
+        timestamp: slot.ts,
+        contentHash: crypto.createHash("sha256").update(content).digest("hex"),
+        type,
+        theme: slot.theme,
+        latitude,
+        longitude
       });
     }));
   }
@@ -1565,38 +1654,79 @@ async function generateTestData() {
     INSERT INTO entries
       (type, timestamp, title, file_path, thumbnail_small, thumbnail_medium,
        thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review,
-       is_missing, content_hash, import_mode, created_at)
+       is_missing, content_hash, import_mode, latitude, longitude, gps_scanned, created_at)
     VALUES
       (@type, @timestamp, @title, @file_path, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0,
-       @content_hash, 'copy', @created_at)
+       @content_hash, 'copy', @latitude, @longitude, @gps_scanned, @created_at)
   `);
   const insertTag = db2.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)");
   const getTagId = db2.prepare("SELECT id FROM tags WHERE name = ?");
   const insertEntryTag = db2.prepare("INSERT OR IGNORE INTO entry_tags (entry_id, tag_id) VALUES (?, ?)");
-  db2.transaction(() => {
-    const tagIds = TEST_TAGS.map((name) => {
+  const insertGroup = db2.prepare(`
+    INSERT INTO groups (name, parent_id, color, description, date_from, date_to, created_at)
+    VALUES (@name, NULL, @color, NULL, @date_from, @date_to, @created_at)
+  `);
+  const assignGroup = db2.prepare("UPDATE entries SET group_id = ? WHERE id = ?");
+  const groupsMade = db2.transaction(() => {
+    const tagIdByName = /* @__PURE__ */ new Map();
+    for (const name of TEST_TAGS) {
       insertTag.run(name);
-      return getTagId.get(name).id;
-    });
+      tagIdByName.set(name, getTagId.get(name).id);
+    }
     const createdAt = Date.now();
+    const groupEntries = /* @__PURE__ */ new Map();
     for (const p of pending) {
       const result = insertEntry2.run({
-        type: detectType(path.extname(p.fileName)),
+        type: p.type,
         timestamp: p.timestamp,
         title: p.fileName,
         file_path: p.relPath,
         content_hash: p.contentHash,
+        latitude: p.latitude,
+        longitude: p.longitude,
+        gps_scanned: p.type === "photo" || p.type === "video" ? 1 : 0,
         created_at: createdAt
       });
       const entryId = result.lastInsertRowid;
+      if (p.theme) {
+        const arr = groupEntries.get(p.theme) ?? [];
+        arr.push(entryId);
+        groupEntries.set(p.theme, arr);
+      }
       if (Math.random() < 0.6) {
+        const pool = tagPoolFor(p.theme, p.latitude !== null);
         const count = randInt(1, 3);
-        const shuffled = [...tagIds].sort(() => Math.random() - 0.5);
-        for (let t = 0; t < count; t++) insertEntryTag.run(entryId, shuffled[t]);
+        for (const name of pickTags(pool, count)) {
+          insertEntryTag.run(entryId, tagIdByName.get(name));
+        }
       }
     }
+    let made = 0;
+    for (const [theme, entryIds] of groupEntries) {
+      if (entryIds.length < GROUP_DAY_MIN) continue;
+      const dayStart = themeDayStart.get(theme);
+      const result = insertGroup.run({
+        name: theme.name,
+        color: theme.color,
+        date_from: dayStart,
+        date_to: dayStart + MS_DAY,
+        created_at: createdAt
+      });
+      const groupId = result.lastInsertRowid;
+      made++;
+      const shuffled = [...entryIds].sort(() => Math.random() - 0.5);
+      const takeCount = Math.max(2, Math.round(entryIds.length * randFloat(GROUP_ASSIGN_MIN, GROUP_ASSIGN_MAX)));
+      for (const id of shuffled.slice(0, takeCount)) assignGroup.run(groupId, id);
+    }
+    return made;
   })();
-  return { entries: pending.length, tags: TEST_TAGS.length, denseDays: DENSE_DAYS };
+  return {
+    entries: pending.length,
+    tags: TEST_TAGS.length,
+    denseDays: DENSE_DAYS,
+    located: pending.filter((p) => p.latitude !== null).length,
+    groups: groupsMade
+  };
 }
 async function pathExists(p) {
   try {
@@ -1839,6 +1969,112 @@ function registerFileHandlers() {
     }
   });
 }
+const FILE_PATTERN = /Streaming_History_(Audio|Video)_.*\.json$/i;
+async function expandSpotifyPaths(inputPaths) {
+  const files = [];
+  for (const p of inputPaths) {
+    const st = await fs$1.stat(p);
+    if (st.isDirectory()) {
+      const entries = await fs$1.readdir(p, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.isFile() && FILE_PATTERN.test(e.name)) files.push(path.join(p, e.name));
+      }
+    } else if (/\.json$/i.test(p)) {
+      files.push(p);
+    }
+  }
+  return files;
+}
+async function parseSpotifyFile(filePath) {
+  const raw = await fs$1.readFile(filePath, "utf-8");
+  const data = JSON.parse(raw);
+  const plays = [];
+  for (const entry of data) {
+    if (!entry.ts) continue;
+    const timestamp = Date.parse(entry.ts);
+    if (Number.isNaN(timestamp)) continue;
+    const isEpisode = !!entry.spotify_episode_uri;
+    const trackName = isEpisode ? entry.episode_name : entry.master_metadata_track_name;
+    if (!trackName) continue;
+    plays.push({
+      timestamp,
+      track_name: trackName,
+      artist_name: isEpisode ? entry.episode_show_name : entry.master_metadata_album_artist_name,
+      album_name: isEpisode ? null : entry.master_metadata_album_album_name,
+      ms_played: entry.ms_played ?? 0,
+      media_type: isEpisode ? "episode" : "track",
+      spotify_uri: isEpisode ? entry.spotify_episode_uri : entry.spotify_track_uri
+    });
+  }
+  return plays;
+}
+function insertPlays(plays) {
+  const db2 = getDb();
+  const now = Date.now();
+  const stmt = db2.prepare(`
+    INSERT OR IGNORE INTO listening_history
+      (timestamp, track_name, artist_name, album_name, ms_played, media_type, spotify_uri, created_at)
+    VALUES
+      (@timestamp, @track_name, @artist_name, @album_name, @ms_played, @media_type, @spotify_uri, @created_at)
+  `);
+  const insertMany = db2.transaction((rows) => {
+    let inserted = 0;
+    for (const row of rows) {
+      const info = stmt.run({ ...row, created_at: now });
+      if (info.changes > 0) inserted++;
+    }
+    return inserted;
+  });
+  return insertMany(plays);
+}
+function getPlaysForPeriod(from, to) {
+  return getDb().prepare(
+    `SELECT * FROM listening_history WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp`
+  ).all(from, to);
+}
+function getTopArtists(from, to, limit) {
+  return getDb().prepare(`
+    SELECT artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND artist_name IS NOT NULL
+    GROUP BY artist_name
+    ORDER BY ms_played DESC
+    LIMIT ?
+  `).all(from, to, limit);
+}
+function registerSpotifyHandlers() {
+  electron.ipcMain.handle("spotify:pickExport", async () => {
+    const win = electron.BrowserWindow.getFocusedWindow() ?? electron.BrowserWindow.getAllWindows()[0];
+    const result = await electron.dialog.showOpenDialog(win, {
+      title: "Select your Spotify extended streaming history folder or JSON files",
+      properties: ["openFile", "openDirectory", "multiSelections"],
+      filters: [{ name: "JSON", extensions: ["json"] }]
+    });
+    if (result.canceled) return [];
+    return result.filePaths;
+  });
+  electron.ipcMain.handle("spotify:import", async (event, paths) => {
+    const sender = event.sender;
+    const files = await expandSpotifyPaths(paths);
+    let imported = 0;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const plays = await parseSpotifyFile(file);
+      imported += insertPlays(plays);
+      if (!sender.isDestroyed()) {
+        const evt = {
+          processedFiles: i + 1,
+          totalFiles: files.length,
+          current: path.basename(file)
+        };
+        sender.send("spotify:progress", evt);
+      }
+    }
+    return { imported, totalFiles: files.length };
+  });
+  electron.ipcMain.handle("spotify:forPeriod", (_, from, to) => getPlaysForPeriod(from, to));
+  electron.ipcMain.handle("spotify:topArtists", (_, from, to, limit = 50) => getTopArtists(from, to, limit));
+}
 function registerAllHandlers() {
   registerBackupHandlers();
   registerEntryHandlers();
@@ -1849,6 +2085,7 @@ function registerAllHandlers() {
   registerMapHandlers();
   registerTagHandlers();
   registerSettingsHandlers();
+  registerSpotifyHandlers();
 }
 electron.protocol.registerSchemesAsPrivileged([
   { scheme: "timeline", privileges: { secure: true, supportFetchAPI: true, bypassCSP: true } }

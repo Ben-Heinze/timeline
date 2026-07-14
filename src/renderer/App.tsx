@@ -15,6 +15,7 @@ import SettingsView from './components/SettingsView'
 import ImportTagModal from './components/ImportTagModal'
 import DateRangeGroupModal from './components/DateRangeGroupModal'
 import EventsPanel from './components/EventsPanel'
+import SpotifyPanel from './components/SpotifyPanel'
 import LifeEventModal from './components/LifeEventModal'
 
 function ResizeDivider({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
@@ -247,8 +248,8 @@ function IngestProgressBar() {
 }
 
 function Main() {
-  const { ingestProgress, syncProgress, selectedPeriod, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore()
-  const browserOpen = fileBrowserOpen || selectedPeriod !== null
+  const { ingestProgress, syncProgress, selectedPeriod, selectedLocation, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore()
+  const browserOpen = fileBrowserOpen || selectedPeriod !== null || selectedLocation !== null
   const bottomOpen = browserOpen || searchResults !== null
   const isSyncing = syncProgress !== null && syncProgress.phase !== 'done'
   const isImporting = ingestProgress !== null && !ingestProgress.done
@@ -447,6 +448,7 @@ function Main() {
              : <FilesView />}
           </div>
           {activeView === 'timeline' && <EventsPanel />}
+          {activeView === 'timeline' && <SpotifyPanel />}
         </div>
       </div>
 

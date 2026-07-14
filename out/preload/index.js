@@ -108,5 +108,16 @@ electron.contextBridge.exposeInMainWorld("api", {
       electron.ipcRenderer.on("backup:progress", handler);
       return () => electron.ipcRenderer.removeListener("backup:progress", handler);
     }
+  },
+  spotify: {
+    pickExport: () => electron.ipcRenderer.invoke("spotify:pickExport"),
+    import: (paths) => electron.ipcRenderer.invoke("spotify:import", paths),
+    forPeriod: (from, to) => electron.ipcRenderer.invoke("spotify:forPeriod", from, to),
+    topArtists: (from, to, limit) => electron.ipcRenderer.invoke("spotify:topArtists", from, to, limit ?? 50),
+    onProgress: (cb) => {
+      const handler = (_, data) => cb(data);
+      electron.ipcRenderer.on("spotify:progress", handler);
+      return () => electron.ipcRenderer.removeListener("spotify:progress", handler);
+    }
   }
 });

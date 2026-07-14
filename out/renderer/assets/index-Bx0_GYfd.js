@@ -7175,6 +7175,7 @@ const useStore = create((set) => ({
   lastSelectedId: null,
   activeEntryId: null,
   selectedPeriod: null,
+  selectedLocation: null,
   fileBrowserOpen: false,
   selectedGroupId: null,
   dataExtent: null,
@@ -7196,7 +7197,8 @@ const useStore = create((set) => ({
   setGroups: (groups) => set({ groups }),
   setSelection: (ids, lastId) => set({ selectedIds: ids, lastSelectedId: lastId }),
   setActiveEntryId: (id2) => set({ activeEntryId: id2 }),
-  setSelectedPeriod: (period) => set({ selectedPeriod: period }),
+  setSelectedPeriod: (period) => set(period !== null ? { selectedPeriod: period, selectedLocation: null } : { selectedPeriod: period }),
+  setSelectedLocation: (entries) => set(entries !== null ? { selectedLocation: entries, selectedPeriod: null } : { selectedLocation: entries }),
   setFileBrowserOpen: (open) => set({ fileBrowserOpen: open }),
   setSelectedGroupId: (id2) => set({ selectedGroupId: id2 }),
   setDataExtent: (extent) => set({ dataExtent: extent }),
@@ -7214,6 +7216,8 @@ const useStore = create((set) => ({
   setEvents: (events) => set({ events }),
   eventsPanelOpen: true,
   setEventsPanelOpen: (open) => set({ eventsPanelOpen: open }),
+  spotifyPanelOpen: false,
+  setSpotifyPanelOpen: (open) => set({ spotifyPanelOpen: open }),
   groupSidebarOpen: true,
   setGroupSidebarOpen: (open) => set({ groupSidebarOpen: open }),
   focusedEventId: null,
@@ -7542,6 +7546,8 @@ function TimelineCanvas() {
     events,
     eventsPanelOpen,
     setEventsPanelOpen,
+    spotifyPanelOpen,
+    setSpotifyPanelOpen,
     groupSidebarOpen,
     setGroupSidebarOpen,
     setFocusedEventId
@@ -8246,6 +8252,18 @@ function TimelineCanvas() {
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
+          onClick: () => {
+            setSpotifyPanelOpen(!spotifyPanelOpen);
+            if (!spotifyPanelOpen) setEventsPanelOpen(false);
+          },
+          style: { ...btnStyle(spotifyPanelOpen), marginRight: 6 },
+          title: "Show top artists for the current view",
+          children: "♫ Spotify"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
           onClick: () => setGroupSidebarOpen(!groupSidebarOpen),
           style: { ...btnStyle(groupSidebarOpen), marginRight: 6 },
           title: "Show the groups sidebar",
@@ -8255,7 +8273,10 @@ function TimelineCanvas() {
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
-          onClick: () => setEventsPanelOpen(!eventsPanelOpen),
+          onClick: () => {
+            setEventsPanelOpen(!eventsPanelOpen);
+            if (!eventsPanelOpen) setSpotifyPanelOpen(false);
+          },
           style: { ...btnStyle(eventsPanelOpen), marginRight: 6 },
           title: "Show life events for the current view",
           children: "◨ Events"
@@ -8430,8 +8451,8 @@ function TimelineCanvas() {
   ] });
 }
 const MS_DAY$3 = 864e5;
-const fmtDay = (ts) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-const fmtEventRange = (e) => `${fmtDay(e.date_from)} – ${e.date_to != null ? fmtDay(e.date_to - MS_DAY$3 / 2) : "present"}`;
+const fmtDay$1 = (ts) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+const fmtEventRange = (e) => `${fmtDay$1(e.date_from)} – ${e.date_to != null ? fmtDay$1(e.date_to - MS_DAY$3 / 2) : "present"}`;
 function EventRow({ event, expanded, onToggle }) {
   const { openEventModal, setEvents } = useStore();
   const [confirmingDelete, setConfirmingDelete] = reactExports.useState(false);
@@ -8513,7 +8534,7 @@ function EventsPanel() {
     setFocusedEventId(null);
   }, [focusedEventId, setFocusedEventId]);
   const [from2, to] = selectedPeriod ?? visibleRange;
-  const scopeLabel = selectedPeriod ? `during ${fmtDay(selectedPeriod[0])}` : "in the visible range";
+  const scopeLabel = selectedPeriod ? `during ${fmtDay$1(selectedPeriod[0])}` : "in the visible range";
   const visibleEvents = reactExports.useMemo(
     () => events.filter((e) => e.date_from < to && (e.date_to ?? Infinity) > from2),
     [events, from2, to]
@@ -94617,18 +94638,22 @@ const MODE_LABEL = {
 function formatMB(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+const CLICK_RADIUS_PX = 26;
 function MapView() {
-  const { refreshKey, settings, setSettings } = useStore();
+  const { refreshKey, settings, setSettings, selectedLocation, setSelectedLocation } = useStore();
   const mode = settings?.mapMode ?? "offline";
   const containerRef = reactExports.useRef(null);
   const mapRef = reactExports.useRef(null);
   const heatRef = reactExports.useRef(null);
   const baseLayersRef = reactExports.useRef([]);
+  const locatedRef = reactExports.useRef([]);
+  const selectionCircleRef = reactExports.useRef(null);
   const [located, setLocated] = reactExports.useState(null);
   const [hiresDownloaded, setHiresDownloaded] = reactExports.useState(null);
   const [hiresData, setHiresData] = reactExports.useState(null);
   const [dl2, setDl] = reactExports.useState(null);
   const [dlError, setDlError] = reactExports.useState(null);
+  const [clickMarker, setClickMarker] = reactExports.useState(null);
   reactExports.useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     const map2 = L$1.map(containerRef.current, {
@@ -94726,6 +94751,54 @@ function MapView() {
       cancelled = true;
     };
   }, [refreshKey]);
+  reactExports.useEffect(() => {
+    locatedRef.current = located ?? [];
+  }, [located]);
+  reactExports.useEffect(() => {
+    const map2 = mapRef.current;
+    if (!map2) return;
+    const onMapClick = (e) => {
+      const clickPt = map2.latLngToContainerPoint(e.latlng);
+      const edgeLatLng = map2.containerPointToLatLng(clickPt.add(L$1.point(CLICK_RADIUS_PX, 0)));
+      const radiusMeters = map2.distance(e.latlng, edgeLatLng);
+      const nearby = locatedRef.current.filter(
+        (entry) => map2.distance([entry.latitude, entry.longitude], e.latlng) <= radiusMeters
+      );
+      if (nearby.length > 0) {
+        setSelectedLocation(nearby);
+        setClickMarker({ lat: e.latlng.lat, lng: e.latlng.lng, radiusMeters });
+      } else {
+        setSelectedLocation(null);
+        setClickMarker(null);
+      }
+    };
+    map2.on("click", onMapClick);
+    return () => {
+      map2.off("click", onMapClick);
+    };
+  }, [setSelectedLocation]);
+  reactExports.useEffect(() => {
+    if (selectedLocation === null) setClickMarker(null);
+  }, [selectedLocation]);
+  reactExports.useEffect(() => {
+    const map2 = mapRef.current;
+    if (!map2) return;
+    if (selectionCircleRef.current) {
+      map2.removeLayer(selectionCircleRef.current);
+      selectionCircleRef.current = null;
+    }
+    if (clickMarker) {
+      selectionCircleRef.current = L$1.circle([clickMarker.lat, clickMarker.lng], {
+        radius: clickMarker.radiusMeters,
+        color: "#ffffff",
+        weight: 2,
+        dashArray: "4 4",
+        fillColor: "#ffffff",
+        fillOpacity: 0.08,
+        interactive: false
+      }).addTo(map2);
+    }
+  }, [clickMarker]);
   reactExports.useEffect(() => {
     const map2 = mapRef.current;
     if (!map2 || located === null) return;
@@ -94858,14 +94931,17 @@ function MapView() {
       zIndex: 1e3,
       padding: "4px 10px",
       borderRadius: 6,
-      fontSize: 12,
-      fontWeight: 600,
-      color: "var(--text-2)"
+      display: "flex",
+      flexDirection: "column",
+      gap: 1
     }, children: [
-      located.length,
-      " photo",
-      located.length !== 1 ? "s" : "",
-      " with location"
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, fontWeight: 600, color: "var(--text-2)" }, children: [
+        located.length,
+        " photo",
+        located.length !== 1 ? "s" : "",
+        " with location"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, color: "var(--text-4)" }, children: "Click a hotspot to see its photos" })
     ] })
   ] });
 }
@@ -95879,10 +95955,17 @@ function computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent) {
   return { from: from2, to, label: mid.toLocaleString("en-US", { month: "long", year: "numeric" }), sectionUnit: "day" };
 }
 const MIN_HEIGHT = 140;
+function formatPlayDuration(ms) {
+  const totalMin = Math.max(1, Math.round(ms / 6e4));
+  if (totalMin < 60) return `${totalMin}m`;
+  return `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`;
+}
 function FileBrowser() {
   const {
     selectedPeriod,
     setSelectedPeriod,
+    selectedLocation,
+    setSelectedLocation,
     fileBrowserOpen,
     setFileBrowserOpen,
     zoomLevel,
@@ -95900,19 +95983,24 @@ function FileBrowser() {
     setSettings
   } = useStore();
   const [entries, setEntries] = reactExports.useState([]);
+  const [plays, setPlays] = reactExports.useState([]);
   const [resizing, setResizing] = reactExports.useState(false);
   const [handleHovered, setHandleHovered] = reactExports.useState(false);
   const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(entries);
   const height = settings?.fileBrowserHeight ?? 240;
   const viewMode = settings?.fileBrowserMode ?? "medium";
-  const isOpen = fileBrowserOpen || selectedPeriod !== null;
+  const isOpen = fileBrowserOpen || selectedPeriod !== null || selectedLocation !== null;
   const scope = reactExports.useMemo(
-    () => isOpen ? computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent) : null,
-    [isOpen, selectedPeriod, zoomLevel, visibleRange, dataExtent]
+    () => isOpen && !selectedLocation ? computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent) : null,
+    [isOpen, selectedPeriod, zoomLevel, visibleRange, dataExtent, selectedLocation]
   );
   const scopeFrom = scope?.from ?? null;
   const scopeTo = scope?.to ?? null;
   reactExports.useEffect(() => {
+    if (selectedLocation) {
+      setEntries(selectedLocation);
+      return;
+    }
     if (scopeFrom === null || scopeTo === null) {
       setEntries([]);
       return;
@@ -95924,7 +96012,41 @@ function FileBrowser() {
     return () => {
       cancelled = true;
     };
-  }, [scopeFrom, scopeTo, selectedGroupId, refreshKey]);
+  }, [scopeFrom, scopeTo, selectedGroupId, refreshKey, selectedLocation]);
+  reactExports.useEffect(() => {
+    if (selectedLocation) {
+      setPlays([]);
+      return;
+    }
+    if (scopeFrom === null || scopeTo === null) {
+      setPlays([]);
+      return;
+    }
+    let cancelled = false;
+    window.api.spotify.forPeriod(scopeFrom, scopeTo).then((res) => {
+      if (!cancelled) setPlays(res);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scopeFrom, scopeTo, refreshKey, selectedLocation]);
+  const playGroups = reactExports.useMemo(() => {
+    const map2 = /* @__PURE__ */ new Map();
+    const order = [];
+    for (const p2 of plays) {
+      if (!p2.track_name) continue;
+      const key = `${p2.track_name}::${p2.artist_name ?? ""}`;
+      let g = map2.get(key);
+      if (!g) {
+        g = { key, track: p2.track_name, artist: p2.artist_name, mediaType: p2.media_type, count: 0, msPlayed: 0 };
+        map2.set(key, g);
+        order.push(key);
+      }
+      g.count++;
+      g.msPlayed += p2.ms_played;
+    }
+    return order.map((k2) => map2.get(k2));
+  }, [plays]);
   reactExports.useEffect(() => {
     if (!isOpen) setSelection(/* @__PURE__ */ new Set(), null);
   }, [isOpen, setSelection]);
@@ -96010,10 +96132,11 @@ function FileBrowser() {
   const close2 = reactExports.useCallback(() => {
     setFileBrowserOpen(false);
     setSelectedPeriod(null);
+    setSelectedLocation(null);
     setActiveEntryId(null);
-  }, [setFileBrowserOpen, setSelectedPeriod, setActiveEntryId]);
+  }, [setFileBrowserOpen, setSelectedPeriod, setSelectedLocation, setActiveEntryId]);
   if (!isOpen) return null;
-  const label = scope?.label ?? "All files";
+  const label = selectedLocation ? "Photos near this location" : scope?.label ?? "All files";
   const count = entries.length;
   const renderItem = (entry) => {
     const common = {
@@ -96071,7 +96194,7 @@ function FileBrowser() {
         " ",
         count === 1 ? "item" : "items"
       ] }),
-      selectedPeriod && fileBrowserOpen && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      selectedPeriod && fileBrowserOpen && !selectedLocation && /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
           onClick: () => setSelectedPeriod(null),
@@ -96118,31 +96241,68 @@ function FileBrowser() {
         }
       )
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", minHeight: 0 }, children: entries.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      height: "100%",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      color: "var(--text-4)",
-      fontSize: 13
-    }, children: "No entries for this period" }) : sections ? sections.map((section) => /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
-        position: "sticky",
-        top: 0,
-        zIndex: 1,
-        background: "var(--bg-app)",
-        padding: "10px 14px 6px",
-        fontSize: 12,
-        fontWeight: 700,
-        color: "var(--text-2)",
-        letterSpacing: 0.4,
-        borderBottom: "1px solid var(--border-light)"
-      }, children: [
-        section.label,
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "var(--text-4)", fontWeight: 400 }, children: section.items.length })
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, overflowY: "auto", minHeight: 0 }, children: [
+      playGroups.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
+          position: "sticky",
+          top: 0,
+          zIndex: 1,
+          background: "var(--bg-app)",
+          padding: "10px 14px 6px",
+          fontSize: 12,
+          fontWeight: 700,
+          color: "var(--text-2)",
+          letterSpacing: 0.4,
+          borderBottom: "1px solid var(--border-light)"
+        }, children: [
+          "Listening History",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "var(--text-4)", fontWeight: 400 }, children: playGroups.length })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "6px 14px 12px", display: "flex", flexDirection: "column", gap: 3 }, children: playGroups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+          fontSize: 12.5,
+          color: "var(--text)"
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { flexShrink: 0 }, children: g.mediaType === "episode" ? "🎙️" : "🎵" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: g.track }),
+          g.artist && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { color: "var(--text-3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, children: [
+            "— ",
+            g.artist
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: "auto", color: "var(--text-4)", fontSize: 11.5, flexShrink: 0 }, children: [
+            g.count > 1 ? `×${g.count} · ` : "",
+            formatPlayDuration(g.msPlayed)
+          ] })
+        ] }, g.key)) })
       ] }),
-      renderItems(section.items)
-    ] }, section.key)) : renderItems(entries) }),
+      entries.length === 0 && playGroups.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+        height: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "var(--text-4)",
+        fontSize: 13
+      }, children: "No entries for this period" }) : sections ? sections.map((section) => /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
+          position: "sticky",
+          top: 0,
+          zIndex: 1,
+          background: "var(--bg-app)",
+          padding: "10px 14px 6px",
+          fontSize: 12,
+          fontWeight: 700,
+          color: "var(--text-2)",
+          letterSpacing: 0.4,
+          borderBottom: "1px solid var(--border-light)"
+        }, children: [
+          section.label,
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "var(--text-4)", fontWeight: 400 }, children: section.items.length })
+        ] }),
+        renderItems(section.items)
+      ] }, section.key)) : renderItems(entries)
+    ] }),
     contextMenuUI
   ] });
 }
@@ -115251,7 +115411,7 @@ function FileActions({ entry }) {
   ] });
 }
 function EntryModal() {
-  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedGroupId, openJournalModal } = useStore();
+  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal } = useStore();
   const [entry, setEntry] = reactExports.useState(null);
   const [entryTags, setEntryTags] = reactExports.useState([]);
   const [periodEntries, setPeriodEntries] = reactExports.useState([]);
@@ -115270,12 +115430,16 @@ function EntryModal() {
     setEntryTags(updated);
   }, [activeEntryId]);
   reactExports.useEffect(() => {
+    if (selectedLocation) {
+      setPeriodEntries(selectedLocation);
+      return;
+    }
     if (!selectedPeriod) {
       setPeriodEntries([]);
       return;
     }
     window.api.entries.forPeriod(selectedPeriod[0], selectedPeriod[1], selectedGroupId ?? void 0).then(setPeriodEntries);
-  }, [selectedPeriod, selectedGroupId]);
+  }, [selectedPeriod, selectedGroupId, selectedLocation]);
   const idx = entry ? periodEntries.findIndex((e) => e.id === entry.id) : -1;
   const hasPrev = idx > 0;
   const hasNext = idx >= 0 && idx < periodEntries.length - 1;
@@ -116945,6 +117109,10 @@ function SettingsView() {
   const [backupMessage, setBackupMessage] = reactExports.useState(null);
   const [backupError, setBackupError] = reactExports.useState(null);
   const [pendingImport, setPendingImport] = reactExports.useState(null);
+  const [spotifyBusy, setSpotifyBusy] = reactExports.useState(false);
+  const [spotifyProgress, setSpotifyProgress] = reactExports.useState(null);
+  const [spotifyMessage, setSpotifyMessage] = reactExports.useState(null);
+  const [spotifyError, setSpotifyError] = reactExports.useState(null);
   const [pathHealth, setPathHealth] = reactExports.useState({});
   const [resolving, setResolving] = reactExports.useState(null);
   function pathColor(p2) {
@@ -116980,6 +117148,10 @@ function SettingsView() {
   reactExports.useEffect(() => {
     if (typeof window.api.backup?.onProgress !== "function") return;
     return window.api.backup.onProgress(setBackupProgress);
+  }, []);
+  reactExports.useEffect(() => {
+    if (typeof window.api.spotify?.onProgress !== "function") return;
+    return window.api.spotify.onProgress(setSpotifyProgress);
   }, []);
   if (!settings) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 32, color: "var(--text-3)", fontSize: 13 }, children: "Loading settings…" });
@@ -117145,6 +117317,31 @@ function SettingsView() {
       setBackupError(ipcErrorMessage(e));
       setBackupBusy(null);
       setBackupProgress(null);
+    }
+  }
+  async function importSpotifyHistory() {
+    setSpotifyError(null);
+    setSpotifyMessage(null);
+    if (typeof window.api.spotify?.pickExport !== "function") {
+      setSpotifyError("Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).");
+      return;
+    }
+    const paths = await window.api.spotify.pickExport();
+    if (!paths.length) return;
+    setSpotifyBusy(true);
+    setSpotifyProgress(null);
+    try {
+      const res = await window.api.spotify.import(paths);
+      if (res.totalFiles === 0) {
+        setSpotifyError('No Streaming_History_Audio/Video JSON files found in the selected location. Point this at the folder from your Spotify "Extended streaming history" export.');
+      } else {
+        setSpotifyMessage(`Imported ${res.imported} play${res.imported === 1 ? "" : "s"} from ${res.totalFiles} file${res.totalFiles === 1 ? "" : "s"}.`);
+      }
+    } catch (e) {
+      setSpotifyError(ipcErrorMessage(e));
+    } finally {
+      setSpotifyBusy(false);
+      setSpotifyProgress(null);
     }
   }
   async function confirmReset() {
@@ -117467,6 +117664,36 @@ function SettingsView() {
       ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Listening history" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, alignItems: "flex-start" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Import Spotify history" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: 'Select the folder from your Spotify "Extended streaming history" data export — the one containing files named Streaming_History_Audio_*.json. Plays show up when you click on the day you listened to them on the timeline.' })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              style: { ...btn("default"), flexShrink: 0, opacity: spotifyBusy ? 0.6 : 1 },
+              onClick: importSpotifyHistory,
+              disabled: spotifyBusy,
+              children: spotifyBusy ? "Importing…" : "Import…"
+            }
+          )
+        ] }),
+        spotifyBusy && spotifyProgress && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, borderTop: "1px solid var(--border-light)", fontSize: 12, color: "var(--text-3)" }, children: [
+          "Processing file ",
+          spotifyProgress.processedFiles,
+          "/",
+          spotifyProgress.totalFiles,
+          " — ",
+          spotifyProgress.current
+        ] }),
+        spotifyMessage && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...rowLast, borderTop: "1px solid var(--border-light)", fontSize: 12, color: "#16a34a", wordBreak: "break-all" }, children: spotifyMessage }),
+        spotifyError && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...rowLast, borderTop: "1px solid var(--border-light)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "#b91c1c", background: "#fee2e2", padding: "6px 10px", borderRadius: 4, width: "100%", boxSizing: "border-box" }, children: spotifyError }) })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Duplicate detection" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: row, children: [
@@ -117686,7 +117913,7 @@ function SettingsView() {
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: card, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, flexDirection: "column", alignItems: "flex-start", gap: 12 }, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 4 }, children: "Generate test data" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: 'Creates 1,000 blank placeholder files (photos, videos, audio, documents) inside your library, spread across the last 5 years with a few dense days of 20+ files, and randomly tagged from 10 common tags. Use "Clear entire database" below to remove everything again.' })
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: 'Creates 1,000 blank placeholder files (photos, videos, audio, documents) inside your library, spread across the last 5 years with a few dense days of 20+ files, randomly tagged from 12 common tags. About a third of photos/videos carry GPS data clustered around real-world cities for the map view, and ten themed same-day clusters (trips, birthdays, reunions) are assigned into Groups. Use "Clear entire database" below to remove everything again.' })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
@@ -118200,6 +118427,102 @@ function DateRangeGroupModal() {
     }
   );
 }
+const fmtDay = (ts) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+function formatPlaytime(ms) {
+  const totalMin = Math.round(ms / 6e4);
+  if (totalMin < 60) return `${totalMin}m`;
+  const h = Math.floor(totalMin / 60);
+  const m2 = totalMin % 60;
+  return m2 === 0 ? `${h}h` : `${h}h ${m2}m`;
+}
+function SpotifyPanel() {
+  const { spotifyPanelOpen, setSpotifyPanelOpen, selectedPeriod, visibleRange, refreshKey } = useStore();
+  const [artists, setArtists] = reactExports.useState([]);
+  const [from2, to] = selectedPeriod ?? visibleRange;
+  const scopeLabel = selectedPeriod ? `during ${fmtDay(selectedPeriod[0])}` : "in the visible range";
+  reactExports.useEffect(() => {
+    if (!spotifyPanelOpen) return;
+    let cancelled = false;
+    window.api.spotify.topArtists(from2, to, 50).then((res) => {
+      if (!cancelled) setArtists(res);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [spotifyPanelOpen, from2, to, refreshKey]);
+  if (!spotifyPanelOpen) return null;
+  const maxMs = artists.length > 0 ? artists[0].ms_played : 0;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { style: {
+    width: 272,
+    flexShrink: 0,
+    borderLeft: "1px solid var(--border)",
+    background: "var(--bg-surface)",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden"
+  }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+      padding: "10px 12px",
+      borderBottom: "1px solid var(--border)",
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexShrink: 0
+    }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { minWidth: 0 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, fontWeight: 700, color: "var(--text)" }, children: "Spotify" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 11, color: "var(--text-3)", whiteSpace: "nowrap" }, children: [
+          "top artists ",
+          scopeLabel
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: () => setSpotifyPanelOpen(false),
+          title: "Close panel",
+          style: {
+            marginLeft: "auto",
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            fontSize: 15,
+            lineHeight: 1,
+            padding: "0 2px",
+            color: "var(--text-3)",
+            flexShrink: 0
+          },
+          children: "×"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto" }, children: artists.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "18px 14px", fontSize: 12, color: "var(--text-4)", lineHeight: 1.6 }, children: [
+      "No listening history ",
+      scopeLabel,
+      "."
+    ] }) : artists.map((a, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "7px 12px", borderBottom: "1px solid var(--border-light)" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "baseline", gap: 8 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", fontWeight: 600, width: 16, flexShrink: 0 }, children: i + 1 }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: "var(--text)",
+          flex: 1,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap"
+        }, children: a.artist_name }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-3)", flexShrink: 0 }, children: formatPlaytime(a.ms_played) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 4, background: "var(--bg-subtle)", borderRadius: 2, marginTop: 4, marginLeft: 24, overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+        width: `${maxMs > 0 ? a.ms_played / maxMs * 100 : 0}%`,
+        height: "100%",
+        background: "#1DB954",
+        borderRadius: 2
+      } }) })
+    ] }, a.artist_name)) })
+  ] });
+}
 const PRESET_COLORS = [
   "#ef4444",
   "#f97316",
@@ -118670,8 +118993,8 @@ function IngestProgressBar() {
   ] });
 }
 function Main() {
-  const { ingestProgress, syncProgress, selectedPeriod, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore();
-  const browserOpen = fileBrowserOpen || selectedPeriod !== null;
+  const { ingestProgress, syncProgress, selectedPeriod, selectedLocation, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore();
+  const browserOpen = fileBrowserOpen || selectedPeriod !== null || selectedLocation !== null;
   const bottomOpen = browserOpen || searchResults !== null;
   const isSyncing = syncProgress !== null && syncProgress.phase !== "done";
   const isImporting = ingestProgress !== null && !ingestProgress.done;
@@ -118864,7 +119187,8 @@ function Main() {
           overflow: "hidden"
         }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "map" ? /* @__PURE__ */ jsxRuntimeExports.jsx(MapView, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
-          activeView === "timeline" && /* @__PURE__ */ jsxRuntimeExports.jsx(EventsPanel, {})
+          activeView === "timeline" && /* @__PURE__ */ jsxRuntimeExports.jsx(EventsPanel, {}),
+          activeView === "timeline" && /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyPanel, {})
         ] }) }),
         activeView === "timeline" && !bottomOpen && isFixedHistogram && /* @__PURE__ */ jsxRuntimeExports.jsx(ResizeDivider, { onMouseDown: onResizeMouseDown }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(SearchResults, {}),

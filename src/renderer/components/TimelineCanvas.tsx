@@ -178,6 +178,7 @@ export default function TimelineCanvas() {
     settings,
     events,
     eventsPanelOpen, setEventsPanelOpen,
+    spotifyPanelOpen, setSpotifyPanelOpen,
     groupSidebarOpen, setGroupSidebarOpen,
     setFocusedEventId,
   } = useStore()
@@ -972,6 +973,16 @@ export default function TimelineCanvas() {
           ☰ Files
         </button>
         <button
+          onClick={() => {
+            setSpotifyPanelOpen(!spotifyPanelOpen)
+            if (!spotifyPanelOpen) setEventsPanelOpen(false)
+          }}
+          style={{ ...btnStyle(spotifyPanelOpen), marginRight: 6 }}
+          title="Show top artists for the current view"
+        >
+          ♫ Spotify
+        </button>
+        <button
           onClick={() => setGroupSidebarOpen(!groupSidebarOpen)}
           style={{ ...btnStyle(groupSidebarOpen), marginRight: 6 }}
           title="Show the groups sidebar"
@@ -979,7 +990,10 @@ export default function TimelineCanvas() {
           ◧ Groups
         </button>
         <button
-          onClick={() => setEventsPanelOpen(!eventsPanelOpen)}
+          onClick={() => {
+            setEventsPanelOpen(!eventsPanelOpen)
+            if (!eventsPanelOpen) setSpotifyPanelOpen(false)
+          }}
           style={{ ...btnStyle(eventsPanelOpen), marginRight: 6 }}
           title="Show life events for the current view"
         >

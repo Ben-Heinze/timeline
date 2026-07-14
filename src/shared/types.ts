@@ -204,3 +204,32 @@ export interface BackupImportResult {
   entries: number
   missingFiles: number         // entries whose file is not present yet (re-sync to relink)
 }
+
+export interface SpotifyPlay {
+  id: number
+  timestamp: number            // Unix ms, from the play's `ts` field
+  track_name: string | null
+  artist_name: string | null
+  album_name: string | null
+  ms_played: number
+  media_type: 'track' | 'episode'
+  spotify_uri: string | null
+  created_at: number
+}
+
+export interface SpotifyImportProgressEvent {
+  processedFiles: number
+  totalFiles: number
+  current: string
+}
+
+export interface SpotifyImportResult {
+  imported: number
+  totalFiles: number
+}
+
+export interface ArtistPlaytime {
+  artist_name: string
+  ms_played: number
+  play_count: number
+}

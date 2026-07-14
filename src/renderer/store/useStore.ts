@@ -17,6 +17,7 @@ interface TimelineStore {
   lastSelectedId: number | null
   activeEntryId: number | null
   selectedPeriod: [number, number] | null
+  selectedLocation: Entry[] | null
   fileBrowserOpen: boolean
   selectedGroupId: number | null
   dataExtent: [number, number] | null
@@ -36,6 +37,7 @@ interface TimelineStore {
   setSelection: (ids: Set<number>, lastId: number | null) => void
   setActiveEntryId: (id: number | null) => void
   setSelectedPeriod: (period: [number, number] | null) => void
+  setSelectedLocation: (entries: Entry[] | null) => void
   setFileBrowserOpen: (open: boolean) => void
   setSelectedGroupId: (id: number | null) => void
   setDataExtent: (extent: [number, number] | null) => void
@@ -54,6 +56,8 @@ interface TimelineStore {
   setEvents: (events: LifeEvent[]) => void
   eventsPanelOpen: boolean
   setEventsPanelOpen: (open: boolean) => void
+  spotifyPanelOpen: boolean
+  setSpotifyPanelOpen: (open: boolean) => void
   groupSidebarOpen: boolean
   setGroupSidebarOpen: (open: boolean) => void
   focusedEventId: number | null
@@ -79,6 +83,7 @@ export const useStore = create<TimelineStore>((set) => ({
   lastSelectedId: null,
   activeEntryId: null,
   selectedPeriod: null,
+  selectedLocation: null,
   fileBrowserOpen: false,
   selectedGroupId: null,
   dataExtent: null,
@@ -101,7 +106,8 @@ export const useStore = create<TimelineStore>((set) => ({
   setGroups: (groups) => set({ groups }),
   setSelection: (ids, lastId) => set({ selectedIds: ids, lastSelectedId: lastId }),
   setActiveEntryId: (id) => set({ activeEntryId: id }),
-  setSelectedPeriod: (period) => set({ selectedPeriod: period }),
+  setSelectedPeriod: (period) => set(period !== null ? { selectedPeriod: period, selectedLocation: null } : { selectedPeriod: period }),
+  setSelectedLocation: (entries) => set(entries !== null ? { selectedLocation: entries, selectedPeriod: null } : { selectedLocation: entries }),
   setFileBrowserOpen: (open) => set({ fileBrowserOpen: open }),
   setSelectedGroupId: (id) => set({ selectedGroupId: id }),
   setDataExtent: (extent) => set({ dataExtent: extent }),
@@ -120,6 +126,8 @@ export const useStore = create<TimelineStore>((set) => ({
   setEvents: (events) => set({ events }),
   eventsPanelOpen: true,
   setEventsPanelOpen: (open) => set({ eventsPanelOpen: open }),
+  spotifyPanelOpen: false,
+  setSpotifyPanelOpen: (open) => set({ spotifyPanelOpen: open }),
   groupSidebarOpen: true,
   setGroupSidebarOpen: (open) => set({ groupSidebarOpen: open }),
   focusedEventId: null,

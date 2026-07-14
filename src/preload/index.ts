@@ -5,6 +5,7 @@ import type {
   LifeEvent, NewLifeEvent,
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
   MapHiresLayer, MapDownloadProgressEvent,
+  SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -158,7 +159,7 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('settings:relocateLibrary', newPath),
     resetLibrary: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('settings:resetLibrary'),
-    generateTestData: (): Promise<{ entries: number; tags: number; denseDays: number }> =>
+    generateTestData: (): Promise<{ entries: number; tags: number; denseDays: number; located: number; groups: number }> =>
       ipcRenderer.invoke('settings:generateTestData'),
   },
   backup: {
@@ -172,6 +173,21 @@ contextBridge.exposeInMainWorld('api', {
       const handler = (_: unknown, data: BackupProgressEvent) => cb(data)
       ipcRenderer.on('backup:progress', handler)
       return () => ipcRenderer.removeListener('backup:progress', handler)
+    },
+  },
+  spotify: {
+    pickExport: (): Promise<string[]> =>
+      ipcRenderer.invoke('spotify:pickExport'),
+    import: (paths: string[]): Promise<SpotifyImportResult> =>
+      ipcRenderer.invoke('spotify:import', paths),
+    forPeriod: (from: number, to: number): Promise<SpotifyPlay[]> =>
+      ipcRenderer.invoke('spotify:forPeriod', from, to),
+    topArtists: (from: number, to: number, limit?: number): Promise<ArtistPlaytime[]> =>
+      ipcRenderer.invoke('spotify:topArtists', from, to, limit ?? 50),
+    onProgress: (cb: (event: SpotifyImportProgressEvent) => void) => {
+      const handler = (_: unknown, data: SpotifyImportProgressEvent) => cb(data)
+      ipcRenderer.on('spotify:progress', handler)
+      return () => ipcRenderer.removeListener('spotify:progress', handler)
     },
   },
 })

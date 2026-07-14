@@ -6,6 +6,7 @@ import type {
   LifeEvent, NewLifeEvent,
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
   MapHiresLayer, MapDownloadProgressEvent,
+  SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
 } from '../shared/types'
 
 interface Api {
@@ -85,13 +86,20 @@ interface Api {
     resolveWatchedFolder: (oldPath: string, newPath: string) => Promise<{ found: number; total: number }>
     relocateLibrary: (newPath: string) => Promise<{ found: number; total: number }>
     resetLibrary: () => Promise<{ success: boolean }>
-    generateTestData: () => Promise<{ entries: number; tags: number; denseDays: number }>
+    generateTestData: () => Promise<{ entries: number; tags: number; denseDays: number; located: number; groups: number }>
   }
   backup: {
     export: (type: BackupExportType) => Promise<BackupExportResult>
     pickArchive: () => Promise<string | null>
     import: (zipPath: string, destDir: string) => Promise<BackupImportResult>
     onProgress: (cb: (event: BackupProgressEvent) => void) => () => void
+  }
+  spotify: {
+    pickExport: () => Promise<string[]>
+    import: (paths: string[]) => Promise<SpotifyImportResult>
+    forPeriod: (from: number, to: number) => Promise<SpotifyPlay[]>
+    topArtists: (from: number, to: number, limit?: number) => Promise<ArtistPlaytime[]>
+    onProgress: (cb: (event: SpotifyImportProgressEvent) => void) => () => void
   }
 }
 

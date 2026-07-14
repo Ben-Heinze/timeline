@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
-import type { AppSettings, BackupExportType, BackupProgressEvent, DuplicateGroup } from '../../shared/types'
+import type { AppSettings, BackupExportType, BackupProgressEvent, DuplicateGroup, SpotifyImportProgressEvent } from '../../shared/types'
 import { THEMES } from '../theme'
 
 function ipcErrorMessage(e: unknown): string {
@@ -27,6 +27,10 @@ export default function SettingsView() {
   const [backupMessage, setBackupMessage] = useState<string | null>(null)
   const [backupError, setBackupError] = useState<string | null>(null)
   const [pendingImport, setPendingImport] = useState<{ zipPath: string; destDir: string } | null>(null)
+  const [spotifyBusy, setSpotifyBusy] = useState(false)
+  const [spotifyProgress, setSpotifyProgress] = useState<SpotifyImportProgressEvent | null>(null)
+  const [spotifyMessage, setSpotifyMessage] = useState<string | null>(null)
+  const [spotifyError, setSpotifyError] = useState<string | null>(null)
 
   type PathHealth = { exists: boolean; foundRatio: number | null }
   const [pathHealth, setPathHealth] = useState<Record<string, PathHealth>>({})
@@ -68,6 +72,11 @@ export default function SettingsView() {
   useEffect(() => {
     if (typeof window.api.backup?.onProgress !== 'function') return
     return window.api.backup.onProgress(setBackupProgress)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window.api.spotify?.onProgress !== 'function') return
+    return window.api.spotify.onProgress(setSpotifyProgress)
   }, [])
 
   if (!settings) {
@@ -248,6 +257,32 @@ export default function SettingsView() {
       setBackupError(ipcErrorMessage(e))
       setBackupBusy(null)
       setBackupProgress(null)
+    }
+  }
+
+  async function importSpotifyHistory() {
+    setSpotifyError(null)
+    setSpotifyMessage(null)
+    if (typeof window.api.spotify?.pickExport !== 'function') {
+      setSpotifyError('Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).')
+      return
+    }
+    const paths = await window.api.spotify.pickExport()
+    if (!paths.length) return
+    setSpotifyBusy(true)
+    setSpotifyProgress(null)
+    try {
+      const res = await window.api.spotify.import(paths)
+      if (res.totalFiles === 0) {
+        setSpotifyError('No Streaming_History_Audio/Video JSON files found in the selected location. Point this at the folder from your Spotify "Extended streaming history" export.')
+      } else {
+        setSpotifyMessage(`Imported ${res.imported} play${res.imported === 1 ? '' : 's'} from ${res.totalFiles} file${res.totalFiles === 1 ? '' : 's'}.`)
+      }
+    } catch (e) {
+      setSpotifyError(ipcErrorMessage(e))
+    } finally {
+      setSpotifyBusy(false)
+      setSpotifyProgress(null)
     }
   }
 
@@ -568,6 +603,47 @@ export default function SettingsView() {
         </div>
       </div>
 
+      {/* Spotify listening history */}
+      <div style={section}>
+        <div style={sectionLabel}>Listening history</div>
+        <div style={card}>
+          <div style={{ ...rowLast, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Import Spotify history</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                Select the folder from your Spotify "Extended streaming history" data export — the one
+                containing files named Streaming_History_Audio_*.json. Plays show up when you click on the
+                day you listened to them on the timeline.
+              </div>
+            </div>
+            <button
+              style={{ ...btn('default'), flexShrink: 0, opacity: spotifyBusy ? 0.6 : 1 }}
+              onClick={importSpotifyHistory}
+              disabled={spotifyBusy}
+            >
+              {spotifyBusy ? 'Importing…' : 'Import…'}
+            </button>
+          </div>
+          {spotifyBusy && spotifyProgress && (
+            <div style={{ ...rowLast, borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-3)' }}>
+              Processing file {spotifyProgress.processedFiles}/{spotifyProgress.totalFiles} — {spotifyProgress.current}
+            </div>
+          )}
+          {spotifyMessage && (
+            <div style={{ ...rowLast, borderTop: '1px solid var(--border-light)', fontSize: 12, color: '#16a34a', wordBreak: 'break-all' }}>
+              {spotifyMessage}
+            </div>
+          )}
+          {spotifyError && (
+            <div style={{ ...rowLast, borderTop: '1px solid var(--border-light)' }}>
+              <div style={{ fontSize: 12, color: '#b91c1c', background: '#fee2e2', padding: '6px 10px', borderRadius: 4, width: '100%', boxSizing: 'border-box' }}>
+                {spotifyError}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Duplicate scan */}
       <div style={section}>
         <div style={sectionLabel}>Duplicate detection</div>
@@ -821,8 +897,10 @@ export default function SettingsView() {
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Generate test data</div>
               <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
                 Creates 1,000 blank placeholder files (photos, videos, audio, documents) inside your library,
-                spread across the last 5 years with a few dense days of 20+ files, and randomly tagged from
-                10 common tags. Use "Clear entire database" below to remove everything again.
+                spread across the last 5 years with a few dense days of 20+ files, randomly tagged from 12
+                common tags. About a third of photos/videos carry GPS data clustered around real-world cities
+                for the map view, and ten themed same-day clusters (trips, birthdays, reunions) are assigned
+                into Groups. Use "Clear entire database" below to remove everything again.
               </div>
             </div>
             <button

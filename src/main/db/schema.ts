@@ -66,6 +66,21 @@ export function initSchema(db: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_events_date_from ON events(date_from);
+
+    CREATE TABLE IF NOT EXISTS listening_history (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp    INTEGER NOT NULL,
+      track_name   TEXT,
+      artist_name  TEXT,
+      album_name   TEXT,
+      ms_played    INTEGER NOT NULL,
+      media_type   TEXT    NOT NULL DEFAULT 'track' CHECK(media_type IN ('track','episode')),
+      spotify_uri  TEXT,
+      created_at   INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_listening_history_timestamp ON listening_history(timestamp);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_listening_history_dedupe ON listening_history(timestamp, spotify_uri, ms_played);
   `)
 
   applyMigrations(db)

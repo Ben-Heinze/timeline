@@ -31,18 +31,25 @@ function formatMB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+// Click tolerance in screen pixels — matches the heat layer's own radius so
+// clicking anywhere on a visible "blob" picks up the photos that make it up.
+const CLICK_RADIUS_PX = 26
+
 export default function MapView() {
-  const { refreshKey, settings, setSettings } = useStore()
+  const { refreshKey, settings, setSettings, selectedLocation, setSelectedLocation } = useStore()
   const mode: MapMode = settings?.mapMode ?? 'offline'
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const heatRef = useRef<L.Layer | null>(null)
   const baseLayersRef = useRef<L.Layer[]>([])
+  const locatedRef = useRef<Entry[]>([])
+  const selectionCircleRef = useRef<L.Circle | null>(null)
   const [located, setLocated] = useState<Entry[] | null>(null)
   const [hiresDownloaded, setHiresDownloaded] = useState<boolean | null>(null)
   const [hiresData, setHiresData] = useState<HiresData | null>(null)
   const [dl, setDl] = useState<{ received: number; total: number } | null>(null)
   const [dlError, setDlError] = useState<string | null>(null)
+  const [clickMarker, setClickMarker] = useState<{ lat: number; lng: number; radiusMeters: number } | null>(null)
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
@@ -142,6 +149,56 @@ export default function MapView() {
     })
     return () => { cancelled = true }
   }, [refreshKey])
+
+  useEffect(() => {
+    locatedRef.current = located ?? []
+  }, [located])
+
+  // Click a heat blob to see the photos that make it up. Tolerance is a
+  // fixed screen-pixel radius converted to ground distance at click time, so
+  // it stays visually consistent (and clickable) at every zoom level.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const onMapClick = (e: L.LeafletMouseEvent) => {
+      const clickPt = map.latLngToContainerPoint(e.latlng)
+      const edgeLatLng = map.containerPointToLatLng(clickPt.add(L.point(CLICK_RADIUS_PX, 0)))
+      const radiusMeters = map.distance(e.latlng, edgeLatLng)
+      const nearby = locatedRef.current.filter(entry =>
+        map.distance([entry.latitude!, entry.longitude!], e.latlng) <= radiusMeters
+      )
+      if (nearby.length > 0) {
+        setSelectedLocation(nearby)
+        setClickMarker({ lat: e.latlng.lat, lng: e.latlng.lng, radiusMeters })
+      } else {
+        setSelectedLocation(null)
+        setClickMarker(null)
+      }
+    }
+    map.on('click', onMapClick)
+    return () => { map.off('click', onMapClick) }
+  }, [setSelectedLocation])
+
+  // Keep the on-map selection ring in sync if the panel gets closed elsewhere
+  useEffect(() => {
+    if (selectedLocation === null) setClickMarker(null)
+  }, [selectedLocation])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (selectionCircleRef.current) {
+      map.removeLayer(selectionCircleRef.current)
+      selectionCircleRef.current = null
+    }
+    if (clickMarker) {
+      selectionCircleRef.current = L.circle([clickMarker.lat, clickMarker.lng], {
+        radius: clickMarker.radiusMeters,
+        color: '#ffffff', weight: 2, dashArray: '4 4', fillColor: '#ffffff', fillOpacity: 0.08,
+        interactive: false,
+      }).addTo(map)
+    }
+  }, [clickMarker])
 
   useEffect(() => {
     const map = mapRef.current
@@ -276,9 +333,14 @@ export default function MapView() {
           ...panel,
           position: 'absolute', top: 12, left: 54, zIndex: 1000,
           padding: '4px 10px', borderRadius: 6,
-          fontSize: 12, fontWeight: 600, color: 'var(--text-2)',
+          display: 'flex', flexDirection: 'column', gap: 1,
         }}>
-          {located.length} photo{located.length !== 1 ? 's' : ''} with location
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)' }}>
+            {located.length} photo{located.length !== 1 ? 's' : ''} with location
+          </span>
+          <span style={{ fontSize: 10, color: 'var(--text-4)' }}>
+            Click a hotspot to see its photos
+          </span>
         </div>
       )}
     </div>

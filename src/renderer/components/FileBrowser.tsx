@@ -1,16 +1,23 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useStore } from '../store/useStore'
 import { useEntryContextMenu } from './EntryContextMenu'
-import type { Entry, FileViewMode } from '../../shared/types'
+import type { Entry, FileViewMode, SpotifyPlay } from '../../shared/types'
 import { GridCell, ListRow, THUMB_SIZE, iconFor, toolBtn } from './entryDisplay'
 import { computeScope, SECTION_KEY, SECTION_LABEL } from './scope'
 import { AssignDropdown } from './GroupPicker'
 
 const MIN_HEIGHT = 140
 
+function formatPlayDuration(ms: number): string {
+  const totalMin = Math.max(1, Math.round(ms / 60_000))
+  if (totalMin < 60) return `${totalMin}m`
+  return `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`
+}
+
 export default function FileBrowser() {
   const {
     selectedPeriod, setSelectedPeriod,
+    selectedLocation, setSelectedLocation,
     fileBrowserOpen, setFileBrowserOpen,
     zoomLevel, visibleRange, dataExtent,
     setActiveEntryId,
@@ -21,6 +28,7 @@ export default function FileBrowser() {
     settings, setSettings,
   } = useStore()
   const [entries, setEntries] = useState<Entry[]>([])
+  const [plays, setPlays] = useState<SpotifyPlay[]>([])
   const [resizing, setResizing] = useState(false)
   const [handleHovered, setHandleHovered] = useState(false)
 
@@ -29,22 +37,59 @@ export default function FileBrowser() {
   const height = settings?.fileBrowserHeight ?? 240
   const viewMode: FileViewMode = settings?.fileBrowserMode ?? 'medium'
 
-  const isOpen = fileBrowserOpen || selectedPeriod !== null
+  const isOpen = fileBrowserOpen || selectedPeriod !== null || selectedLocation !== null
   const scope = useMemo(
-    () => isOpen ? computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent) : null,
-    [isOpen, selectedPeriod, zoomLevel, visibleRange, dataExtent]
+    () => (isOpen && !selectedLocation) ? computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent) : null,
+    [isOpen, selectedPeriod, zoomLevel, visibleRange, dataExtent, selectedLocation]
   )
 
   const scopeFrom = scope?.from ?? null
   const scopeTo = scope?.to ?? null
   useEffect(() => {
+    if (selectedLocation) { setEntries(selectedLocation); return }
     if (scopeFrom === null || scopeTo === null) { setEntries([]); return }
     let cancelled = false
     window.api.entries.forPeriod(scopeFrom, scopeTo, selectedGroupId ?? undefined).then(res => {
       if (!cancelled) setEntries(res)
     })
     return () => { cancelled = true }
-  }, [scopeFrom, scopeTo, selectedGroupId, refreshKey])
+  }, [scopeFrom, scopeTo, selectedGroupId, refreshKey, selectedLocation])
+
+  useEffect(() => {
+    if (selectedLocation) { setPlays([]); return }
+    if (scopeFrom === null || scopeTo === null) { setPlays([]); return }
+    let cancelled = false
+    window.api.spotify.forPeriod(scopeFrom, scopeTo).then(res => {
+      if (!cancelled) setPlays(res)
+    })
+    return () => { cancelled = true }
+  }, [scopeFrom, scopeTo, refreshKey, selectedLocation])
+
+  const playGroups = useMemo(() => {
+    interface PlayGroup {
+      key: string
+      track: string
+      artist: string | null
+      mediaType: 'track' | 'episode'
+      count: number
+      msPlayed: number
+    }
+    const map = new Map<string, PlayGroup>()
+    const order: string[] = []
+    for (const p of plays) {
+      if (!p.track_name) continue
+      const key = `${p.track_name}::${p.artist_name ?? ''}`
+      let g = map.get(key)
+      if (!g) {
+        g = { key, track: p.track_name, artist: p.artist_name, mediaType: p.media_type, count: 0, msPlayed: 0 }
+        map.set(key, g)
+        order.push(key)
+      }
+      g.count++
+      g.msPlayed += p.ms_played
+    }
+    return order.map(k => map.get(k)!)
+  }, [plays])
 
   useEffect(() => {
     if (!isOpen) setSelection(new Set(), null)
@@ -140,12 +185,13 @@ export default function FileBrowser() {
   const close = useCallback(() => {
     setFileBrowserOpen(false)
     setSelectedPeriod(null)
+    setSelectedLocation(null)
     setActiveEntryId(null)
-  }, [setFileBrowserOpen, setSelectedPeriod, setActiveEntryId])
+  }, [setFileBrowserOpen, setSelectedPeriod, setSelectedLocation, setActiveEntryId])
 
   if (!isOpen) return null
 
-  const label = scope?.label ?? 'All files'
+  const label = selectedLocation ? 'Photos near this location' : (scope?.label ?? 'All files')
   const count = entries.length
 
   const renderItem = (entry: Entry) => {
@@ -204,7 +250,7 @@ export default function FileBrowser() {
         <span style={{ fontSize: 12, color: 'var(--text-3)', marginLeft: 2 }}>
           {count} {count === 1 ? 'item' : 'items'}
         </span>
-        {selectedPeriod && fileBrowserOpen && (
+        {selectedPeriod && fileBrowserOpen && !selectedLocation && (
           <button
             onClick={() => setSelectedPeriod(null)}
             title="Back to the full view scope"
@@ -239,7 +285,44 @@ export default function FileBrowser() {
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-        {entries.length === 0 ? (
+        {playGroups.length > 0 && (
+          <section>
+            <header style={{
+              position: 'sticky', top: 0, zIndex: 1,
+              background: 'var(--bg-app)',
+              padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
+              color: 'var(--text-2)', letterSpacing: 0.4,
+              borderBottom: '1px solid var(--border-light)',
+            }}>
+              Listening History
+              <span style={{ marginLeft: 8, color: 'var(--text-4)', fontWeight: 400 }}>
+                {playGroups.length}
+              </span>
+            </header>
+            <div style={{ padding: '6px 14px 12px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {playGroups.map(g => (
+                <div key={g.key} style={{
+                  display: 'flex', alignItems: 'baseline', gap: 8,
+                  fontSize: 12.5, color: 'var(--text)',
+                }}>
+                  <span style={{ flexShrink: 0 }}>{g.mediaType === 'episode' ? '🎙️' : '🎵'}</span>
+                  <span style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {g.track}
+                  </span>
+                  {g.artist && (
+                    <span style={{ color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      — {g.artist}
+                    </span>
+                  )}
+                  <span style={{ marginLeft: 'auto', color: 'var(--text-4)', fontSize: 11.5, flexShrink: 0 }}>
+                    {g.count > 1 ? `×${g.count} · ` : ''}{formatPlayDuration(g.msPlayed)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+        {entries.length === 0 && playGroups.length === 0 ? (
           <div style={{
             height: '100%',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
