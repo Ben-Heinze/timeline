@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react'
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useStore } from '../store/useStore'
 import { useEntryContextMenu } from './EntryContextMenu'
 import type { Entry, FileViewMode } from '../../shared/types'
@@ -104,7 +104,19 @@ export default function FileBrowser() {
     window.addEventListener('mouseup', onUp)
   }, [settings, setSettings])
 
-  const handleClickEntry = useCallback((entry: Entry) => (e: React.MouseEvent) => {
+  // Keep the selection handlers referentially stable (they read live state via
+  // refs) so the memoized grid/list rows don't all re-render on every click.
+  const selectedIdsRef = useRef(selectedIds)
+  selectedIdsRef.current = selectedIds
+  const lastSelectedIdRef = useRef(lastSelectedId)
+  lastSelectedIdRef.current = lastSelectedId
+  const entriesRef = useRef(entries)
+  entriesRef.current = entries
+
+  const onSelect = useCallback((e: React.MouseEvent, entry: Entry) => {
+    const selectedIds = selectedIdsRef.current
+    const lastSelectedId = lastSelectedIdRef.current
+    const entries = entriesRef.current
     if (e.metaKey || e.ctrlKey) {
       const next = new Set(selectedIds)
       if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id)
@@ -121,7 +133,9 @@ export default function FileBrowser() {
     } else {
       setSelection(new Set([entry.id]), entry.id)
     }
-  }, [selectedIds, lastSelectedId, entries, setSelection])
+  }, [setSelection])
+
+  const onActivate = useCallback((entry: Entry) => setActiveEntryId(entry.id), [setActiveEntryId])
 
   const close = useCallback(() => {
     setFileBrowserOpen(false)
@@ -138,9 +152,9 @@ export default function FileBrowser() {
     const common = {
       entry,
       selected: selectedIds.has(entry.id),
-      onClick: handleClickEntry(entry),
-      onDoubleClick: () => setActiveEntryId(entry.id),
-      onContextMenu: onEntryContextMenu(entry),
+      onSelect,
+      onActivate,
+      onContextMenu: onEntryContextMenu,
     }
     if (viewMode === 'list') return <ListRow key={entry.id} {...common} />
     return <GridCell key={entry.id} {...common} size={THUMB_SIZE[viewMode]} />

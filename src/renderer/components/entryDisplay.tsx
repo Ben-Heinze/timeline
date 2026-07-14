@@ -12,7 +12,7 @@ export const TYPE_LABELS: Record<string, string> = {
   photo: 'PHO', video: 'VID', audio: 'AUD', document: 'DOC', journal: 'JNL',
 }
 
-export function Thumb({ entry, size }: { entry: Entry; size: number }) {
+export const Thumb = React.memo(function Thumb({ entry, size }: { entry: Entry; size: number }) {
   const src = entry.thumbnail_medium ?? entry.thumbnail_small ?? entry.thumbnail_large
   if (src) {
     return (
@@ -39,22 +39,27 @@ export function Thumb({ entry, size }: { entry: Entry; size: number }) {
       </div>
     </div>
   )
-}
+})
 
+// Handlers are entry-aware and stable across renders so the memoized items below
+// only re-render when their own `selected` flag flips — not on every selection
+// change in a large list. See FileBrowser/FilesView for the stable callbacks.
 export interface RowCommonProps {
   entry: Entry
   selected: boolean
-  onClick: (e: React.MouseEvent) => void
-  onDoubleClick: () => void
-  onContextMenu?: (e: React.MouseEvent) => void
+  onSelect: (e: React.MouseEvent, entry: Entry) => void
+  onActivate: (entry: Entry) => void
+  onContextMenu?: (e: React.MouseEvent, entry: Entry) => void
 }
 
-export function GridCell({ entry, selected, onClick, onDoubleClick, onContextMenu, size }: RowCommonProps & { size: number }) {
+export const GridCell = React.memo(function GridCell({ entry, selected, onSelect, onActivate, onContextMenu, size }: RowCommonProps & { size: number }) {
   return (
     <div
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
-      onContextMenu={onContextMenu}
+      data-entry-id={entry.id}
+      data-selected={selected ? '1' : '0'}
+      onClick={e => onSelect(e, entry)}
+      onDoubleClick={() => onActivate(entry)}
+      onContextMenu={onContextMenu ? e => onContextMenu(e, entry) : undefined}
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
         width: size + 20, padding: 8, borderRadius: 8,
@@ -75,14 +80,16 @@ export function GridCell({ entry, selected, onClick, onDoubleClick, onContextMen
       </div>
     </div>
   )
-}
+})
 
-export function ListRow({ entry, selected, onClick, onDoubleClick, onContextMenu }: RowCommonProps) {
+export const ListRow = React.memo(function ListRow({ entry, selected, onSelect, onActivate, onContextMenu }: RowCommonProps) {
   return (
     <div
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
-      onContextMenu={onContextMenu}
+      data-entry-id={entry.id}
+      data-selected={selected ? '1' : '0'}
+      onClick={e => onSelect(e, entry)}
+      onDoubleClick={() => onActivate(entry)}
+      onContextMenu={onContextMenu ? e => onContextMenu(e, entry) : undefined}
       style={{
         display: 'grid',
         gridTemplateColumns: '32px 1fr 90px 180px',
@@ -114,7 +121,7 @@ export function ListRow({ entry, selected, onClick, onDoubleClick, onContextMenu
       </span>
     </div>
   )
-}
+})
 
 export function iconFor(m: FileViewMode): React.ReactNode {
   if (m === 'list') return <span style={{ letterSpacing: 1 }}>≡</span>

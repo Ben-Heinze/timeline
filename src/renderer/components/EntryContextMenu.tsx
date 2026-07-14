@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
 import TagEditor from './TagEditor'
 import { GroupPickerList } from './GroupPicker'
@@ -53,9 +53,14 @@ export function useEntryContextMenu(entries: Entry[]) {
     [pendingTagNames, allTags]
   )
 
-  const onEntryContextMenu = useCallback((entry: Entry) => (e: React.MouseEvent) => {
+  // Read the live selection through a ref so this handler stays referentially
+  // stable — passing it to hundreds of memoized rows must not invalidate them.
+  const selectedIdsRef = useRef(selectedIds)
+  selectedIdsRef.current = selectedIds
+  const onEntryContextMenu = useCallback((e: React.MouseEvent, entry: Entry) => {
     e.preventDefault()
     // Right-clicking outside the current selection retargets it to just that entry
+    const selectedIds = selectedIdsRef.current
     let ids: number[]
     if (selectedIds.has(entry.id)) {
       ids = [...selectedIds]
@@ -65,7 +70,7 @@ export function useEntryContextMenu(entries: Entry[]) {
     }
     setGroupSubOpen(false)
     setMenu({ x: e.clientX, y: e.clientY, ids })
-  }, [selectedIds, setSelection])
+  }, [setSelection])
 
   const closeMenu = useCallback(() => {
     setMenu(null)

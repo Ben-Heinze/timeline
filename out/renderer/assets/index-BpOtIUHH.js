@@ -95174,18 +95174,21 @@ function useEntryContextMenu(entries) {
     () => pendingTagNames.map((n2) => allTags.find((t2) => t2.name.toLowerCase() === n2.toLowerCase())).filter((t2) => t2 != null),
     [pendingTagNames, allTags]
   );
-  const onEntryContextMenu = reactExports.useCallback((entry) => (e) => {
+  const selectedIdsRef = reactExports.useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
+  const onEntryContextMenu = reactExports.useCallback((e, entry) => {
     e.preventDefault();
+    const selectedIds2 = selectedIdsRef.current;
     let ids;
-    if (selectedIds.has(entry.id)) {
-      ids = [...selectedIds];
+    if (selectedIds2.has(entry.id)) {
+      ids = [...selectedIds2];
     } else {
       ids = [entry.id];
       setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
     }
     setGroupSubOpen(false);
     setMenu({ x: e.clientX, y: e.clientY, ids });
-  }, [selectedIds, setSelection]);
+  }, [setSelection]);
   const closeMenu = reactExports.useCallback(() => {
     setMenu(null);
     setGroupSubOpen(false);
@@ -95488,7 +95491,7 @@ const TYPE_LABELS$1 = {
   document: "DOC",
   journal: "JNL"
 };
-function Thumb({ entry, size }) {
+const Thumb = React$2.memo(function Thumb2({ entry, size }) {
   const src = entry.thumbnail_medium ?? entry.thumbnail_small ?? entry.thumbnail_large;
   if (src) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -95522,14 +95525,16 @@ function Thumb({ entry, size }) {
     color: "#fff",
     letterSpacing: 0.5
   }, children: TYPE_LABELS$1[entry.type] ?? "?" }) });
-}
-function GridCell({ entry, selected, onClick, onDoubleClick, onContextMenu, size }) {
+});
+const GridCell = React$2.memo(function GridCell2({ entry, selected, onSelect, onActivate, onContextMenu, size }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "div",
     {
-      onClick,
-      onDoubleClick,
-      onContextMenu,
+      "data-entry-id": entry.id,
+      "data-selected": selected ? "1" : "0",
+      onClick: (e) => onSelect(e, entry),
+      onDoubleClick: () => onActivate(entry),
+      onContextMenu: onContextMenu ? (e) => onContextMenu(e, entry) : void 0,
       style: {
         display: "flex",
         flexDirection: "column",
@@ -95558,14 +95563,16 @@ function GridCell({ entry, selected, onClick, onDoubleClick, onContextMenu, size
       ]
     }
   );
-}
-function ListRow({ entry, selected, onClick, onDoubleClick, onContextMenu }) {
+});
+const ListRow = React$2.memo(function ListRow2({ entry, selected, onSelect, onActivate, onContextMenu }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "div",
     {
-      onClick,
-      onDoubleClick,
-      onContextMenu,
+      "data-entry-id": entry.id,
+      "data-selected": selected ? "1" : "0",
+      onClick: (e) => onSelect(e, entry),
+      onDoubleClick: () => onActivate(entry),
+      onContextMenu: onContextMenu ? (e) => onContextMenu(e, entry) : void 0,
       style: {
         display: "grid",
         gridTemplateColumns: "32px 1fr 90px 180px",
@@ -95607,7 +95614,7 @@ function ListRow({ entry, selected, onClick, onDoubleClick, onContextMenu }) {
       ]
     }
   );
-}
+});
 function iconFor(m2) {
   if (m2 === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { letterSpacing: 1 }, children: "≡" });
   if (m2 === "small") return /* @__PURE__ */ jsxRuntimeExports.jsx(IconGrid, { n: 3 });
@@ -95670,18 +95677,27 @@ function FilesView() {
       sortDir
     }).then(setEntries);
   }, [selectedGroupId, sortBy, sortDir, refreshKey]);
-  const handleClickEntry = reactExports.useCallback((entry) => (e) => {
+  const selectedIdsRef = reactExports.useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
+  const lastSelectedIdRef = reactExports.useRef(lastSelectedId);
+  lastSelectedIdRef.current = lastSelectedId;
+  const entriesRef = reactExports.useRef(entries);
+  entriesRef.current = entries;
+  const onSelect = reactExports.useCallback((e, entry) => {
+    const selectedIds2 = selectedIdsRef.current;
+    const lastSelectedId2 = lastSelectedIdRef.current;
+    const entries2 = entriesRef.current;
     if (e.metaKey || e.ctrlKey) {
-      const next = new Set(selectedIds);
+      const next = new Set(selectedIds2);
       if (next.has(entry.id)) next.delete(entry.id);
       else next.add(entry.id);
       setSelection(next, entry.id);
-    } else if (e.shiftKey && lastSelectedId !== null) {
-      const from2 = entries.findIndex((x2) => x2.id === lastSelectedId);
-      const to = entries.findIndex((x2) => x2.id === entry.id);
+    } else if (e.shiftKey && lastSelectedId2 !== null) {
+      const from2 = entries2.findIndex((x2) => x2.id === lastSelectedId2);
+      const to = entries2.findIndex((x2) => x2.id === entry.id);
       if (from2 >= 0 && to >= 0) {
         const [a, b] = from2 < to ? [from2, to] : [to, from2];
-        const range = new Set(entries.slice(a, b + 1).map((x2) => x2.id));
+        const range = new Set(entries2.slice(a, b + 1).map((x2) => x2.id));
         setSelection(range, entry.id);
       } else {
         setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
@@ -95689,7 +95705,8 @@ function FilesView() {
     } else {
       setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
     }
-  }, [selectedIds, lastSelectedId, entries, setSelection]);
+  }, [setSelection]);
+  const onActivate = reactExports.useCallback((entry) => setActiveEntryId(entry.id), [setActiveEntryId]);
   const handleAssign = reactExports.useCallback(async (groupId) => {
     await window.api.groups.assignEntries(groupId, [...selectedIds]);
     setSelection(/* @__PURE__ */ new Set(), null);
@@ -95714,9 +95731,9 @@ function FilesView() {
     const common = {
       entry,
       selected,
-      onClick: handleClickEntry(entry),
-      onDoubleClick: () => setActiveEntryId(entry.id),
-      onContextMenu: onEntryContextMenu(entry)
+      onSelect,
+      onActivate,
+      onContextMenu: onEntryContextMenu
     };
     if (viewMode === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx(ListRow, { ...common }, entry.id);
     return /* @__PURE__ */ jsxRuntimeExports.jsx(GridCell, { ...common, size: THUMB_SIZE[viewMode] }, entry.id);
@@ -95961,25 +95978,35 @@ function FileBrowser() {
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }, [settings, setSettings]);
-  const handleClickEntry = reactExports.useCallback((entry) => (e) => {
+  const selectedIdsRef = reactExports.useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
+  const lastSelectedIdRef = reactExports.useRef(lastSelectedId);
+  lastSelectedIdRef.current = lastSelectedId;
+  const entriesRef = reactExports.useRef(entries);
+  entriesRef.current = entries;
+  const onSelect = reactExports.useCallback((e, entry) => {
+    const selectedIds2 = selectedIdsRef.current;
+    const lastSelectedId2 = lastSelectedIdRef.current;
+    const entries2 = entriesRef.current;
     if (e.metaKey || e.ctrlKey) {
-      const next = new Set(selectedIds);
+      const next = new Set(selectedIds2);
       if (next.has(entry.id)) next.delete(entry.id);
       else next.add(entry.id);
       setSelection(next, entry.id);
-    } else if (e.shiftKey && lastSelectedId !== null) {
-      const from2 = entries.findIndex((x2) => x2.id === lastSelectedId);
-      const to = entries.findIndex((x2) => x2.id === entry.id);
+    } else if (e.shiftKey && lastSelectedId2 !== null) {
+      const from2 = entries2.findIndex((x2) => x2.id === lastSelectedId2);
+      const to = entries2.findIndex((x2) => x2.id === entry.id);
       if (from2 >= 0 && to >= 0) {
         const [a, b] = from2 < to ? [from2, to] : [to, from2];
-        setSelection(new Set(entries.slice(a, b + 1).map((x2) => x2.id)), entry.id);
+        setSelection(new Set(entries2.slice(a, b + 1).map((x2) => x2.id)), entry.id);
       } else {
         setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
       }
     } else {
       setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
     }
-  }, [selectedIds, lastSelectedId, entries, setSelection]);
+  }, [setSelection]);
+  const onActivate = reactExports.useCallback((entry) => setActiveEntryId(entry.id), [setActiveEntryId]);
   const close2 = reactExports.useCallback(() => {
     setFileBrowserOpen(false);
     setSelectedPeriod(null);
@@ -95992,9 +96019,9 @@ function FileBrowser() {
     const common = {
       entry,
       selected: selectedIds.has(entry.id),
-      onClick: handleClickEntry(entry),
-      onDoubleClick: () => setActiveEntryId(entry.id),
-      onContextMenu: onEntryContextMenu(entry)
+      onSelect,
+      onActivate,
+      onContextMenu: onEntryContextMenu
     };
     if (viewMode === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx(ListRow, { ...common }, entry.id);
     return /* @__PURE__ */ jsxRuntimeExports.jsx(GridCell, { ...common, size: THUMB_SIZE[viewMode] }, entry.id);
