@@ -17,6 +17,9 @@ export interface Entry {
   is_missing: number           // 0 | 1
   content_hash: string | null
   import_mode: 'copy' | 'reference'
+  latitude: number | null           // decimal degrees, from photo EXIF GPS
+  longitude: number | null
+  gps_scanned: number               // 0 | 1 — file has been checked for GPS EXIF
   created_at: number
 }
 
@@ -88,6 +91,17 @@ export interface SearchFilters {
 
 export type FileViewMode = 'list' | 'small' | 'medium' | 'large'
 
+// offline = bundled low-res world map (no network); online = OpenStreetMap tiles;
+// hires = downloaded Natural Earth 10m data rendered locally
+export type MapMode = 'offline' | 'online' | 'hires'
+export type MapHiresLayer = 'countries' | 'states' | 'places'
+
+export interface MapDownloadProgressEvent {
+  received: number   // bytes downloaded so far, across all layer files
+  total: number      // total bytes expected
+  file: string       // file currently downloading
+}
+
 export interface AppSettings {
   importMode: 'copy' | 'reference'
   libraryPath: string
@@ -100,6 +114,7 @@ export interface AppSettings {
   curveTension: number             // 0 = angular, 1 = fully smooth (quadratic bezier midpoint)
   fileBrowserHeight: number
   fileBrowserMode: FileViewMode
+  mapMode: MapMode
 }
 
 export interface FileInfo {

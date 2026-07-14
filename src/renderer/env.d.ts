@@ -5,6 +5,7 @@ import type {
   EntryType, Tag, SearchFilters, AppSettings, DuplicateGroup, FileInfo,
   LifeEvent, NewLifeEvent,
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
+  MapHiresLayer, MapDownloadProgressEvent,
 } from '../shared/types'
 
 interface Api {
@@ -28,12 +29,19 @@ interface Api {
     forDay: (dateMs: number) => Promise<Entry[]>
     forPeriod: (from: number, to: number, groupId?: number) => Promise<Entry[]>
     extent: () => Promise<{ min: number; max: number } | null>
+    locations: () => Promise<Entry[]>
     search: (filters: SearchFilters) => Promise<Entry[]>
     listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type' | 'tag'; sortDir: 'asc' | 'desc' }) => Promise<Entry[]>
     get: (id: number) => Promise<Entry | null>
     update: (id: number, patch: Record<string, unknown>) => Promise<void>
     delete: (ids: number[]) => Promise<void>
     create: (data: { type: EntryType; timestamp: number; title: string | null; rich_text_json: string | null; group_id: number | null }) => Promise<number>
+  }
+  map: {
+    hiresStatus: () => Promise<{ downloaded: boolean; downloading: boolean }>
+    getLayer: (layer: MapHiresLayer) => Promise<string | null>
+    downloadHires: () => Promise<void>
+    onDownloadProgress: (cb: (event: MapDownloadProgressEvent) => void) => () => void
   }
   groups: {
     list: () => Promise<Group[]>

@@ -5,6 +5,19 @@ export function listGroups(): Group[] {
   return getDb().prepare('SELECT * FROM groups ORDER BY name').all() as Group[]
 }
 
+/** A group's id plus all descendant ids. UNION (not UNION ALL) so a parent-id cycle can't loop forever. */
+export function getGroupSubtreeIds(rootId: number): number[] {
+  const rows = getDb().prepare(`
+    WITH RECURSIVE subtree(id) AS (
+      SELECT id FROM groups WHERE id = ?
+      UNION
+      SELECT g.id FROM groups g JOIN subtree s ON g.parent_id = s.id
+    )
+    SELECT id FROM subtree
+  `).all(rootId) as { id: number }[]
+  return rows.map(r => r.id)
+}
+
 export function getGroupStatsForPeriod(from: number, to: number): GroupStats[] {
   return getDb().prepare(`
     SELECT group_id, COUNT(*) AS count, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts
@@ -29,6 +42,44 @@ export function createGroup(data: NewGroup): Group {
     created_at: Date.now(),
   })
   return db.prepare('SELECT * FROM groups WHERE id = ?').get(result.lastInsertRowid) as Group
+}
+
+const AUTO_COLORS = [
+  '#ef4444', '#f97316', '#f59e0b', '#84cc16',
+  '#22c55e', '#10b981', '#06b6d4', '#3b82f6',
+  '#8b5cf6', '#ec4899', '#6b7280', '#78716c',
+]
+
+function autoColor(name: string): string {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0
+  return AUTO_COLORS[Math.abs(h) % AUTO_COLORS.length]
+}
+
+/**
+ * Resolve a folder-derived chain of group names (outermost first) to a group
+ * id, creating any missing levels. Names match case-insensitively so
+ * re-importing the same folder reuses its groups.
+ */
+export function findOrCreateGroupPath(segments: string[]): number | null {
+  const db = getDb()
+  let parentId: number | null = null
+  for (const name of segments) {
+    const existing = (parentId === null
+      ? db.prepare('SELECT id FROM groups WHERE parent_id IS NULL AND name = ? COLLATE NOCASE').get(name)
+      : db.prepare('SELECT id FROM groups WHERE parent_id = ? AND name = ? COLLATE NOCASE').get(parentId, name)
+    ) as { id: number } | undefined
+    if (existing) {
+      parentId = existing.id
+    } else {
+      const result = db.prepare(`
+        INSERT INTO groups (name, parent_id, color, created_at)
+        VALUES (?, ?, ?, ?)
+      `).run(name, parentId, autoColor(name), Date.now())
+      parentId = result.lastInsertRowid as number
+    }
+  }
+  return parentId
 }
 
 export function updateGroup(id: number, patch: Partial<Omit<Group, 'id'>>): Group {

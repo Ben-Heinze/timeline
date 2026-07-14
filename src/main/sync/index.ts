@@ -11,7 +11,7 @@ import {
   findDuplicatesByHash,
   findDuplicatesByNameSize,
 } from '../db/queries/entries'
-import { ingestFiles } from '../ingest'
+import { ingestFiles, backfillGps } from '../ingest'
 import type { SyncProgressEvent, DuplicateGroup } from '../../shared/types'
 
 let isSyncing = false
@@ -65,6 +65,9 @@ export async function runSync(onProgress: (event: SyncProgressEvent) => void): P
 
     if (missingIds.length > 0) markEntriesMissing(missingIds)
     if (recoveredIds.length > 0) markEntriesFound(recoveredIds)
+
+    // Backfill GPS coordinates for photos imported before location support
+    await backfillGps()
 
     // Phase 2: Scan for new files
     onProgress({

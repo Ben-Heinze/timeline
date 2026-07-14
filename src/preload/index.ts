@@ -4,6 +4,7 @@ import type {
   EntryType, SearchFilters, AppSettings, DuplicateGroup, FileInfo,
   LifeEvent, NewLifeEvent,
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
+  MapHiresLayer, MapDownloadProgressEvent,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -54,6 +55,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('entries:forPeriod', from, to, groupId),
     extent: () =>
       ipcRenderer.invoke('entries:extent'),
+    locations: () =>
+      ipcRenderer.invoke('entries:locations'),
     search: (filters: SearchFilters) =>
       ipcRenderer.invoke('entries:search', filters),
     listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type' | 'tag'; sortDir: 'asc' | 'desc' }) =>
@@ -66,6 +69,19 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('entries:delete', ids),
     create: (data: { type: EntryType; timestamp: number; title: string | null; rich_text_json: string | null; group_id: number | null }) =>
       ipcRenderer.invoke('entries:create', data),
+  },
+  map: {
+    hiresStatus: (): Promise<{ downloaded: boolean; downloading: boolean }> =>
+      ipcRenderer.invoke('map:hiresStatus'),
+    getLayer: (layer: MapHiresLayer): Promise<string | null> =>
+      ipcRenderer.invoke('map:getLayer', layer),
+    downloadHires: (): Promise<void> =>
+      ipcRenderer.invoke('map:downloadHires'),
+    onDownloadProgress: (cb: (event: MapDownloadProgressEvent) => void) => {
+      const handler = (_: unknown, data: MapDownloadProgressEvent) => cb(data)
+      ipcRenderer.on('map:downloadProgress', handler)
+      return () => ipcRenderer.removeListener('map:downloadProgress', handler)
+    },
   },
   groups: {
     list: () =>

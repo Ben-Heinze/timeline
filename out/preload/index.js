@@ -37,12 +37,23 @@ electron.contextBridge.exposeInMainWorld("api", {
     forDay: (dateMs) => electron.ipcRenderer.invoke("entries:forDay", dateMs),
     forPeriod: (from, to, groupId) => electron.ipcRenderer.invoke("entries:forPeriod", from, to, groupId),
     extent: () => electron.ipcRenderer.invoke("entries:extent"),
+    locations: () => electron.ipcRenderer.invoke("entries:locations"),
     search: (filters) => electron.ipcRenderer.invoke("entries:search", filters),
     listAll: (opts) => electron.ipcRenderer.invoke("entries:listAll", opts),
     get: (id) => electron.ipcRenderer.invoke("entries:get", id),
     update: (id, patch) => electron.ipcRenderer.invoke("entries:update", id, patch),
     delete: (ids) => electron.ipcRenderer.invoke("entries:delete", ids),
     create: (data) => electron.ipcRenderer.invoke("entries:create", data)
+  },
+  map: {
+    hiresStatus: () => electron.ipcRenderer.invoke("map:hiresStatus"),
+    getLayer: (layer) => electron.ipcRenderer.invoke("map:getLayer", layer),
+    downloadHires: () => electron.ipcRenderer.invoke("map:downloadHires"),
+    onDownloadProgress: (cb) => {
+      const handler = (_, data) => cb(data);
+      electron.ipcRenderer.on("map:downloadProgress", handler);
+      return () => electron.ipcRenderer.removeListener("map:downloadProgress", handler);
+    }
   },
   groups: {
     list: () => electron.ipcRenderer.invoke("groups:list"),

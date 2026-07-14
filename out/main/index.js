@@ -9,6 +9,7 @@ const extractZip = require("extract-zip");
 const chokidar = require("chokidar");
 const crypto = require("crypto");
 const sharp = require("sharp");
+const exifr = require("exifr");
 const child_process = require("child_process");
 const http = require("http");
 const settingsFile = () => path.join(electron.app.getPath("userData"), "settings.json");
@@ -30,10 +31,11 @@ function getSettings() {
       heatmapMaxCount: parsed.heatmapMaxCount ?? null,
       curveTension: parsed.curveTension ?? 1,
       fileBrowserHeight: parsed.fileBrowserHeight ?? parsed.dayViewHeight ?? 240,
-      fileBrowserMode: parsed.fileBrowserMode ?? parsed.dayViewMode ?? "medium"
+      fileBrowserMode: parsed.fileBrowserMode ?? parsed.dayViewMode ?? "medium",
+      mapMode: parsed.mapMode ?? "offline"
     };
   } catch {
-    cached = { importMode: "copy", libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium" };
+    cached = { importMode: "copy", libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium", mapMode: "offline" };
   }
   return cached;
 }
@@ -88,6 +90,9 @@ function initSchema(db2) {
       is_missing        INTEGER NOT NULL DEFAULT 0,
       content_hash      TEXT,
       import_mode       TEXT    NOT NULL DEFAULT 'copy',
+      latitude          REAL,
+      longitude         REAL,
+      gps_scanned       INTEGER NOT NULL DEFAULT 0,
       created_at        INTEGER NOT NULL
     );
 
@@ -135,6 +140,9 @@ function applyMigrations(db2) {
   if (!entryCols.has("is_missing")) db2.exec(`ALTER TABLE entries ADD COLUMN is_missing  INTEGER NOT NULL DEFAULT 0`);
   if (!entryCols.has("content_hash")) db2.exec(`ALTER TABLE entries ADD COLUMN content_hash TEXT`);
   if (!entryCols.has("import_mode")) db2.exec(`ALTER TABLE entries ADD COLUMN import_mode  TEXT NOT NULL DEFAULT 'copy'`);
+  if (!entryCols.has("latitude")) db2.exec(`ALTER TABLE entries ADD COLUMN latitude  REAL`);
+  if (!entryCols.has("longitude")) db2.exec(`ALTER TABLE entries ADD COLUMN longitude REAL`);
+  if (!entryCols.has("gps_scanned")) db2.exec(`ALTER TABLE entries ADD COLUMN gps_scanned INTEGER NOT NULL DEFAULT 0`);
   db2.exec(`CREATE INDEX IF NOT EXISTS idx_entries_content_hash ON entries(content_hash)`);
   const groupCols = new Set(
     db2.prepare("PRAGMA table_info(groups)").all().map((r) => r.name)
@@ -160,6 +168,104 @@ function closeDb() {
     db = null;
   }
 }
+function listGroups() {
+  return getDb().prepare("SELECT * FROM groups ORDER BY name").all();
+}
+function getGroupSubtreeIds(rootId) {
+  const rows = getDb().prepare(`
+    WITH RECURSIVE subtree(id) AS (
+      SELECT id FROM groups WHERE id = ?
+      UNION
+      SELECT g.id FROM groups g JOIN subtree s ON g.parent_id = s.id
+    )
+    SELECT id FROM subtree
+  `).all(rootId);
+  return rows.map((r) => r.id);
+}
+function getGroupStatsForPeriod(from, to) {
+  return getDb().prepare(`
+    SELECT group_id, COUNT(*) AS count, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts
+    FROM entries
+    WHERE group_id IS NOT NULL AND timestamp >= ? AND timestamp < ?
+    GROUP BY group_id
+  `).all(from, to);
+}
+function createGroup(data) {
+  const db2 = getDb();
+  const result = db2.prepare(`
+    INSERT INTO groups (name, parent_id, color, description, date_from, date_to, created_at)
+    VALUES (@name, @parent_id, @color, @description, @date_from, @date_to, @created_at)
+  `).run({
+    name: data.name,
+    parent_id: data.parent_id,
+    color: data.color,
+    description: data.description ?? null,
+    date_from: data.date_from ?? null,
+    date_to: data.date_to ?? null,
+    created_at: Date.now()
+  });
+  return db2.prepare("SELECT * FROM groups WHERE id = ?").get(result.lastInsertRowid);
+}
+const AUTO_COLORS = [
+  "#ef4444",
+  "#f97316",
+  "#f59e0b",
+  "#84cc16",
+  "#22c55e",
+  "#10b981",
+  "#06b6d4",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ec4899",
+  "#6b7280",
+  "#78716c"
+];
+function autoColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = h * 31 + name.charCodeAt(i) | 0;
+  return AUTO_COLORS[Math.abs(h) % AUTO_COLORS.length];
+}
+function findOrCreateGroupPath(segments) {
+  const db2 = getDb();
+  let parentId = null;
+  for (const name of segments) {
+    const existing = parentId === null ? db2.prepare("SELECT id FROM groups WHERE parent_id IS NULL AND name = ? COLLATE NOCASE").get(name) : db2.prepare("SELECT id FROM groups WHERE parent_id = ? AND name = ? COLLATE NOCASE").get(parentId, name);
+    if (existing) {
+      parentId = existing.id;
+    } else {
+      const result = db2.prepare(`
+        INSERT INTO groups (name, parent_id, color, created_at)
+        VALUES (?, ?, ?, ?)
+      `).run(name, parentId, autoColor(name), Date.now());
+      parentId = result.lastInsertRowid;
+    }
+  }
+  return parentId;
+}
+function updateGroup(id, patch) {
+  const db2 = getDb();
+  const fields = Object.keys(patch).map((k) => `${k} = @${k}`).join(", ");
+  db2.prepare(`UPDATE groups SET ${fields} WHERE id = @id`).run({ ...patch, id });
+  return db2.prepare("SELECT * FROM groups WHERE id = ?").get(id);
+}
+function deleteGroup(id) {
+  getDb().prepare("DELETE FROM groups WHERE id = ?").run(id);
+}
+function assignEntriesToGroup(groupId, entryIds) {
+  if (entryIds.length === 0) return;
+  const db2 = getDb();
+  const stmt = db2.prepare("UPDATE entries SET group_id = ? WHERE id = ?");
+  db2.transaction((ids) => {
+    for (const id of ids) stmt.run(groupId, id);
+  })(entryIds);
+}
+function assignEntriesForPeriod(groupId, from, to) {
+  const result = getDb().prepare(`UPDATE entries SET group_id = ? WHERE timestamp >= ? AND timestamp < ?`).run(groupId, from, to);
+  return result.changes;
+}
+function groupFilterSql(groupId) {
+  return `group_id IN (${getGroupSubtreeIds(groupId).join(", ")})`;
+}
 function getHistogram(from, to, zoomLevel, groupId) {
   let bucketExpr;
   if (zoomLevel === "year") {
@@ -176,13 +282,11 @@ function getHistogram(from, to, zoomLevel, groupId) {
       type,
       COUNT(*) AS count
     FROM entries
-    WHERE timestamp >= :from AND timestamp < :to${groupId != null ? " AND group_id = :groupId" : ""}
+    WHERE timestamp >= :from AND timestamp < :to${groupId != null ? ` AND ${groupFilterSql(groupId)}` : ""}
     GROUP BY bucket_start, group_id, type
     ORDER BY bucket_start
   `;
-  const params = { from, to };
-  if (groupId != null) params.groupId = groupId;
-  return getDb().prepare(sql).all(params);
+  return getDb().prepare(sql).all({ from, to });
 }
 function getEntriesForDay(dateMs) {
   const end = dateMs + 864e5;
@@ -195,8 +299,8 @@ function getEntriesForDay(dateMs) {
 function getEntriesForPeriod(from, to, groupId) {
   if (groupId != null) {
     return getDb().prepare(
-      `SELECT * FROM entries WHERE timestamp >= ? AND timestamp < ? AND group_id = ? ORDER BY timestamp`
-    ).all(from, to, groupId);
+      `SELECT * FROM entries WHERE timestamp >= ? AND timestamp < ? AND ${groupFilterSql(groupId)} ORDER BY timestamp`
+    ).all(from, to);
   }
   return getDb().prepare(
     `SELECT * FROM entries WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp`
@@ -221,9 +325,8 @@ function deleteEntries(ids) {
 }
 function listAllEntries(opts) {
   const dir = opts.sortDir === "asc" ? "ASC" : "DESC";
-  const where = opts.groupId != null ? "WHERE e.group_id = @groupId" : "";
+  const where = opts.groupId != null ? `WHERE e.${groupFilterSql(opts.groupId)}` : "";
   const params = {};
-  if (opts.groupId != null) params.groupId = opts.groupId;
   if (opts.sortBy === "tag") {
     return getDb().prepare(`
       SELECT e.*
@@ -240,7 +343,7 @@ function listAllEntries(opts) {
   }
   const col = opts.sortBy === "date" ? "timestamp" : opts.sortBy === "title" ? "title" : "type";
   const tie = opts.sortBy === "date" ? "" : ", timestamp DESC";
-  const simpleWhere = opts.groupId != null ? "WHERE group_id = @groupId" : "";
+  const simpleWhere = opts.groupId != null ? `WHERE ${groupFilterSql(opts.groupId)}` : "";
   return getDb().prepare(`
     SELECT * FROM entries
     ${simpleWhere}
@@ -301,13 +404,23 @@ function insertEntry(entry) {
     INSERT INTO entries
       (type, timestamp, title, file_path, thumbnail_small, thumbnail_medium,
        thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review,
-       is_missing, content_hash, import_mode, created_at)
+       is_missing, content_hash, import_mode, latitude, longitude, gps_scanned, created_at)
     VALUES
       (@type, @timestamp, @title, @file_path, @thumbnail_small, @thumbnail_medium,
        @thumbnail_large, @duration_seconds, @rich_text_json, @group_id, @needs_date_review,
-       @is_missing, @content_hash, @import_mode, @created_at)
+       @is_missing, @content_hash, @import_mode, @latitude, @longitude, @gps_scanned, @created_at)
   `).run(entry);
   return result.lastInsertRowid;
+}
+function getEntriesWithLocation() {
+  return getDb().prepare(
+    `SELECT * FROM entries WHERE latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY timestamp`
+  ).all();
+}
+function getUnscannedGpsPhotos() {
+  return getDb().prepare(
+    `SELECT * FROM entries WHERE type = 'photo' AND gps_scanned = 0 AND file_path IS NOT NULL AND is_missing = 0`
+  ).all();
 }
 function getEntriesWithFilePathPrefix(prefix) {
   return getDb().prepare(
@@ -316,9 +429,6 @@ function getEntriesWithFilePathPrefix(prefix) {
 }
 function findEntryByHash(hash) {
   return getDb().prepare("SELECT * FROM entries WHERE content_hash = ? LIMIT 1").get(hash);
-}
-function findEntryByTitle(title) {
-  return getDb().prepare("SELECT * FROM entries WHERE title = ? LIMIT 1").get(title);
 }
 function getAllEntriesWithFilePaths() {
   return getDb().prepare("SELECT * FROM entries WHERE file_path IS NOT NULL").all();
@@ -353,7 +463,6 @@ function findDuplicatesByNameSize() {
   `).all();
   return rows.map((r) => ({ key: r.key, count: r.count, entryIds: r.ids.split(",").map(Number) }));
 }
-const HASH_THRESHOLD = 100 * 1024 * 1024;
 const IMAGE_EXTS = /* @__PURE__ */ new Set([
   ".jpg",
   ".jpeg",
@@ -412,13 +521,26 @@ async function computeFileHash(filePath) {
   }
   return hash.digest("hex");
 }
-async function findExistingEntry(sourcePath, fileName) {
-  const stat = await fs$1.stat(sourcePath);
-  if (stat.size < HASH_THRESHOLD) {
-    const hash = await computeFileHash(sourcePath);
-    return findEntryByHash(hash);
+async function extractExifTimestamp(sourcePath) {
+  try {
+    const data = await exifr.parse(sourcePath, ["DateTimeOriginal", "CreateDate"]);
+    const date = data?.DateTimeOriginal ?? data?.CreateDate;
+    if (date instanceof Date && !isNaN(date.getTime())) return date.getTime();
+    return null;
+  } catch {
+    return null;
   }
-  return findEntryByTitle(fileName);
+}
+async function extractExifGps(sourcePath) {
+  try {
+    const gps = await exifr.gps(sourcePath);
+    if (gps && Number.isFinite(gps.latitude) && Number.isFinite(gps.longitude) && (gps.latitude !== 0 || gps.longitude !== 0)) {
+      return { latitude: gps.latitude, longitude: gps.longitude };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 async function relinkEntry(entry, sourcePath, relDir, fileName) {
   let storedFilePath;
@@ -470,66 +592,105 @@ async function copyWithUniqueName(sourcePath, destDir, fileName) {
     }
   }
 }
-async function ingestOne(sourcePath, relDir) {
+const inFlightHashes = /* @__PURE__ */ new Set();
+async function ingestOne(sourcePath, relDir, groupPath) {
   const fileName = path.basename(sourcePath);
   const ext = path.extname(fileName);
   const type = detectType(ext);
-  const existing = await findExistingEntry(sourcePath, fileName);
+  const contentHash = await computeFileHash(sourcePath);
+  const existing = findEntryByHash(contentHash);
   if (existing) {
     if (existing.is_missing && existing.file_path) {
       await relinkEntry(existing, sourcePath, relDir, fileName);
     }
     return { ok: true, skipped: true };
   }
-  const baseName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
-  const settings = getSettings();
-  const isReference = settings.importMode === "reference";
-  let storedFilePath;
-  let contentHash = null;
-  if (isReference) {
-    storedFilePath = sourcePath;
-  } else {
-    const destDir = path.join(getFilesPath(), relDir);
-    await fs$1.mkdir(destDir, { recursive: true });
-    const destName = await copyWithUniqueName(sourcePath, destDir, fileName);
-    storedFilePath = path.join("files", relDir, destName).split(path.sep).join("/");
+  if (inFlightHashes.has(contentHash)) return { ok: true, skipped: true };
+  inFlightHashes.add(contentHash);
+  try {
+    const groupId = groupPath.length > 0 ? findOrCreateGroupPath(groupPath) : null;
+    const baseName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
+    const settings = getSettings();
+    const isReference = settings.importMode === "reference";
+    let storedFilePath;
+    if (isReference) {
+      storedFilePath = sourcePath;
+    } else {
+      const relToFiles = path.relative(getFilesPath(), sourcePath);
+      const alreadyInLibrary = !relToFiles.startsWith("..") && !path.isAbsolute(relToFiles);
+      if (alreadyInLibrary) {
+        storedFilePath = path.relative(getLibraryPath(), sourcePath).split(path.sep).join("/");
+      } else {
+        const destDir = path.join(getFilesPath(), relDir);
+        await fs$1.mkdir(destDir, { recursive: true });
+        const destName = await copyWithUniqueName(sourcePath, destDir, fileName);
+        storedFilePath = path.join("files", relDir, destName).split(path.sep).join("/");
+      }
+    }
+    const stat = await fs$1.stat(sourcePath);
+    let timestamp = stat.mtime.getTime() || Date.now();
+    let needsDateReview = 1;
+    let thumb = null;
+    let gps = null;
+    if (type === "photo" && ext.toLowerCase() !== ".svg") {
+      const exifTimestamp = await extractExifTimestamp(sourcePath);
+      if (exifTimestamp !== null) {
+        timestamp = exifTimestamp;
+        needsDateReview = 0;
+      }
+      gps = await extractExifGps(sourcePath);
+      thumb = await generateImageThumbnails(sourcePath, baseName);
+    }
+    const id = insertEntry({
+      type,
+      timestamp,
+      title: fileName,
+      file_path: storedFilePath,
+      thumbnail_small: thumb?.small ?? null,
+      thumbnail_medium: thumb?.medium ?? null,
+      thumbnail_large: thumb?.large ?? null,
+      duration_seconds: null,
+      rich_text_json: null,
+      group_id: groupId,
+      needs_date_review: needsDateReview,
+      is_missing: 0,
+      content_hash: contentHash,
+      import_mode: isReference ? "reference" : "copy",
+      latitude: gps?.latitude ?? null,
+      longitude: gps?.longitude ?? null,
+      gps_scanned: 1,
+      created_at: Date.now()
+    });
+    return { ok: true, id };
+  } finally {
+    inFlightHashes.delete(contentHash);
   }
-  const stat = await fs$1.stat(sourcePath);
-  const timestamp = stat.mtime.getTime() || Date.now();
-  if (stat.size < HASH_THRESHOLD) {
-    contentHash = await computeFileHash(sourcePath);
-  }
-  let thumb = null;
-  if (type === "photo" && ext.toLowerCase() !== ".svg") {
-    thumb = await generateImageThumbnails(sourcePath, baseName);
-  }
-  const id = insertEntry({
-    type,
-    timestamp,
-    title: fileName,
-    file_path: storedFilePath,
-    thumbnail_small: thumb?.small ?? null,
-    thumbnail_medium: thumb?.medium ?? null,
-    thumbnail_large: thumb?.large ?? null,
-    duration_seconds: null,
-    rich_text_json: null,
-    group_id: null,
-    needs_date_review: 1,
-    is_missing: 0,
-    content_hash: contentHash,
-    import_mode: isReference ? "reference" : "copy",
-    created_at: Date.now()
-  });
-  return { ok: true, id };
 }
-async function walkDir(root, dir, out) {
+async function backfillGps() {
+  const photos = getUnscannedGpsPhotos();
+  let found = 0;
+  for (const entry of photos) {
+    const absPath = entry.import_mode === "reference" ? entry.file_path : path.join(getLibraryPath(), entry.file_path);
+    const gps = await extractExifGps(absPath);
+    if (gps) {
+      updateEntry(entry.id, { latitude: gps.latitude, longitude: gps.longitude, gps_scanned: 1 });
+      found++;
+    } else {
+      updateEntry(entry.id, { gps_scanned: 1 });
+    }
+  }
+  return found;
+}
+async function walkDir(root, rootName, dir, out) {
   const entries = await fs$1.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      await walkDir(root, full, out);
+      await walkDir(root, rootName, full, out);
     } else if (entry.isFile()) {
-      out.push({ filePath: full, relDir: path.relative(root, dir) });
+      const relDir = path.relative(root, dir);
+      const groupPath = relDir === "" ? [rootName] : [rootName, ...relDir.split(path.sep)];
+      out.push({ filePath: full, relDir, groupPath });
     }
   }
 }
@@ -538,9 +699,9 @@ async function expandPaths(inputPaths) {
   for (const p of inputPaths) {
     const stat = await fs$1.stat(p);
     if (stat.isDirectory()) {
-      await walkDir(p, p, out);
+      await walkDir(p, path.basename(p), p, out);
     } else {
-      out.push({ filePath: p, relDir: "" });
+      out.push({ filePath: p, relDir: "", groupPath: [] });
     }
   }
   return out;
@@ -559,11 +720,11 @@ async function ingestFiles(filePaths, onProgress) {
     while (true) {
       const i = nextIndex++;
       if (i >= total) return;
-      const { filePath: src, relDir } = files[i];
+      const { filePath: src, relDir, groupPath } = files[i];
       const fileName = path.basename(src);
       let error;
       try {
-        const result = await ingestOne(src, relDir);
+        const result = await ingestOne(src, relDir, groupPath);
         if (result.id != null) insertedIds.push(result.id);
       } catch (e) {
         error = e.message ?? String(e);
@@ -625,6 +786,7 @@ async function runSync(onProgress) {
     }
     if (missingIds.length > 0) markEntriesMissing(missingIds);
     if (recoveredIds.length > 0) markEntriesFound(recoveredIds);
+    await backfillGps();
     onProgress({
       phase: "scanning",
       checked: entries.length,
@@ -993,6 +1155,7 @@ function registerEntryHandlers() {
   electron.ipcMain.handle("entries:forDay", (_, dateMs) => getEntriesForDay(dateMs));
   electron.ipcMain.handle("entries:forPeriod", (_, from, to, groupId) => getEntriesForPeriod(from, to, groupId ?? void 0));
   electron.ipcMain.handle("entries:extent", () => getDataExtent());
+  electron.ipcMain.handle("entries:locations", () => getEntriesWithLocation());
   electron.ipcMain.handle("entries:search", (_, filters) => searchEntries(filters ?? {}));
   electron.ipcMain.handle("entries:listAll", (_, opts) => listAllEntries(opts));
   electron.ipcMain.handle("entries:get", (_, id) => getEntry(id));
@@ -1033,6 +1196,9 @@ function registerEntryHandlers() {
     is_missing: 0,
     content_hash: null,
     import_mode: "copy",
+    latitude: null,
+    longitude: null,
+    gps_scanned: 0,
     created_at: Date.now()
   }));
 }
@@ -1068,54 +1234,6 @@ function registerEventHandlers() {
   electron.ipcMain.handle("events:create", (_, data) => createEvent(data));
   electron.ipcMain.handle("events:update", (_, id, patch) => updateEvent(id, patch));
   electron.ipcMain.handle("events:delete", (_, id) => deleteEvent(id));
-}
-function listGroups() {
-  return getDb().prepare("SELECT * FROM groups ORDER BY name").all();
-}
-function getGroupStatsForPeriod(from, to) {
-  return getDb().prepare(`
-    SELECT group_id, COUNT(*) AS count, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts
-    FROM entries
-    WHERE group_id IS NOT NULL AND timestamp >= ? AND timestamp < ?
-    GROUP BY group_id
-  `).all(from, to);
-}
-function createGroup(data) {
-  const db2 = getDb();
-  const result = db2.prepare(`
-    INSERT INTO groups (name, parent_id, color, description, date_from, date_to, created_at)
-    VALUES (@name, @parent_id, @color, @description, @date_from, @date_to, @created_at)
-  `).run({
-    name: data.name,
-    parent_id: data.parent_id,
-    color: data.color,
-    description: data.description ?? null,
-    date_from: data.date_from ?? null,
-    date_to: data.date_to ?? null,
-    created_at: Date.now()
-  });
-  return db2.prepare("SELECT * FROM groups WHERE id = ?").get(result.lastInsertRowid);
-}
-function updateGroup(id, patch) {
-  const db2 = getDb();
-  const fields = Object.keys(patch).map((k) => `${k} = @${k}`).join(", ");
-  db2.prepare(`UPDATE groups SET ${fields} WHERE id = @id`).run({ ...patch, id });
-  return db2.prepare("SELECT * FROM groups WHERE id = ?").get(id);
-}
-function deleteGroup(id) {
-  getDb().prepare("DELETE FROM groups WHERE id = ?").run(id);
-}
-function assignEntriesToGroup(groupId, entryIds) {
-  if (entryIds.length === 0) return;
-  const db2 = getDb();
-  const stmt = db2.prepare("UPDATE entries SET group_id = ? WHERE id = ?");
-  db2.transaction((ids) => {
-    for (const id of ids) stmt.run(groupId, id);
-  })(entryIds);
-}
-function assignEntriesForPeriod(groupId, from, to) {
-  const result = getDb().prepare(`UPDATE entries SET group_id = ? WHERE timestamp >= ? AND timestamp < ?`).run(groupId, from, to);
-  return result.changes;
 }
 function registerGroupHandlers() {
   electron.ipcMain.handle("groups:list", () => listGroups());
@@ -1252,6 +1370,92 @@ function registerIngestHandlers() {
   });
   electron.ipcMain.handle("sync:isSyncing", () => isCurrentlySyncing());
   electron.ipcMain.handle("sync:scanDuplicates", (_, mode) => scanDuplicates(mode));
+}
+const LAYERS = {
+  countries: {
+    file: "ne_10m_admin_0_countries.geojson",
+    url: "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_countries.geojson"
+  },
+  states: {
+    file: "ne_10m_admin_1_states_provinces_lines.geojson",
+    url: "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson"
+  },
+  places: {
+    file: "ne_10m_populated_places_simple.geojson",
+    url: "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_populated_places_simple.geojson"
+  }
+};
+const mapDir = () => path.join(getLibraryPath(), "map");
+async function allDownloaded() {
+  for (const { file } of Object.values(LAYERS)) {
+    try {
+      await fs$1.access(path.join(mapDir(), file));
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+async function contentLength(url) {
+  const res = await fetch(url, { method: "HEAD" });
+  return Number(res.headers.get("content-length") ?? 0);
+}
+async function downloadTo(url, dest, onChunk) {
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} downloading ${url}`);
+  const chunks = [];
+  const reader = res.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(Buffer.from(value));
+    onChunk(value.byteLength);
+  }
+  const tmp = `${dest}.download`;
+  await fs$1.writeFile(tmp, Buffer.concat(chunks));
+  await fs$1.rename(tmp, dest);
+}
+let downloading = false;
+function registerMapHandlers() {
+  electron.ipcMain.handle("map:hiresStatus", async () => ({
+    downloaded: await allDownloaded(),
+    downloading
+  }));
+  electron.ipcMain.handle("map:getLayer", async (_, layer) => {
+    const def = LAYERS[layer];
+    if (!def) return null;
+    try {
+      return await fs$1.readFile(path.join(mapDir(), def.file), "utf-8");
+    } catch {
+      return null;
+    }
+  });
+  electron.ipcMain.handle("map:downloadHires", async (event) => {
+    if (downloading) return;
+    downloading = true;
+    const sender = event.sender;
+    try {
+      await fs$1.mkdir(mapDir(), { recursive: true });
+      const defs = Object.values(LAYERS);
+      const sizes = await Promise.all(defs.map((d) => contentLength(d.url)));
+      const total = sizes.reduce((a, b) => a + b, 0);
+      let received = 0;
+      let lastSent = 0;
+      for (const def of defs) {
+        await downloadTo(def.url, path.join(mapDir(), def.file), (bytes) => {
+          received += bytes;
+          if (received - lastSent >= 256 * 1024 || received === total) {
+            lastSent = received;
+            if (!sender.isDestroyed()) {
+              sender.send("map:downloadProgress", { received, total, file: def.file });
+            }
+          }
+        });
+      }
+    } finally {
+      downloading = false;
+    }
+  });
 }
 function registerTagHandlers() {
   electron.ipcMain.handle("tags:list", () => listTags());
@@ -1642,6 +1846,7 @@ function registerAllHandlers() {
   registerFileHandlers();
   registerGroupHandlers();
   registerIngestHandlers();
+  registerMapHandlers();
   registerTagHandlers();
   registerSettingsHandlers();
 }

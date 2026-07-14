@@ -13,6 +13,8 @@ const PRESET_COLORS = [
 type GroupSortBy = 'name' | 'date' | 'size'
 
 interface TreeNode { group: Group; children: TreeNode[] }
+interface RenameState { id: number; value: string }
+interface MenuState { x: number; y: number; group: Group }
 
 function buildTree(groups: Group[], cmp: (a: Group, b: Group) => number): TreeNode[] {
   const map = new Map<number, TreeNode>()
@@ -45,14 +47,24 @@ interface GroupNodeProps {
   onSelect: (id: number | null) => void
   onEdit: (g: Group) => void
   onDelete: (id: number) => void
+  onContextMenu: (g: Group, e: React.MouseEvent) => void
+  rename: RenameState | null
+  onRenameChange: (value: string) => void
+  onRenameCommit: () => void
+  onRenameCancel: () => void
   stats: Map<number, GroupStats>
 }
 
-function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect, onEdit, onDelete, stats }: GroupNodeProps) {
+function GroupNode(props: GroupNodeProps) {
+  const {
+    node, depth, expanded, onToggle, selectedGroupId, onSelect, onEdit, onDelete,
+    onContextMenu, rename, onRenameChange, onRenameCommit, onRenameCancel, stats,
+  } = props
   const [hovered, setHovered] = useState(false)
   const { group, children } = node
   const isExpanded = expanded.has(group.id)
   const isSelected = selectedGroupId === group.id
+  const isRenaming = rename?.id === group.id
   const count = stats.get(group.id)?.count ?? 0
 
   return (
@@ -60,7 +72,8 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
       <div
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        onClick={() => onSelect(isSelected ? null : group.id)}
+        onClick={() => { if (!isRenaming) onSelect(isSelected ? null : group.id) }}
+        onContextMenu={e => onContextMenu(group, e)}
         style={{
           display: 'flex', alignItems: 'center', gap: 5,
           paddingLeft: 6 + depth * 14, paddingRight: 6,
@@ -81,12 +94,32 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
           }}
         >▶</span>
         <span style={{ width: 9, height: 9, borderRadius: 2, background: group.color, flexShrink: 0 }} />
-        <span style={{
-          fontSize: 13, color: 'var(--text)', flex: 1,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {group.name}
-        </span>
+        {isRenaming ? (
+          <input
+            autoFocus
+            value={rename!.value}
+            onChange={e => onRenameChange(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            onFocus={e => e.currentTarget.select()}
+            onBlur={onRenameCommit}
+            onKeyDown={e => {
+              if (e.key === 'Enter') onRenameCommit()
+              if (e.key === 'Escape') onRenameCancel()
+            }}
+            style={{
+              flex: 1, minWidth: 0, fontSize: 13, padding: '1px 4px',
+              border: '1px solid var(--border-strong)', borderRadius: 4,
+              background: 'var(--bg-input)', outline: 'none', color: 'var(--text)',
+            }}
+          />
+        ) : (
+          <span style={{
+            fontSize: 13, color: 'var(--text)', flex: 1,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {group.name}
+          </span>
+        )}
         {hovered ? (
           <div style={{ display: 'flex', gap: 1, flexShrink: 0 }}>
             <button
@@ -111,18 +144,7 @@ function GroupNode({ node, depth, expanded, onToggle, selectedGroupId, onSelect,
         )}
       </div>
       {isExpanded && children.map(child => (
-        <GroupNode
-          key={child.group.id}
-          node={child}
-          depth={depth + 1}
-          expanded={expanded}
-          onToggle={onToggle}
-          selectedGroupId={selectedGroupId}
-          onSelect={onSelect}
-          onEdit={onEdit}
-          onDelete={onDelete}
-          stats={stats}
-        />
+        <GroupNode key={child.group.id} {...props} node={child} depth={depth + 1} />
       ))}
     </>
   )
@@ -223,6 +245,23 @@ function GroupForm({ mode, groups, editTargetId, name, color, parentId, tags, on
   )
 }
 
+function GroupMenuItem({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        padding: '6px 10px', borderRadius: 5, cursor: 'pointer',
+        color: danger ? 'var(--danger, #e5484d)' : 'var(--text)',
+        whiteSpace: 'nowrap', userSelect: 'none',
+      }}
+      onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-hover)'}
+      onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = ''}
+    >
+      {label}
+    </div>
+  )
+}
+
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
 export default function GroupSidebar() {
@@ -243,6 +282,8 @@ export default function GroupSidebar() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [filterText, setFilterText] = useState('')
   const [stats, setStats] = useState<Map<number, GroupStats>>(new Map())
+  const [menu, setMenu] = useState<MenuState | null>(null)
+  const [rename, setRename] = useState<RenameState | null>(null)
 
   // The sidebar follows the same scope as the file browser: year view shows
   // every group; month/day zoom (or a clicked bar) narrows to that timeframe.
@@ -262,6 +303,30 @@ export default function GroupSidebar() {
     })
     return () => { cancelled = true }
   }, [scopeFrom, scopeTo, refreshKey])
+
+  // Roll each group's stats up into its ancestors so parents show subtree
+  // totals, matching the subtree filtering when a parent group is selected.
+  const rolledStats = useMemo(() => {
+    const byId = new Map(groups.map(g => [g.id, g]))
+    const out = new Map<number, GroupStats>()
+    for (const s of stats.values()) {
+      const seen = new Set<number>()
+      let id: number | null = s.group_id
+      while (id !== null && !seen.has(id)) {
+        seen.add(id)
+        const cur = out.get(id)
+        if (cur) {
+          cur.count += s.count
+          cur.first_ts = Math.min(cur.first_ts, s.first_ts)
+          cur.last_ts = Math.max(cur.last_ts, s.last_ts)
+        } else {
+          out.set(id, { group_id: id, count: s.count, first_ts: s.first_ts, last_ts: s.last_ts })
+        }
+        id = byId.get(id)?.parent_id ?? null
+      }
+    }
+    return out
+  }, [stats, groups])
 
   useEffect(() => {
     if (mode === 'edit' && editTarget) {
@@ -317,6 +382,27 @@ export default function GroupSidebar() {
     refreshGroups()
   }
 
+  const openMenu = (g: Group, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setMenu({ x: e.clientX, y: e.clientY, group: g })
+  }
+
+  const startRename = (g: Group) => {
+    setMenu(null)
+    setRename({ id: g.id, value: g.name })
+  }
+
+  const commitRename = async () => {
+    if (!rename) return
+    const target = groups.find(g => g.id === rename.id)
+    const name = rename.value.trim()
+    setRename(null)
+    if (!target || !name || name === target.name) return
+    await window.api.groups.update(target.id, { name })
+    refreshGroups()
+  }
+
   const toggleExpand = (id: number) => {
     setExpanded(prev => {
       const next = new Set(prev)
@@ -342,7 +428,7 @@ export default function GroupSidebar() {
       for (const g of groups) {
         const overlapsRange = g.date_from != null && g.date_to != null
           && g.date_from < scope.to && g.date_to > scope.from
-        if (stats.has(g.id) || overlapsRange || g.id === selectedGroupId) keep.add(g.id)
+        if (rolledStats.has(g.id) || overlapsRange || g.id === selectedGroupId) keep.add(g.id)
       }
       for (const id of [...keep]) {
         let p = byId.get(id)?.parent_id ?? null
@@ -362,17 +448,17 @@ export default function GroupSidebar() {
       result = result.filter(g => keep.has(g.id))
     }
     return result
-  }, [groups, stats, isScoped, scope, selectedGroupId, filterText])
+  }, [groups, rolledStats, isScoped, scope, selectedGroupId, filterText])
 
   const cmp = useMemo(() => {
     const dir = sortDir === 'asc' ? 1 : -1
     return (a: Group, b: Group): number => {
       if (sortBy === 'size') {
-        const d = (stats.get(a.id)?.count ?? 0) - (stats.get(b.id)?.count ?? 0)
+        const d = (rolledStats.get(a.id)?.count ?? 0) - (rolledStats.get(b.id)?.count ?? 0)
         if (d !== 0) return d * dir
       } else if (sortBy === 'date') {
-        const av = stats.get(a.id)?.first_ts ?? a.date_from ?? a.created_at
-        const bv = stats.get(b.id)?.first_ts ?? b.date_from ?? b.created_at
+        const av = rolledStats.get(a.id)?.first_ts ?? a.date_from ?? a.created_at
+        const bv = rolledStats.get(b.id)?.first_ts ?? b.date_from ?? b.created_at
         if (av !== bv) return (av - bv) * dir
       } else {
         const d = a.name.localeCompare(b.name)
@@ -380,7 +466,7 @@ export default function GroupSidebar() {
       }
       return a.name.localeCompare(b.name)
     }
-  }, [sortBy, sortDir, stats])
+  }, [sortBy, sortDir, rolledStats])
 
   const tree = buildTree(visibleGroups, cmp)
   const scopeLabel = isScoped && scope ? scope.label : 'All groups'
@@ -491,11 +577,41 @@ export default function GroupSidebar() {
               onSelect={setSelectedGroupId}
               onEdit={openEdit}
               onDelete={handleDelete}
-              stats={stats}
+              onContextMenu={openMenu}
+              rename={rename}
+              onRenameChange={value => setRename(r => r && { ...r, value })}
+              onRenameCommit={commitRename}
+              onRenameCancel={() => setRename(null)}
+              stats={rolledStats}
             />
           ))
         )}
       </div>
+
+      {/* Right-click menu */}
+      {menu && (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 100 }}
+            onMouseDown={() => setMenu(null)}
+            onContextMenu={e => { e.preventDefault(); setMenu(null) }}
+          />
+          <div style={{
+            position: 'fixed', zIndex: 101,
+            left: Math.min(menu.x, window.innerWidth - 170),
+            top: Math.min(menu.y, window.innerHeight - 120),
+            minWidth: 150,
+            background: 'var(--bg-surface)', border: '1px solid var(--border)',
+            borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+            padding: 4, fontSize: 13, color: 'var(--text)',
+          }}>
+            <GroupMenuItem label="Rename" onClick={() => startRename(menu.group)} />
+            <GroupMenuItem label="Edit…" onClick={() => { setMenu(null); openEdit(menu.group) }} />
+            <div style={{ height: 1, background: 'var(--border-light)', margin: '4px 0' }} />
+            <GroupMenuItem label="Delete…" danger onClick={() => { setMenu(null); handleDelete(menu.group.id) }} />
+          </div>
+        </>
+      )}
 
       {/* Create / Edit form */}
       {mode !== 'idle' && (

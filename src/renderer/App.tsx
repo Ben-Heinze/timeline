@@ -3,6 +3,7 @@ import { useStore } from './store/useStore'
 import type { IngestFailure } from '../shared/types'
 import TimelineCanvas, { yearViewRange } from './components/TimelineCanvas'
 import CalendarHeatmap from './components/CalendarHeatmap'
+import MapView from './components/MapView'
 import FilesView from './components/FilesView'
 import FileBrowser from './components/FileBrowser'
 import EntryModal from './components/EntryModal'
@@ -84,9 +85,11 @@ export default function App() {
       })
       refreshExtent()
       bumpRefreshKey()
+      // Folder imports may have created groups
+      window.api.groups.list().then(setGroups)
     })
     return () => { offProgress(); offDone() }
-  }, [setIngestProgress, bumpRefreshKey, refreshExtent])
+  }, [setIngestProgress, bumpRefreshKey, refreshExtent, setGroups])
 
   useEffect(() => {
     const offProgress = window.api.sync.onProgress(evt => {
@@ -381,6 +384,9 @@ function Main() {
           <button style={tabStyle(activeView === 'calendar')} onClick={() => setActiveView('calendar')}>
             Calendar
           </button>
+          <button style={tabStyle(activeView === 'map')} onClick={() => setActiveView('map')}>
+            Map
+          </button>
           <button style={tabStyle(activeView === 'files')} onClick={() => setActiveView('files')}>
             Files
           </button>
@@ -436,6 +442,7 @@ function Main() {
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             {activeView === 'timeline' ? <TimelineCanvas />
              : activeView === 'calendar' ? <CalendarHeatmap />
+             : activeView === 'map' ? <MapView />
              : activeView === 'settings' ? <SettingsView />
              : <FilesView />}
           </div>

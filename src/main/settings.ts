@@ -26,9 +26,10 @@ export function getSettings(): AppSettings {
       curveTension: parsed.curveTension ?? 1,
       fileBrowserHeight: parsed.fileBrowserHeight ?? parsed.dayViewHeight ?? 240,
       fileBrowserMode: parsed.fileBrowserMode ?? parsed.dayViewMode ?? 'medium',
+      mapMode: parsed.mapMode ?? 'offline',
     }
   } catch {
-    cached = { importMode: 'copy', libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: 'medium' }
+    cached = { importMode: 'copy', libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: 'medium', mapMode: 'offline' }
   }
   return cached
 }

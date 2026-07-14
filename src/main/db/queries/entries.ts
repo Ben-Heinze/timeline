@@ -1,5 +1,12 @@
 import { getDb } from '../index'
+import { getGroupSubtreeIds } from './groups'
 import type { Entry, Bucket, SearchFilters, DuplicateGroup } from '../../../shared/types'
+
+// Selecting a group includes its whole subtree. Ids come from our own table,
+// so inlining them keeps the queries on named parameters only.
+function groupFilterSql(groupId: number): string {
+  return `group_id IN (${getGroupSubtreeIds(groupId).join(', ')})`
+}
 
 export function getHistogram(from: number, to: number, zoomLevel: string, groupId?: number): Bucket[] {
   // All expressions bucket by LOCAL calendar date and return the LOCAL midnight as a UTC ms
@@ -20,13 +27,11 @@ export function getHistogram(from: number, to: number, zoomLevel: string, groupI
       type,
       COUNT(*) AS count
     FROM entries
-    WHERE timestamp >= :from AND timestamp < :to${groupId != null ? ' AND group_id = :groupId' : ''}
+    WHERE timestamp >= :from AND timestamp < :to${groupId != null ? ` AND ${groupFilterSql(groupId)}` : ''}
     GROUP BY bucket_start, group_id, type
     ORDER BY bucket_start
   `
-  const params: Record<string, number> = { from, to }
-  if (groupId != null) params.groupId = groupId
-  return getDb().prepare(sql).all(params) as Bucket[]
+  return getDb().prepare(sql).all({ from, to }) as Bucket[]
 }
 
 export function getEntriesForDay(dateMs: number): Entry[] {
@@ -41,8 +46,8 @@ export function getEntriesForDay(dateMs: number): Entry[] {
 export function getEntriesForPeriod(from: number, to: number, groupId?: number): Entry[] {
   if (groupId != null) {
     return getDb().prepare(
-      `SELECT * FROM entries WHERE timestamp >= ? AND timestamp < ? AND group_id = ? ORDER BY timestamp`
-    ).all(from, to, groupId) as Entry[]
+      `SELECT * FROM entries WHERE timestamp >= ? AND timestamp < ? AND ${groupFilterSql(groupId)} ORDER BY timestamp`
+    ).all(from, to) as Entry[]
   }
   return getDb().prepare(
     `SELECT * FROM entries WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp`
@@ -76,9 +81,8 @@ export function listAllEntries(opts: {
   sortDir: 'asc' | 'desc'
 }): Entry[] {
   const dir = opts.sortDir === 'asc' ? 'ASC' : 'DESC'
-  const where = opts.groupId != null ? 'WHERE e.group_id = @groupId' : ''
+  const where = opts.groupId != null ? `WHERE e.${groupFilterSql(opts.groupId)}` : ''
   const params: Record<string, unknown> = {}
-  if (opts.groupId != null) params.groupId = opts.groupId
 
   if (opts.sortBy === 'tag') {
     // Sort by the alphabetically-first tag on each entry; entries with no tags always go last
@@ -98,7 +102,7 @@ export function listAllEntries(opts: {
 
   const col = opts.sortBy === 'date' ? 'timestamp' : opts.sortBy === 'title' ? 'title' : 'type'
   const tie = opts.sortBy === 'date' ? '' : ', timestamp DESC'
-  const simpleWhere = opts.groupId != null ? 'WHERE group_id = @groupId' : ''
+  const simpleWhere = opts.groupId != null ? `WHERE ${groupFilterSql(opts.groupId)}` : ''
   return getDb().prepare(`
     SELECT * FROM entries
     ${simpleWhere}
@@ -160,13 +164,25 @@ export function insertEntry(entry: Omit<Entry, 'id'>): number {
     INSERT INTO entries
       (type, timestamp, title, file_path, thumbnail_small, thumbnail_medium,
        thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review,
-       is_missing, content_hash, import_mode, created_at)
+       is_missing, content_hash, import_mode, latitude, longitude, gps_scanned, created_at)
     VALUES
       (@type, @timestamp, @title, @file_path, @thumbnail_small, @thumbnail_medium,
        @thumbnail_large, @duration_seconds, @rich_text_json, @group_id, @needs_date_review,
-       @is_missing, @content_hash, @import_mode, @created_at)
+       @is_missing, @content_hash, @import_mode, @latitude, @longitude, @gps_scanned, @created_at)
   `).run(entry)
   return result.lastInsertRowid as number
+}
+
+export function getEntriesWithLocation(): Entry[] {
+  return getDb().prepare(
+    `SELECT * FROM entries WHERE latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY timestamp`
+  ).all() as Entry[]
+}
+
+export function getUnscannedGpsPhotos(): Entry[] {
+  return getDb().prepare(
+    `SELECT * FROM entries WHERE type = 'photo' AND gps_scanned = 0 AND file_path IS NOT NULL AND is_missing = 0`
+  ).all() as Entry[]
 }
 
 export function getEntriesWithFilePathPrefix(prefix: string): Entry[] {
@@ -177,10 +193,6 @@ export function getEntriesWithFilePathPrefix(prefix: string): Entry[] {
 
 export function findEntryByHash(hash: string): Entry | null {
   return getDb().prepare('SELECT * FROM entries WHERE content_hash = ? LIMIT 1').get(hash) as Entry | null
-}
-
-export function findEntryByTitle(title: string): Entry | null {
-  return getDb().prepare('SELECT * FROM entries WHERE title = ? LIMIT 1').get(title) as Entry | null
 }
 
 export function getAllEntriesWithFilePaths(): Entry[] {

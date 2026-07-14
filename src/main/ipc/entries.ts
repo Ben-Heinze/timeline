@@ -13,6 +13,8 @@ export function registerEntryHandlers(): void {
     q.getEntriesForPeriod(from, to, groupId ?? undefined))
   ipcMain.handle('entries:extent', () =>
     q.getDataExtent())
+  ipcMain.handle('entries:locations', () =>
+    q.getEntriesWithLocation())
   ipcMain.handle('entries:search', (_, filters) =>
     q.searchEntries(filters ?? {}))
   ipcMain.handle('entries:listAll', (_, opts) =>
@@ -56,6 +58,9 @@ export function registerEntryHandlers(): void {
       is_missing: 0,
       content_hash: null,
       import_mode: 'copy',
+      latitude: null,
+      longitude: null,
+      gps_scanned: 0,
       created_at: Date.now(),
     }))
 }

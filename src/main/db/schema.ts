@@ -26,6 +26,9 @@ export function initSchema(db: Database.Database): void {
       is_missing        INTEGER NOT NULL DEFAULT 0,
       content_hash      TEXT,
       import_mode       TEXT    NOT NULL DEFAULT 'copy',
+      latitude          REAL,
+      longitude         REAL,
+      gps_scanned       INTEGER NOT NULL DEFAULT 0,
       created_at        INTEGER NOT NULL
     );
 
@@ -75,6 +78,9 @@ function applyMigrations(db: Database.Database): void {
   if (!entryCols.has('is_missing'))   db.exec(`ALTER TABLE entries ADD COLUMN is_missing  INTEGER NOT NULL DEFAULT 0`)
   if (!entryCols.has('content_hash')) db.exec(`ALTER TABLE entries ADD COLUMN content_hash TEXT`)
   if (!entryCols.has('import_mode'))  db.exec(`ALTER TABLE entries ADD COLUMN import_mode  TEXT NOT NULL DEFAULT 'copy'`)
+  if (!entryCols.has('latitude'))     db.exec(`ALTER TABLE entries ADD COLUMN latitude  REAL`)
+  if (!entryCols.has('longitude'))    db.exec(`ALTER TABLE entries ADD COLUMN longitude REAL`)
+  if (!entryCols.has('gps_scanned'))  db.exec(`ALTER TABLE entries ADD COLUMN gps_scanned INTEGER NOT NULL DEFAULT 0`)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_entries_content_hash ON entries(content_hash)`)
 
   const groupCols = new Set(

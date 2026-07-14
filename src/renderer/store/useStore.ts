@@ -8,7 +8,7 @@ interface TimelineStore {
   setSearchResults: (results: Entry[] | null) => void
   visibleRange: [number, number]
   zoomLevel: ZoomLevel
-  activeView: 'timeline' | 'calendar' | 'files' | 'settings'
+  activeView: 'timeline' | 'calendar' | 'map' | 'files' | 'settings'
   settings: AppSettings | null
   setSettings: (s: AppSettings) => void
   histogramBuckets: Bucket[]
@@ -30,7 +30,7 @@ interface TimelineStore {
 
   setVisibleRange: (range: [number, number]) => void
   setZoomLevel: (level: ZoomLevel) => void
-  setActiveView: (view: 'timeline' | 'calendar' | 'files' | 'settings') => void
+  setActiveView: (view: 'timeline' | 'calendar' | 'map' | 'files' | 'settings') => void
   setHistogramBuckets: (buckets: Bucket[]) => void
   setGroups: (groups: Group[]) => void
   setSelection: (ids: Set<number>, lastId: number | null) => void
@@ -71,7 +71,7 @@ const fiveYearsAgo = now - 5 * 365.25 * 24 * 60 * 60 * 1000
 export const useStore = create<TimelineStore>((set) => ({
   visibleRange: [fiveYearsAgo, now],
   zoomLevel: 'year' as ZoomLevel,
-  activeView: 'timeline' as 'timeline' | 'calendar' | 'files' | 'settings',
+  activeView: 'timeline' as 'timeline' | 'calendar' | 'map' | 'files' | 'settings',
   settings: null,
   histogramBuckets: [],
   groups: [],

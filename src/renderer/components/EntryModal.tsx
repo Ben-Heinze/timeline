@@ -220,6 +220,9 @@ function MetadataPanel({ entry }: { entry: Entry }) {
   if (info?.width && info?.height) rows.push(['Dimensions', `${info.width} × ${info.height}`])
   if (entry.duration_seconds != null) rows.push(['Duration', formatDuration(entry.duration_seconds)])
   rows.push(['Date taken', formatDateTime(entry.timestamp)])
+  if (entry.latitude != null && entry.longitude != null) {
+    rows.push(['GPS', `${entry.latitude.toFixed(5)}, ${entry.longitude.toFixed(5)}`])
+  }
   if (info) rows.push(['Modified', formatDateTime(info.modifiedMs)])
   rows.push(['Added', formatDateTime(entry.created_at)])
   if (entry.file_path) {

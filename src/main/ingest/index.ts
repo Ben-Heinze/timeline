@@ -2,12 +2,12 @@ import fs from 'fs/promises'
 import path from 'path'
 import crypto from 'crypto'
 import sharp from 'sharp'
+import exifr from 'exifr'
 import { getFilesPath, getLibraryPath, getThumbnailPath } from '../library'
-import { insertEntry, findEntryByHash, findEntryByTitle, updateEntry } from '../db/queries/entries'
+import { insertEntry, findEntryByHash, updateEntry, getUnscannedGpsPhotos } from '../db/queries/entries'
+import { findOrCreateGroupPath } from '../db/queries/groups'
 import { getSettings } from '../settings'
 import type { Entry, EntryType, IngestProgressEvent, IngestFailure } from '../../shared/types'
-
-const HASH_THRESHOLD = 100 * 1024 * 1024  // 100 MB
 
 export const IMAGE_EXTS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.webp', '.tiff', '.tif',
@@ -44,13 +44,28 @@ async function computeFileHash(filePath: string): Promise<string> {
   return hash.digest('hex')
 }
 
-async function findExistingEntry(sourcePath: string, fileName: string): Promise<Entry | null> {
-  const stat = await fs.stat(sourcePath)
-  if (stat.size < HASH_THRESHOLD) {
-    const hash = await computeFileHash(sourcePath)
-    return findEntryByHash(hash)
+export async function extractExifTimestamp(sourcePath: string): Promise<number | null> {
+  try {
+    const data = await exifr.parse(sourcePath, ['DateTimeOriginal', 'CreateDate'])
+    const date: unknown = data?.DateTimeOriginal ?? data?.CreateDate
+    if (date instanceof Date && !isNaN(date.getTime())) return date.getTime()
+    return null
+  } catch {
+    return null
   }
-  return findEntryByTitle(fileName)
+}
+
+export async function extractExifGps(sourcePath: string): Promise<{ latitude: number; longitude: number } | null> {
+  try {
+    const gps = await exifr.gps(sourcePath)
+    if (gps && Number.isFinite(gps.latitude) && Number.isFinite(gps.longitude)
+        && (gps.latitude !== 0 || gps.longitude !== 0)) {
+      return { latitude: gps.latitude, longitude: gps.longitude }
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -129,82 +144,138 @@ interface OneResult {
   error?: string
 }
 
-async function ingestOne(sourcePath: string, relDir: string): Promise<OneResult> {
+// Hashes being ingested right now but not yet inserted. The folder watcher
+// fires for every file the importer copies into the library, often before the
+// original's row exists — without this guard that race inserts duplicates.
+const inFlightHashes = new Set<string>()
+
+async function ingestOne(sourcePath: string, relDir: string, groupPath: string[]): Promise<OneResult> {
   const fileName = path.basename(sourcePath)
   const ext = path.extname(fileName)
   const type = detectType(ext)
 
-  const existing = await findExistingEntry(sourcePath, fileName)
+  const contentHash = await computeFileHash(sourcePath)
+  const existing = findEntryByHash(contentHash)
   if (existing) {
     if (existing.is_missing && existing.file_path) {
       await relinkEntry(existing, sourcePath, relDir, fileName)
     }
     return { ok: true, skipped: true }
   }
+  if (inFlightHashes.has(contentHash)) return { ok: true, skipped: true }
+  inFlightHashes.add(contentHash)
 
-  // Thumbnails are keyed by a unique stem, independent of the stored file name
-  const baseName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}`
+  try {
+    // Group creation happens after the duplicate check, so re-importing an
+    // already-ingested folder doesn't leave behind empty groups
+    const groupId = groupPath.length > 0 ? findOrCreateGroupPath(groupPath) : null
 
-  const settings = getSettings()
-  const isReference = settings.importMode === 'reference'
-  let storedFilePath: string
-  let contentHash: string | null = null
+    // Thumbnails are keyed by a unique stem, independent of the stored file name
+    const baseName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}`
 
-  if (isReference) {
-    storedFilePath = sourcePath
-  } else {
-    const destDir = path.join(getFilesPath(), relDir)
-    await fs.mkdir(destDir, { recursive: true })
-    const destName = await copyWithUniqueName(sourcePath, destDir, fileName)
-    storedFilePath = path.join('files', relDir, destName).split(path.sep).join('/')
+    const settings = getSettings()
+    const isReference = settings.importMode === 'reference'
+    let storedFilePath: string
+
+    if (isReference) {
+      storedFilePath = sourcePath
+    } else {
+      const relToFiles = path.relative(getFilesPath(), sourcePath)
+      const alreadyInLibrary = !relToFiles.startsWith('..') && !path.isAbsolute(relToFiles)
+      if (alreadyInLibrary) {
+        // A file already inside the library must be registered in place —
+        // copying it again would trigger the watcher and loop forever
+        storedFilePath = path.relative(getLibraryPath(), sourcePath).split(path.sep).join('/')
+      } else {
+        const destDir = path.join(getFilesPath(), relDir)
+        await fs.mkdir(destDir, { recursive: true })
+        const destName = await copyWithUniqueName(sourcePath, destDir, fileName)
+        storedFilePath = path.join('files', relDir, destName).split(path.sep).join('/')
+      }
+    }
+
+    const stat = await fs.stat(sourcePath)
+    let timestamp = stat.mtime.getTime() || Date.now()
+    let needsDateReview = 1
+
+    let thumb: { small: string; medium: string; large: string } | null = null
+    let gps: { latitude: number; longitude: number } | null = null
+    if (type === 'photo' && ext.toLowerCase() !== '.svg') {
+      const exifTimestamp = await extractExifTimestamp(sourcePath)
+      if (exifTimestamp !== null) {
+        timestamp = exifTimestamp
+        needsDateReview = 0
+      }
+      gps = await extractExifGps(sourcePath)
+      thumb = await generateImageThumbnails(sourcePath, baseName)
+    }
+
+    const id = insertEntry({
+      type,
+      timestamp,
+      title: fileName,
+      file_path: storedFilePath,
+      thumbnail_small: thumb?.small ?? null,
+      thumbnail_medium: thumb?.medium ?? null,
+      thumbnail_large: thumb?.large ?? null,
+      duration_seconds: null,
+      rich_text_json: null,
+      group_id: groupId,
+      needs_date_review: needsDateReview,
+      is_missing: 0,
+      content_hash: contentHash,
+      import_mode: isReference ? 'reference' : 'copy',
+      latitude: gps?.latitude ?? null,
+      longitude: gps?.longitude ?? null,
+      gps_scanned: 1,
+      created_at: Date.now(),
+    })
+
+    return { ok: true, id }
+  } finally {
+    inFlightHashes.delete(contentHash)
   }
+}
 
-  const stat = await fs.stat(sourcePath)
-  const timestamp = stat.mtime.getTime() || Date.now()
-
-  if (stat.size < HASH_THRESHOLD) {
-    contentHash = await computeFileHash(sourcePath)
+/**
+ * Scan photos imported before GPS support for EXIF coordinates. Each photo is
+ * checked once (gps_scanned marks it done, found or not), so repeat syncs skip
+ * already-scanned files.
+ */
+export async function backfillGps(): Promise<number> {
+  const photos = getUnscannedGpsPhotos()
+  let found = 0
+  for (const entry of photos) {
+    const absPath = entry.import_mode === 'reference'
+      ? entry.file_path!
+      : path.join(getLibraryPath(), entry.file_path!)
+    const gps = await extractExifGps(absPath)
+    if (gps) {
+      updateEntry(entry.id, { latitude: gps.latitude, longitude: gps.longitude, gps_scanned: 1 })
+      found++
+    } else {
+      updateEntry(entry.id, { gps_scanned: 1 })
+    }
   }
-
-  let thumb: { small: string; medium: string; large: string } | null = null
-  if (type === 'photo' && ext.toLowerCase() !== '.svg') {
-    thumb = await generateImageThumbnails(sourcePath, baseName)
-  }
-
-  const id = insertEntry({
-    type,
-    timestamp,
-    title: fileName,
-    file_path: storedFilePath,
-    thumbnail_small: thumb?.small ?? null,
-    thumbnail_medium: thumb?.medium ?? null,
-    thumbnail_large: thumb?.large ?? null,
-    duration_seconds: null,
-    rich_text_json: null,
-    group_id: null,
-    needs_date_review: 1,
-    is_missing: 0,
-    content_hash: contentHash,
-    import_mode: isReference ? 'reference' : 'copy',
-    created_at: Date.now(),
-  })
-
-  return { ok: true, id }
+  return found
 }
 
 interface PendingFile {
   filePath: string
   relDir: string
+  groupPath: string[]  // folder names from the imported root down; [] = don't group
 }
 
-async function walkDir(root: string, dir: string, out: PendingFile[]): Promise<void> {
+async function walkDir(root: string, rootName: string, dir: string, out: PendingFile[]): Promise<void> {
   const entries = await fs.readdir(dir, { withFileTypes: true })
   for (const entry of entries) {
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
-      await walkDir(root, full, out)
+      await walkDir(root, rootName, full, out)
     } else if (entry.isFile()) {
-      out.push({ filePath: full, relDir: path.relative(root, dir) })
+      const relDir = path.relative(root, dir)
+      const groupPath = relDir === '' ? [rootName] : [rootName, ...relDir.split(path.sep)]
+      out.push({ filePath: full, relDir, groupPath })
     }
   }
 }
@@ -214,9 +285,9 @@ export async function expandPaths(inputPaths: string[]): Promise<PendingFile[]> 
   for (const p of inputPaths) {
     const stat = await fs.stat(p)
     if (stat.isDirectory()) {
-      await walkDir(p, p, out)
+      await walkDir(p, path.basename(p), p, out)
     } else {
-      out.push({ filePath: p, relDir: '' })
+      out.push({ filePath: p, relDir: '', groupPath: [] })
     }
   }
   return out
@@ -249,11 +320,11 @@ export async function ingestFiles(
     while (true) {
       const i = nextIndex++
       if (i >= total) return
-      const { filePath: src, relDir } = files[i]
+      const { filePath: src, relDir, groupPath } = files[i]
       const fileName = path.basename(src)
       let error: string | undefined
       try {
-        const result = await ingestOne(src, relDir)
+        const result = await ingestOne(src, relDir, groupPath)
         if (result.id != null) insertedIds.push(result.id)
       } catch (e) {
         error = (e as Error).message ?? String(e)
