@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +37,7 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.exe
+            dist/*.dmg
             dist/*.zip
 
       - name: Attach to release
@@ -47,4 +48,5 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.exe
+            dist/*.dmg
             dist/*.zip
