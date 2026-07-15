@@ -32,9 +32,12 @@ export function getSettings(): AppSettings {
       fileBrowserHeight: parsed.fileBrowserHeight ?? parsed.dayViewHeight ?? 240,
       fileBrowserMode: parsed.fileBrowserMode ?? parsed.dayViewMode ?? 'medium',
       mapMode: parsed.mapMode ?? 'offline',
+      groupSidebarWidth: parsed.groupSidebarWidth ?? 220,
+      eventsPanelWidth: parsed.eventsPanelWidth ?? 272,
+      spotifyPanelWidth: parsed.spotifyPanelWidth ?? 272,
     }
   } catch {
-    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: 'medium', mapMode: 'offline' }
+    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: 'medium', mapMode: 'offline', groupSidebarWidth: 220, eventsPanelWidth: 272, spotifyPanelWidth: 272 }
   }
   return cached
 }

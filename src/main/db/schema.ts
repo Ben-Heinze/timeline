@@ -90,6 +90,30 @@ export function initSchema(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_listening_history_timestamp ON listening_history(timestamp);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_listening_history_dedupe ON listening_history(timestamp, spotify_uri, ms_played);
+
+    -- Precomputed daily rollups of listening_history, keyed by local-calendar-day
+    -- (local midnight as a UTC ms, matching bucketExprSql). The timeline's density
+    -- ribbon and top-artist queries read these (thousands of rows) instead of
+    -- re-aggregating every play with per-row strftime. Rebuilt from scratch on import.
+    CREATE TABLE IF NOT EXISTS listening_daily (
+      day        INTEGER PRIMARY KEY,
+      ms_played  INTEGER NOT NULL,
+      play_count INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS listening_artist_daily (
+      day         INTEGER NOT NULL,
+      artist_name TEXT    NOT NULL,
+      ms_played   INTEGER NOT NULL,
+      play_count  INTEGER NOT NULL,
+      PRIMARY KEY (day, artist_name)
+    );
+
+    -- Freshness marker: the listening_history row count the rollups were built from.
+    CREATE TABLE IF NOT EXISTS listening_rollup_meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `)
 
   applyMigrations(db)

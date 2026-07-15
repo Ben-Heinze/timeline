@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
 import type { ArtistPlaytime } from '../../shared/types'
+import PanelResizer from './PanelResizer'
 
 const fmtDay = (ts: number) =>
   new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -14,21 +15,28 @@ function formatPlaytime(ms: number): string {
 }
 
 export default function SpotifyPanel() {
-  const { spotifyPanelOpen, setSpotifyPanelOpen, selectedPeriod, visibleRange, refreshKey } = useStore()
+  const { spotifyPanelOpen, setSpotifyPanelOpen, selectedPeriod, visibleRange, refreshKey, settings, setSettings } = useStore()
   const [artists, setArtists] = useState<ArtistPlaytime[]>([])
+
+  const width = settings?.spotifyPanelWidth ?? 272
 
   const [from, to] = selectedPeriod ?? visibleRange
   const scopeLabel = selectedPeriod
     ? `during ${fmtDay(selectedPeriod[0])}`
     : 'in the visible range'
 
+  // Debounced: [from, to] tracks the visible range, which changes on every pan
+  // mouse-move, and this query re-aggregates the whole listening table. Wait for
+  // the view to settle before hitting the DB.
   useEffect(() => {
     if (!spotifyPanelOpen) return
     let cancelled = false
-    window.api.spotify.topArtists(from, to, 50).then(res => {
-      if (!cancelled) setArtists(res)
-    })
-    return () => { cancelled = true }
+    const t = setTimeout(() => {
+      window.api.spotify.topArtists(from, to, 50).then(res => {
+        if (!cancelled) setArtists(res)
+      })
+    }, 180)
+    return () => { cancelled = true; clearTimeout(t) }
   }, [spotifyPanelOpen, from, to, refreshKey])
 
   if (!spotifyPanelOpen) return null
@@ -37,11 +45,19 @@ export default function SpotifyPanel() {
 
   return (
     <aside style={{
-      width: 272, flexShrink: 0,
+      width, flexShrink: 0, position: 'relative',
       borderLeft: '1px solid var(--border)',
       background: 'var(--bg-surface)',
       display: 'flex', flexDirection: 'column', overflow: 'hidden',
     }}>
+      {settings && (
+        <PanelResizer
+          side="left"
+          width={width}
+          onResize={w => setSettings({ ...settings, spotifyPanelWidth: w })}
+          onCommit={w => window.api.settings.set({ spotifyPanelWidth: w })}
+        />
+      )}
       <div style={{
         padding: '10px 12px', borderBottom: '1px solid var(--border)',
         display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,

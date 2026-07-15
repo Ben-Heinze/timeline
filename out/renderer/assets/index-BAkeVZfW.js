@@ -7220,6 +7220,9 @@ const useStore = create((set) => ({
   setEventsPanelOpen: (open) => set({ eventsPanelOpen: open }),
   spotifyPanelOpen: false,
   setSpotifyPanelOpen: (open) => set({ spotifyPanelOpen: open }),
+  spotifySummaries: null,
+  spotifySummariesKey: null,
+  setSpotifySummaries: (summaries, key) => set({ spotifySummaries: summaries, spotifySummariesKey: key }),
   groupSidebarOpen: true,
   setGroupSidebarOpen: (open) => set({ groupSidebarOpen: open }),
   focusedEventId: null,
@@ -7650,11 +7653,14 @@ function TimelineCanvas() {
     }
     const [from2, to] = visibleRange;
     let cancelled = false;
-    window.api.spotify.histogram(from2, to, zoomLevel).then((buckets) => {
-      if (!cancelled) setListeningBuckets(buckets);
-    });
+    const t2 = setTimeout(() => {
+      window.api.spotify.histogram(from2, to, zoomLevel).then((buckets) => {
+        if (!cancelled) setListeningBuckets(buckets);
+      });
+    }, 180);
     return () => {
       cancelled = true;
+      clearTimeout(t2);
     };
   }, [spotifyPanelOpen, visibleRange, zoomLevel, refreshKey]);
   reactExports.useEffect(() => {
@@ -8508,6 +8514,60 @@ function TimelineCanvas() {
     dataExtent && zoomLevel !== "month" && zoomLevel !== "day" && /* @__PURE__ */ jsxRuntimeExports.jsx(Scrollbar, { dataExtent, visibleRange, onPan: setVisibleRange })
   ] });
 }
+function PanelResizer({
+  side,
+  width,
+  min = 180,
+  max = 640,
+  onResize,
+  onCommit
+}) {
+  const [hovered, setHovered] = reactExports.useState(false);
+  const [dragging, setDragging] = reactExports.useState(false);
+  const onMouseDown = (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width;
+    const compute = (ev) => {
+      const dx = ev.clientX - startX;
+      const delta = side === "left" ? -dx : dx;
+      return Math.max(min, Math.min(max, startW + delta));
+    };
+    setDragging(true);
+    const onMove = (ev) => onResize(compute(ev));
+    const onUp = (ev) => {
+      onCommit(compute(ev));
+      setDragging(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      onMouseDown,
+      onMouseEnter: () => setHovered(true),
+      onMouseLeave: () => setHovered(false),
+      style: {
+        // Seated flush inside the panel's resize edge — an overhang would be
+        // clipped by the panel's own `overflow: hidden` (or painted over by a
+        // sibling), leaving the grab target dead.
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        [side]: 0,
+        width: 7,
+        cursor: "ew-resize",
+        zIndex: 5,
+        userSelect: "none",
+        background: hovered || dragging ? "var(--scrollbar-thumb)" : "transparent",
+        transition: "background 0.12s"
+      }
+    }
+  );
+}
 const MS_DAY$3 = 864e5;
 const fmtDay$1 = (ts) => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 const fmtEventRange = (e) => `${fmtDay$1(e.date_from)} – ${e.date_to != null ? fmtDay$1(e.date_to - MS_DAY$3 / 2) : "present"}`;
@@ -8579,8 +8639,11 @@ function EventsPanel() {
     visibleRange,
     focusedEventId,
     setFocusedEventId,
-    openEventModal
+    openEventModal,
+    settings,
+    setSettings
   } = useStore();
+  const width = settings?.eventsPanelWidth ?? 272;
   const [expandedIds, setExpandedIds] = reactExports.useState(/* @__PURE__ */ new Set());
   const listRef = reactExports.useRef(null);
   reactExports.useEffect(() => {
@@ -8605,14 +8668,24 @@ function EventsPanel() {
     return next;
   });
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { style: {
-    width: 272,
+    width,
     flexShrink: 0,
+    position: "relative",
     borderLeft: "1px solid var(--border)",
     background: "var(--bg-surface)",
     display: "flex",
     flexDirection: "column",
     overflow: "hidden"
   }, children: [
+    settings && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      PanelResizer,
+      {
+        side: "left",
+        width,
+        onResize: (w2) => setSettings({ ...settings, eventsPanelWidth: w2 }),
+        onCommit: (w2) => window.api.settings.set({ eventsPanelWidth: w2 })
+      }
+    ),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
       padding: "10px 12px",
       borderBottom: "1px solid var(--border)",
@@ -96335,18 +96408,19 @@ function YearCard({ summary }) {
   ] });
 }
 function SpotifyView() {
-  const { activeView, refreshKey } = useStore();
-  const [summaries, setSummaries] = reactExports.useState(null);
+  const { activeView, refreshKey, spotifySummaries, spotifySummariesKey, setSpotifySummaries } = useStore();
+  const isStale = spotifySummariesKey !== refreshKey;
+  const summaries = isStale ? null : spotifySummaries;
   reactExports.useEffect(() => {
-    if (activeView !== "spotify") return;
+    if (activeView !== "spotify" || !isStale) return;
     let cancelled = false;
     window.api.spotify.yearlySummaries().then((res) => {
-      if (!cancelled) setSummaries(res);
+      if (!cancelled) setSpotifySummaries(res, refreshKey);
     });
     return () => {
       cancelled = true;
     };
-  }, [activeView, refreshKey]);
+  }, [activeView, refreshKey, isStale, setSpotifySummaries]);
   return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: 20 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }, children: summaries === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 32, color: "var(--text-3)", fontSize: 13 }, children: "Loading…" }) : summaries.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: 32, textAlign: "center", color: "var(--text-4)", fontSize: 13, lineHeight: 1.6 }, children: [
     "No listening history imported yet.",
     /* @__PURE__ */ jsxRuntimeExports.jsx("br", {}),
@@ -116409,8 +116483,11 @@ function GroupSidebar() {
     selectedPeriod,
     dataExtent,
     refreshKey,
-    groupSidebarOpen
+    groupSidebarOpen,
+    settings,
+    setSettings
   } = useStore();
+  const width = settings?.groupSidebarWidth ?? 220;
   const [expanded, setExpanded] = reactExports.useState(/* @__PURE__ */ new Set());
   const [mode, setMode] = reactExports.useState("idle");
   const [editTarget, setEditTarget] = reactExports.useState(null);
@@ -116607,7 +116684,9 @@ function GroupSidebar() {
   const scopeLabel = isScoped && scope ? scope.label : "All groups";
   if (!groupSidebarOpen) return null;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { style: {
-    width: 220,
+    width,
+    position: "relative",
+    flexShrink: 0,
     background: "var(--bg-sidebar)",
     borderRight: "1px solid var(--border)",
     padding: "12px 8px 12px 10px",
@@ -116615,6 +116694,15 @@ function GroupSidebar() {
     flexDirection: "column",
     overflow: "hidden"
   }, children: [
+    settings && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      PanelResizer,
+      {
+        side: "right",
+        width,
+        onResize: (w2) => setSettings({ ...settings, groupSidebarWidth: w2 }),
+        onCommit: (w2) => window.api.settings.set({ groupSidebarWidth: w2 })
+      }
+    ),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", marginBottom: 4, paddingLeft: 2 }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: { fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "var(--text-4)", flex: 1, margin: 0 }, children: "Groups" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -117596,7 +117684,7 @@ function ipcErrorMessage(e) {
   return msg.replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
 }
 function SettingsView() {
-  const { settings, setSettings, volumes, setVolumes } = useStore();
+  const { settings, setSettings, volumes, setVolumes, bumpRefreshKey } = useStore();
   const [refreshingDrives, setRefreshingDrives] = reactExports.useState(false);
   const [pendingVolumeFolder, setPendingVolumeFolder] = reactExports.useState(null);
   const [renamingVolumeId, setRenamingVolumeId] = reactExports.useState(null);
@@ -117622,6 +117710,9 @@ function SettingsView() {
   const [spotifyProgress, setSpotifyProgress] = reactExports.useState(null);
   const [spotifyMessage, setSpotifyMessage] = reactExports.useState(null);
   const [spotifyError, setSpotifyError] = reactExports.useState(null);
+  const [rescanBusy, setRescanBusy] = reactExports.useState(false);
+  const [rescanProgress, setRescanProgress] = reactExports.useState(null);
+  const [rescanResult, setRescanResult] = reactExports.useState(null);
   const [pathHealth, setPathHealth] = reactExports.useState({});
   const [resolving, setResolving] = reactExports.useState(null);
   function pathColor(p2) {
@@ -117684,6 +117775,10 @@ function SettingsView() {
   reactExports.useEffect(() => {
     if (typeof window.api.spotify?.onProgress !== "function") return;
     return window.api.spotify.onProgress(setSpotifyProgress);
+  }, []);
+  reactExports.useEffect(() => {
+    if (typeof window.api.library?.onRescanProgress !== "function") return;
+    return window.api.library.onRescanProgress(setRescanProgress);
   }, []);
   if (!settings) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 32, color: "var(--text-3)", fontSize: 13 }, children: "Loading settings…" });
@@ -117880,12 +117975,27 @@ function SettingsView() {
         setSpotifyError('No Streaming_History_Audio/Video JSON files found in the selected location. Point this at the folder from your Spotify "Extended streaming history" export.');
       } else {
         setSpotifyMessage(`Imported ${res.imported} play${res.imported === 1 ? "" : "s"} from ${res.totalFiles} file${res.totalFiles === 1 ? "" : "s"}.`);
+        if (res.imported > 0) bumpRefreshKey();
       }
     } catch (e) {
       setSpotifyError(ipcErrorMessage(e));
     } finally {
       setSpotifyBusy(false);
       setSpotifyProgress(null);
+    }
+  }
+  async function rescanLibrary() {
+    if (rescanBusy) return;
+    setRescanBusy(true);
+    setRescanResult(null);
+    setRescanProgress(null);
+    try {
+      const res = await window.api.library.rescan();
+      setRescanResult(res);
+      if (res.thumbnailsAdded || res.datesUpdated || res.gpsAdded || res.reclassified) bumpRefreshKey();
+    } finally {
+      setRescanBusy(false);
+      setRescanProgress(null);
     }
   }
   async function confirmReset() {
@@ -118210,6 +118320,56 @@ function SettingsView() {
         ] }),
         spotifyMessage && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...rowLast, borderTop: "1px solid var(--border-light)", fontSize: 12, color: "#16a34a", wordBreak: "break-all" }, children: spotifyMessage }),
         spotifyError && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...rowLast, borderTop: "1px solid var(--border-light)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "#b91c1c", background: "#fee2e2", padding: "6px 10px", borderRadius: 4, width: "100%", boxSizing: "border-box" }, children: spotifyError }) })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Library maintenance" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, alignItems: "flex-start" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Rescan library" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Backfill data for files imported before recent updates: generate missing thumbnails (Sony/Canon RAW previews and video poster frames included), reclassify RAW files stored as documents into photos, and fill in GPS and any unconfirmed dates from each file's metadata. Dates you've already confirmed or changed are left untouched." })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              style: { ...btn("default"), opacity: rescanBusy ? 0.6 : 1, flexShrink: 0 },
+              onClick: rescanLibrary,
+              disabled: rescanBusy,
+              children: rescanBusy ? "Rescanning…" : "Rescan library"
+            }
+          )
+        ] }),
+        rescanBusy && rescanProgress && rescanProgress.total > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, borderTop: "1px solid var(--border-light)", fontSize: 12, color: "var(--text-3)" }, children: [
+          "Scanning ",
+          rescanProgress.processed,
+          "/",
+          rescanProgress.total,
+          rescanProgress.current ? ` — ${rescanProgress.current}` : ""
+        ] }),
+        rescanResult && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, borderTop: "1px solid var(--border-light)", fontSize: 12, color: "#16a34a" }, children: [
+          "Scanned ",
+          rescanResult.scanned,
+          " file",
+          rescanResult.scanned === 1 ? "" : "s",
+          " — added",
+          " ",
+          rescanResult.thumbnailsAdded,
+          " thumbnail",
+          rescanResult.thumbnailsAdded === 1 ? "" : "s",
+          ",",
+          " ",
+          rescanResult.datesUpdated,
+          " date",
+          rescanResult.datesUpdated === 1 ? "" : "s",
+          ",",
+          " ",
+          rescanResult.gpsAdded,
+          " location",
+          rescanResult.gpsAdded === 1 ? "" : "s",
+          rescanResult.reclassified > 0 ? `, reclassified ${rescanResult.reclassified} RAW file${rescanResult.reclassified === 1 ? "" : "s"}` : "",
+          "."
+        ] })
       ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
@@ -119054,31 +119214,45 @@ function formatPlaytime(ms) {
   return m2 === 0 ? `${h}h` : `${h}h ${m2}m`;
 }
 function SpotifyPanel() {
-  const { spotifyPanelOpen, setSpotifyPanelOpen, selectedPeriod, visibleRange, refreshKey } = useStore();
+  const { spotifyPanelOpen, setSpotifyPanelOpen, selectedPeriod, visibleRange, refreshKey, settings, setSettings } = useStore();
   const [artists, setArtists] = reactExports.useState([]);
+  const width = settings?.spotifyPanelWidth ?? 272;
   const [from2, to] = selectedPeriod ?? visibleRange;
   const scopeLabel = selectedPeriod ? `during ${fmtDay(selectedPeriod[0])}` : "in the visible range";
   reactExports.useEffect(() => {
     if (!spotifyPanelOpen) return;
     let cancelled = false;
-    window.api.spotify.topArtists(from2, to, 50).then((res) => {
-      if (!cancelled) setArtists(res);
-    });
+    const t2 = setTimeout(() => {
+      window.api.spotify.topArtists(from2, to, 50).then((res) => {
+        if (!cancelled) setArtists(res);
+      });
+    }, 180);
     return () => {
       cancelled = true;
+      clearTimeout(t2);
     };
   }, [spotifyPanelOpen, from2, to, refreshKey]);
   if (!spotifyPanelOpen) return null;
   const maxMs = artists.length > 0 ? artists[0].ms_played : 0;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { style: {
-    width: 272,
+    width,
     flexShrink: 0,
+    position: "relative",
     borderLeft: "1px solid var(--border)",
     background: "var(--bg-surface)",
     display: "flex",
     flexDirection: "column",
     overflow: "hidden"
   }, children: [
+    settings && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      PanelResizer,
+      {
+        side: "left",
+        width,
+        onResize: (w2) => setSettings({ ...settings, spotifyPanelWidth: w2 }),
+        onCommit: (w2) => window.api.settings.set({ spotifyPanelWidth: w2 })
+      }
+    ),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
       padding: "10px 12px",
       borderBottom: "1px solid var(--border)",

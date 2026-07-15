@@ -37,10 +37,13 @@ function getSettings() {
       curveTension: parsed.curveTension ?? 1,
       fileBrowserHeight: parsed.fileBrowserHeight ?? parsed.dayViewHeight ?? 240,
       fileBrowserMode: parsed.fileBrowserMode ?? parsed.dayViewMode ?? "medium",
-      mapMode: parsed.mapMode ?? "offline"
+      mapMode: parsed.mapMode ?? "offline",
+      groupSidebarWidth: parsed.groupSidebarWidth ?? 220,
+      eventsPanelWidth: parsed.eventsPanelWidth ?? 272,
+      spotifyPanelWidth: parsed.spotifyPanelWidth ?? 272
     };
   } catch {
-    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium", mapMode: "offline" };
+    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium", mapMode: "offline", groupSidebarWidth: 220, eventsPanelWidth: 272, spotifyPanelWidth: 272 };
   }
   return cached;
 }
@@ -163,6 +166,30 @@ function initSchema(db2) {
 
     CREATE INDEX IF NOT EXISTS idx_listening_history_timestamp ON listening_history(timestamp);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_listening_history_dedupe ON listening_history(timestamp, spotify_uri, ms_played);
+
+    -- Precomputed daily rollups of listening_history, keyed by local-calendar-day
+    -- (local midnight as a UTC ms, matching bucketExprSql). The timeline's density
+    -- ribbon and top-artist queries read these (thousands of rows) instead of
+    -- re-aggregating every play with per-row strftime. Rebuilt from scratch on import.
+    CREATE TABLE IF NOT EXISTS listening_daily (
+      day        INTEGER PRIMARY KEY,
+      ms_played  INTEGER NOT NULL,
+      play_count INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS listening_artist_daily (
+      day         INTEGER NOT NULL,
+      artist_name TEXT    NOT NULL,
+      ms_played   INTEGER NOT NULL,
+      play_count  INTEGER NOT NULL,
+      PRIMARY KEY (day, artist_name)
+    );
+
+    -- Freshness marker: the listening_history row count the rollups were built from.
+    CREATE TABLE IF NOT EXISTS listening_rollup_meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
   applyMigrations(db2);
 }
@@ -2501,6 +2528,36 @@ async function parseSpotifyFile(filePath) {
   return plays;
 }
 let yearlySummariesCache = null;
+const DAY_EXPR = bucketExprSql("day");
+let rollupsEnsured = false;
+function ensureRollups() {
+  if (rollupsEnsured) return;
+  const db2 = getDb();
+  const count = db2.prepare("SELECT COUNT(*) AS c FROM listening_history").get().c;
+  const marker = db2.prepare(`SELECT value FROM listening_rollup_meta WHERE key = 'source_count'`).get();
+  if (!marker || Number(marker.value) !== count) rebuildRollups(count);
+  rollupsEnsured = true;
+}
+function rebuildRollups(count) {
+  const db2 = getDb();
+  db2.transaction(() => {
+    db2.prepare("DELETE FROM listening_daily").run();
+    db2.prepare(`
+      INSERT INTO listening_daily (day, ms_played, play_count)
+      SELECT ${DAY_EXPR} AS day, SUM(ms_played), COUNT(*)
+      FROM listening_history GROUP BY day
+    `).run();
+    db2.prepare("DELETE FROM listening_artist_daily").run();
+    db2.prepare(`
+      INSERT INTO listening_artist_daily (day, artist_name, ms_played, play_count)
+      SELECT ${DAY_EXPR} AS day, artist_name, SUM(ms_played), COUNT(*)
+      FROM listening_history
+      WHERE media_type = 'track' AND artist_name IS NOT NULL
+      GROUP BY day, artist_name
+    `).run();
+    db2.prepare(`INSERT OR REPLACE INTO listening_rollup_meta (key, value) VALUES ('source_count', ?)`).run(String(count));
+  })();
+}
 function insertPlays(plays) {
   const db2 = getDb();
   const now = Date.now();
@@ -2519,7 +2576,10 @@ function insertPlays(plays) {
     return inserted2;
   });
   const inserted = insertMany(plays);
-  if (inserted > 0) yearlySummariesCache = null;
+  if (inserted > 0) {
+    yearlySummariesCache = null;
+    rollupsEnsured = false;
+  }
   return inserted;
 }
 function getPlaysForPeriod(from, to) {
@@ -2528,24 +2588,31 @@ function getPlaysForPeriod(from, to) {
   ).all(from, to);
 }
 function getTopArtists(from, to, limit) {
+  ensureRollups();
   return getDb().prepare(`
-    SELECT artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
-    FROM listening_history
-    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND artist_name IS NOT NULL
+    SELECT artist_name, SUM(ms_played) AS ms_played, SUM(play_count) AS play_count
+    FROM listening_artist_daily
+    WHERE day >= ? AND day < ?
     GROUP BY artist_name
     ORDER BY ms_played DESC
     LIMIT ?
   `).all(from, to, limit);
 }
 function getListeningHistogram(from, to, zoomLevel) {
-  const bucketExpr = bucketExprSql(zoomLevel);
-  return getDb().prepare(`
-    SELECT ${bucketExpr} AS bucket_start, SUM(ms_played) AS ms_played
-    FROM listening_history
-    WHERE timestamp >= :from AND timestamp < :to
-    GROUP BY bucket_start
-    ORDER BY bucket_start
-  `).all({ from, to });
+  ensureRollups();
+  const rows = getDb().prepare(
+    `SELECT day, ms_played FROM listening_daily WHERE day >= ? AND day < ? ORDER BY day`
+  ).all(from, to);
+  if (zoomLevel === "day") {
+    return rows.map((r) => ({ bucket_start: r.day, ms_played: r.ms_played }));
+  }
+  const totals = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const d = new Date(r.day);
+    const bucket = zoomLevel === "year" ? new Date(d.getFullYear(), 0, 1).getTime() : new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+    totals.set(bucket, (totals.get(bucket) ?? 0) + r.ms_played);
+  }
+  return [...totals.entries()].map(([bucket_start, ms_played]) => ({ bucket_start, ms_played })).sort((a, b) => a.bucket_start - b.bucket_start);
 }
 function getYearlySummaries() {
   if (yearlySummariesCache !== null) return yearlySummariesCache;

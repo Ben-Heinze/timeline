@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
 import type { LifeEvent } from '../../shared/types'
+import PanelResizer from './PanelResizer'
 
 const MS_DAY = 86_400_000
 
@@ -82,8 +83,9 @@ export default function EventsPanel() {
     events, eventsPanelOpen, setEventsPanelOpen,
     selectedPeriod, visibleRange,
     focusedEventId, setFocusedEventId,
-    openEventModal,
+    openEventModal, settings, setSettings,
   } = useStore()
+  const width = settings?.eventsPanelWidth ?? 272
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -120,11 +122,19 @@ export default function EventsPanel() {
 
   return (
     <aside style={{
-      width: 272, flexShrink: 0,
+      width, flexShrink: 0, position: 'relative',
       borderLeft: '1px solid var(--border)',
       background: 'var(--bg-surface)',
       display: 'flex', flexDirection: 'column', overflow: 'hidden',
     }}>
+      {settings && (
+        <PanelResizer
+          side="left"
+          width={width}
+          onResize={w => setSettings({ ...settings, eventsPanelWidth: w })}
+          onCommit={w => window.api.settings.set({ eventsPanelWidth: w })}
+        />
+      )}
       <div style={{
         padding: '10px 12px', borderBottom: '1px solid var(--border)',
         display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,

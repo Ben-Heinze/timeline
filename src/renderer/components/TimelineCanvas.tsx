@@ -281,15 +281,19 @@ export default function TimelineCanvas() {
     })
   }, [visibleRange, zoomLevel, selectedGroupId, refreshKey, setHistogramBuckets, setVisibleRange, setZoomLevel])
 
-  // Listening-density ribbon data — only needed while the Spotify panel is open
+  // Listening-density ribbon data — only needed while the Spotify panel is open.
+  // Debounced: panning fires setVisibleRange every mouse-move, and this aggregation
+  // re-scans the whole listening table, so we wait for the view to settle first.
   useEffect(() => {
     if (!spotifyPanelOpen) { setListeningBuckets([]); return }
     const [from, to] = visibleRange
     let cancelled = false
-    window.api.spotify.histogram(from, to, zoomLevel).then(buckets => {
-      if (!cancelled) setListeningBuckets(buckets)
-    })
-    return () => { cancelled = true }
+    const t = setTimeout(() => {
+      window.api.spotify.histogram(from, to, zoomLevel).then(buckets => {
+        if (!cancelled) setListeningBuckets(buckets)
+      })
+    }, 180)
+    return () => { cancelled = true; clearTimeout(t) }
   }, [spotifyPanelOpen, visibleRange, zoomLevel, refreshKey])
 
   // ResizeObserver

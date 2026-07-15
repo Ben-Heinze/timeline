@@ -3,6 +3,7 @@ import { useStore } from '../store/useStore'
 import type { Group, GroupStats, Tag, ArtistPlaytime } from '../../shared/types'
 import TagEditor from './TagEditor'
 import { computeScope } from './scope'
+import PanelResizer from './PanelResizer'
 
 const PRESET_COLORS = [
   '#ef4444', '#f97316', '#f59e0b', '#84cc16',
@@ -303,8 +304,9 @@ export default function GroupSidebar() {
   const {
     groups, setGroups, selectedGroupId, setSelectedGroupId,
     zoomLevel, visibleRange, selectedPeriod, dataExtent, refreshKey,
-    groupSidebarOpen,
+    groupSidebarOpen, settings, setSettings,
   } = useStore()
+  const width = settings?.groupSidebarWidth ?? 220
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [mode, setMode] = useState<'idle' | 'create' | 'edit'>('idle')
   const [editTarget, setEditTarget] = useState<Group | null>(null)
@@ -510,7 +512,7 @@ export default function GroupSidebar() {
 
   return (
     <aside style={{
-      width: 220,
+      width, position: 'relative', flexShrink: 0,
       background: 'var(--bg-sidebar)',
       borderRight: '1px solid var(--border)',
       padding: '12px 8px 12px 10px',
@@ -518,6 +520,14 @@ export default function GroupSidebar() {
       flexDirection: 'column',
       overflow: 'hidden',
     }}>
+      {settings && (
+        <PanelResizer
+          side="right"
+          width={width}
+          onResize={w => setSettings({ ...settings, groupSidebarWidth: w })}
+          onCommit={w => window.api.settings.set({ groupSidebarWidth: w })}
+        />
+      )}
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4, paddingLeft: 2 }}>
         <h2 style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-4)', flex: 1, margin: 0 }}>

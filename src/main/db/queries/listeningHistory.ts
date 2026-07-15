@@ -12,10 +12,51 @@ export interface SpotifyPlayInsert {
   spotify_uri: string | null
 }
 
-// getYearlySummaries runs four full-table aggregations with per-row strftime/datetime
-// conversions — expensive over a large export. The table only changes on import, so we
-// memoize the result and invalidate it whenever new plays are inserted.
+// The Spotify aggregations re-scan the whole table with per-row strftime/datetime
+// conversions — hundreds of ms over a large export. getYearlySummaries only changes
+// on import, so it's memoized; the timeline's ribbon/panel queries instead read the
+// precomputed daily rollups (see ensureRollups), which are tiny to aggregate.
 let yearlySummariesCache: YearlySpotifySummary[] | null = null
+
+// `day` = the play's local-midnight as a UTC ms, i.e. the same bucket grid the
+// timeline histogram uses, so rollup rows line up with the entries bars.
+const DAY_EXPR = bucketExprSql('day')
+
+// rollupsEnsured short-circuits the freshness check once we've confirmed it this
+// session; insertPlays resets it. Rollups are rebuilt when listening_history's row
+// count no longer matches the marker stored at the last build — plays are only ever
+// added (INSERT OR IGNORE) or wiped, so a count mismatch reliably means "stale".
+let rollupsEnsured = false
+
+function ensureRollups(): void {
+  if (rollupsEnsured) return
+  const db = getDb()
+  const count = (db.prepare('SELECT COUNT(*) AS c FROM listening_history').get() as { c: number }).c
+  const marker = db.prepare(`SELECT value FROM listening_rollup_meta WHERE key = 'source_count'`).get() as { value: string } | undefined
+  if (!marker || Number(marker.value) !== count) rebuildRollups(count)
+  rollupsEnsured = true
+}
+
+function rebuildRollups(count: number): void {
+  const db = getDb()
+  db.transaction(() => {
+    db.prepare('DELETE FROM listening_daily').run()
+    db.prepare(`
+      INSERT INTO listening_daily (day, ms_played, play_count)
+      SELECT ${DAY_EXPR} AS day, SUM(ms_played), COUNT(*)
+      FROM listening_history GROUP BY day
+    `).run()
+    db.prepare('DELETE FROM listening_artist_daily').run()
+    db.prepare(`
+      INSERT INTO listening_artist_daily (day, artist_name, ms_played, play_count)
+      SELECT ${DAY_EXPR} AS day, artist_name, SUM(ms_played), COUNT(*)
+      FROM listening_history
+      WHERE media_type = 'track' AND artist_name IS NOT NULL
+      GROUP BY day, artist_name
+    `).run()
+    db.prepare(`INSERT OR REPLACE INTO listening_rollup_meta (key, value) VALUES ('source_count', ?)`).run(String(count))
+  })()
+}
 
 export function insertPlays(plays: SpotifyPlayInsert[]): number {
   const db = getDb()
@@ -35,7 +76,7 @@ export function insertPlays(plays: SpotifyPlayInsert[]): number {
     return inserted
   })
   const inserted = insertMany(plays)
-  if (inserted > 0) yearlySummariesCache = null
+  if (inserted > 0) { yearlySummariesCache = null; rollupsEnsured = false }
   return inserted
 }
 
@@ -45,12 +86,14 @@ export function getPlaysForPeriod(from: number, to: number): SpotifyPlay[] {
   ).all(from, to) as SpotifyPlay[]
 }
 
-// Podcast episodes are excluded — "top artists" is a music ranking.
+// Podcast episodes are excluded from the rollup, so this is a music ranking. Reads
+// listening_artist_daily (day × artist) — a small fraction of the raw plays.
 export function getTopArtists(from: number, to: number, limit: number): ArtistPlaytime[] {
+  ensureRollups()
   return getDb().prepare(`
-    SELECT artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
-    FROM listening_history
-    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND artist_name IS NOT NULL
+    SELECT artist_name, SUM(ms_played) AS ms_played, SUM(play_count) AS play_count
+    FROM listening_artist_daily
+    WHERE day >= ? AND day < ?
     GROUP BY artist_name
     ORDER BY ms_played DESC
     LIMIT ?
@@ -58,16 +101,29 @@ export function getTopArtists(from: number, to: number, limit: number): ArtistPl
 }
 
 // Same calendar bucketing as the entries histogram, so the density ribbon lines up
-// with the bars it's drawn under on the timeline.
+// with the bars it's drawn under. Reads the daily rollup (thousands of rows) and
+// re-buckets days into months/years in JS — new Date(day) reconstructs the local
+// calendar date since `day` is that date's local midnight (see bucketExprSql).
 export function getListeningHistogram(from: number, to: number, zoomLevel: string): ListeningBucket[] {
-  const bucketExpr = bucketExprSql(zoomLevel)
-  return getDb().prepare(`
-    SELECT ${bucketExpr} AS bucket_start, SUM(ms_played) AS ms_played
-    FROM listening_history
-    WHERE timestamp >= :from AND timestamp < :to
-    GROUP BY bucket_start
-    ORDER BY bucket_start
-  `).all({ from, to }) as ListeningBucket[]
+  ensureRollups()
+  const rows = getDb().prepare(
+    `SELECT day, ms_played FROM listening_daily WHERE day >= ? AND day < ? ORDER BY day`
+  ).all(from, to) as { day: number; ms_played: number }[]
+
+  if (zoomLevel === 'day') {
+    return rows.map(r => ({ bucket_start: r.day, ms_played: r.ms_played }))
+  }
+  const totals = new Map<number, number>()
+  for (const r of rows) {
+    const d = new Date(r.day)
+    const bucket = zoomLevel === 'year'
+      ? new Date(d.getFullYear(), 0, 1).getTime()
+      : new Date(d.getFullYear(), d.getMonth(), 1).getTime()
+    totals.set(bucket, (totals.get(bucket) ?? 0) + r.ms_played)
+  }
+  return [...totals.entries()]
+    .map(([bucket_start, ms_played]) => ({ bucket_start, ms_played }))
+    .sort((a, b) => a.bucket_start - b.bucket_start)
 }
 
 interface YearTotalsRow { year: number; ms_played: number; play_count: number }

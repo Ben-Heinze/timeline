@@ -172,6 +172,9 @@ export interface AppSettings {
   fileBrowserHeight: number
   fileBrowserMode: FileViewMode
   mapMode: MapMode
+  groupSidebarWidth: number
+  eventsPanelWidth: number
+  spotifyPanelWidth: number
 }
 
 export interface FileInfo {
