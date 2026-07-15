@@ -2,6 +2,10 @@
   "name": "timeline",
   "version": "0.1.0",
   "description": "Interactive lifelong memory timeline",
+  "author": {
+    "name": "Ben Heinze",
+    "email": "ben.c.heinze@gmail.com"
+  },
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -9,7 +13,7 @@
     "preview": "electron-vite preview",
     "rebuild": "electron-rebuild -f -w better-sqlite3 --electron-version $(node -p \"require('electron/package.json').version\") && npm run rebuild:sharp",
     "rebuild:sharp": "CXXFLAGS=-std=c++17 npm rebuild sharp --build-from-source",
-    "package": "npm run build && electron-builder --config electron-builder.config.js",
+    "package": "npm run build && electron-builder --config electron-builder.config.js --publish never",
     "test": "playwright test",
     "test:headed": "DISPLAY=:99 playwright test --headed"
   },
