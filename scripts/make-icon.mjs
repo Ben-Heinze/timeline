@@ -14,7 +14,9 @@ const bars = [
   `<rect x="${x}" y="${392 - h}" width="36" height="${h}" rx="8" fill="url(#amber)"/>`
 ).join('\n  ')
 
-const svg = `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+// Render at 1024x1024 (macOS icons want a 1024px master; electron-builder
+// downscales for the other sizes) from the same 512-unit vector artwork.
+const svg = `<svg width="1024" height="1024" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="amber" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#fbbf24"/>
