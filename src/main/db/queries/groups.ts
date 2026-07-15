@@ -18,6 +18,26 @@ export function getGroupSubtreeIds(rootId: number): number[] {
   return rows.map(r => r.id)
 }
 
+/**
+ * The timeframe a group covers: its explicit date_from/date_to if it's a
+ * date-range group, otherwise the min/max timestamp of its (subtree's)
+ * entries. Null if neither is available.
+ */
+export function getGroupDateRange(groupId: number): { from: number; to: number } | null {
+  const db = getDb()
+  const group = db.prepare('SELECT date_from, date_to FROM groups WHERE id = ?').get(groupId) as
+    { date_from: number | null; date_to: number | null } | undefined
+  if (group?.date_from != null && group.date_to != null) {
+    return { from: group.date_from, to: group.date_to }
+  }
+  const ids = getGroupSubtreeIds(groupId)
+  const row = db.prepare(
+    `SELECT MIN(timestamp) AS min, MAX(timestamp) AS max FROM entries WHERE group_id IN (${ids.join(', ')})`
+  ).get() as { min: number | null; max: number | null }
+  if (row.min == null) return null
+  return { from: row.min, to: row.max! + 1 }
+}
+
 export function getGroupStatsForPeriod(from: number, to: number): GroupStats[] {
   return getDb().prepare(`
     SELECT group_id, COUNT(*) AS count, MIN(timestamp) AS first_ts, MAX(timestamp) AS last_ts

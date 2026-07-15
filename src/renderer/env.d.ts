@@ -7,13 +7,13 @@ import type {
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
-  ListeningBucket, YearlySpotifySummary, VolumeStatus,
+  ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
   SetDateParams, SetDateResult, RescanProgressEvent, RescanResult,
 } from '../shared/types'
 
 interface Api {
   ingest: {
-    pickFiles: () => Promise<string[]>
+    pickFiles: (mode?: 'files' | 'folder') => Promise<string[]>
     countFiles: (paths: string[]) => Promise<number>
     start: (filePaths: string[], tagNames?: string[]) => Promise<void>
     getPathForFile: (file: File) => string
@@ -50,6 +50,7 @@ interface Api {
   groups: {
     list: () => Promise<Group[]>
     statsForPeriod: (from: number, to: number) => Promise<GroupStats[]>
+    dateRange: (groupId: number) => Promise<{ from: number; to: number } | null>
     create: (data: NewGroup) => Promise<Group>
     update: (id: number, patch: Partial<Omit<Group, 'id'>>) => Promise<Group>
     delete: (id: number) => Promise<void>
@@ -108,6 +109,8 @@ interface Api {
     topArtists: (from: number, to: number, limit?: number) => Promise<ArtistPlaytime[]>
     histogram: (from: number, to: number, zoomLevel: string) => Promise<ListeningBucket[]>
     yearlySummaries: () => Promise<YearlySpotifySummary[]>
+    yearDetail: (year: number) => Promise<YearDetail | null>
+    artistMonthlyForYear: (year: number, artistName: string) => Promise<number[]>
     onProgress: (cb: (event: SpotifyImportProgressEvent) => void) => () => void
   }
   volumes: {

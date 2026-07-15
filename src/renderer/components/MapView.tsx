@@ -257,7 +257,7 @@ export default function MapView() {
   const showDownloadPrompt = mode === 'hires' && hiresDownloaded === false
 
   return (
-    <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+    <div style={{ flex: 1, position: 'relative', minHeight: 0, isolation: 'isolate' }}>
       <div ref={containerRef} style={{ position: 'absolute', inset: 0, background: OCEAN }} />
 
       {/* Mode switcher */}

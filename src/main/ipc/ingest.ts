@@ -23,13 +23,22 @@ async function writeImportErrorLog(failures: IngestFailure[]): Promise<string | 
 }
 
 export function registerIngestHandlers(): void {
-  ipcMain.handle('ingest:pickFiles', async () => {
+  ipcMain.handle('ingest:pickFiles', async (_event, mode: 'files' | 'folder' = 'files') => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-    const result = await dialog.showOpenDialog(win, {
-      title: 'Import files or folders',
-      properties: ['openFile', 'openDirectory', 'multiSelections'],
-      filters: [{ name: 'All files', extensions: ['*'] }],
-    })
+    // openFile and openDirectory can't be combined in one dialog: on Linux (GTK) that
+    // combination collapses to directory-only selection, so single files become
+    // impossible to pick. Splitting into two dialogs (as the Spotify importer does)
+    // keeps single-file import working on every platform.
+    const result = await dialog.showOpenDialog(win, mode === 'folder'
+      ? {
+          title: 'Import folder',
+          properties: ['openDirectory', 'multiSelections'],
+        }
+      : {
+          title: 'Import files',
+          properties: ['openFile', 'multiSelections'],
+          filters: [{ name: 'All files', extensions: ['*'] }],
+        })
     if (result.canceled) return []
     return result.filePaths
   })

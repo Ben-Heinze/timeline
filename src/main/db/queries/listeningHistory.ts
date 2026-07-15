@@ -1,6 +1,6 @@
 import { getDb } from '../index'
 import { bucketExprSql } from './bucketing'
-import type { SpotifyPlay, ArtistPlaytime, TrackPlaytime, ListeningBucket, YearlySpotifySummary } from '../../../shared/types'
+import type { SpotifyPlay, ArtistPlaytime, TrackPlaytime, AlbumPlaytime, ListeningBucket, YearlySpotifySummary, YearDetail } from '../../../shared/types'
 
 export interface SpotifyPlayInsert {
   timestamp: number
@@ -207,4 +207,105 @@ export function getYearlySummaries(): YearlySpotifySummary[] {
       monthly: monthlyByYear.get(t.year) ?? new Array(12).fill(0),
     }))
   return yearlySummariesCache
+}
+
+// Everything needed for the Spotify tab's year-detail drill-down page: totals, unique
+// counts, top-15 artists/tracks/albums, and three breakdowns (month, weekday, hour-of-day)
+// for the page's charts. Scoped by a plain timestamp range rather than a strftime
+// expression per row, so it can use the timestamp index directly.
+export function getYearDetail(year: number): YearDetail | null {
+  const db = getDb()
+  const from = new Date(year, 0, 1).getTime()
+  const to = new Date(year + 1, 0, 1).getTime()
+
+  const totals = db.prepare(`
+    SELECT SUM(ms_played) AS ms_played, COUNT(*) AS play_count,
+           MIN(timestamp) AS first_play, MAX(timestamp) AS last_play
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ?
+  `).get(from, to) as { ms_played: number | null; play_count: number; first_play: number | null; last_play: number | null }
+
+  if (!totals.play_count) return null
+
+  const uniqueCounts = db.prepare(`
+    SELECT COUNT(DISTINCT artist_name) AS artists, COUNT(DISTINCT track_name) AS tracks, COUNT(DISTINCT album_name) AS albums
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track'
+  `).get(from, to) as { artists: number; tracks: number; albums: number }
+
+  const topArtists = db.prepare(`
+    SELECT artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND artist_name IS NOT NULL
+    GROUP BY artist_name ORDER BY ms_played DESC LIMIT 15
+  `).all(from, to) as { artist_name: string; ms_played: number; play_count: number }[]
+
+  const topTracks = db.prepare(`
+    SELECT track_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND track_name IS NOT NULL
+    GROUP BY track_name, artist_name ORDER BY ms_played DESC LIMIT 15
+  `).all(from, to) as { track_name: string; artist_name: string | null; ms_played: number; play_count: number }[]
+
+  const topAlbums = db.prepare(`
+    SELECT album_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND album_name IS NOT NULL
+    GROUP BY album_name, artist_name ORDER BY ms_played DESC LIMIT 15
+  `).all(from, to) as { album_name: string; artist_name: string | null; ms_played: number; play_count: number }[]
+
+  const monthlyRows = db.prepare(`
+    SELECT CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
+           SUM(ms_played) AS ms_played
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY month
+  `).all(from, to) as { month: number; ms_played: number }[]
+  const monthly = new Array(12).fill(0)
+  for (const r of monthlyRows) monthly[r.month - 1] = r.ms_played
+
+  const dowRows = db.prepare(`
+    SELECT CAST(strftime('%w', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS dow,
+           SUM(ms_played) AS ms_played
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY dow
+  `).all(from, to) as { dow: number; ms_played: number }[]
+  const dayOfWeek = new Array(7).fill(0)
+  for (const r of dowRows) dayOfWeek[r.dow] = r.ms_played
+
+  const hourRows = db.prepare(`
+    SELECT CAST(strftime('%H', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
+           SUM(ms_played) AS ms_played
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY hour
+  `).all(from, to) as { hour: number; ms_played: number }[]
+  const hourOfDay = new Array(24).fill(0)
+  for (const r of hourRows) hourOfDay[r.hour] = r.ms_played
+
+  return {
+    year,
+    msPlayed: totals.ms_played ?? 0,
+    playCount: totals.play_count,
+    uniqueArtists: uniqueCounts.artists,
+    uniqueTracks: uniqueCounts.tracks,
+    uniqueAlbums: uniqueCounts.albums,
+    firstPlay: totals.first_play,
+    lastPlay: totals.last_play,
+    topArtists: topArtists as ArtistPlaytime[],
+    topTracks: topTracks as TrackPlaytime[],
+    topAlbums: topAlbums as AlbumPlaytime[],
+    monthly, dayOfWeek, hourOfDay,
+  }
+}
+
+// Monthly breakdown for a single artist within one year, used by the year-detail page's
+// artist filter on the monthly chart.
+export function getArtistMonthlyForYear(year: number, artistName: string): number[] {
+  const db = getDb()
+  const from = new Date(year, 0, 1).getTime()
+  const to = new Date(year + 1, 0, 1).getTime()
+  const rows = db.prepare(`
+    SELECT CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
+           SUM(ms_played) AS ms_played
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND artist_name = ?
+    GROUP BY month
+  `).all(from, to, artistName) as { month: number; ms_played: number }[]
+  const monthly = new Array(12).fill(0)
+  for (const r of rows) monthly[r.month - 1] = r.ms_played
+  return monthly
 }

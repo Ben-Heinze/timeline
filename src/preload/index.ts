@@ -6,14 +6,14 @@ import type {
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
-  ListeningBucket, YearlySpotifySummary, VolumeStatus,
+  ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
   SetDateParams, RescanProgressEvent, RescanResult,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
   ingest: {
-    pickFiles: (): Promise<string[]> =>
-      ipcRenderer.invoke('ingest:pickFiles'),
+    pickFiles: (mode?: 'files' | 'folder'): Promise<string[]> =>
+      ipcRenderer.invoke('ingest:pickFiles', mode),
     countFiles: (paths: string[]): Promise<number> =>
       ipcRenderer.invoke('ingest:countFiles', paths),
     start: (filePaths: string[], tagNames?: string[]) =>
@@ -93,6 +93,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('groups:list'),
     statsForPeriod: (from: number, to: number) =>
       ipcRenderer.invoke('groups:statsForPeriod', from, to),
+    dateRange: (groupId: number): Promise<{ from: number; to: number } | null> =>
+      ipcRenderer.invoke('groups:dateRange', groupId),
     create: (data: NewGroup) =>
       ipcRenderer.invoke('groups:create', data),
     update: (id: number, patch: Partial<Omit<Group, 'id'>>) =>
@@ -192,6 +194,10 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('spotify:histogram', from, to, zoomLevel),
     yearlySummaries: (): Promise<YearlySpotifySummary[]> =>
       ipcRenderer.invoke('spotify:yearlySummaries'),
+    yearDetail: (year: number): Promise<YearDetail | null> =>
+      ipcRenderer.invoke('spotify:yearDetail', year),
+    artistMonthlyForYear: (year: number, artistName: string): Promise<number[]> =>
+      ipcRenderer.invoke('spotify:artistMonthlyForYear', year, artistName),
     onProgress: (cb: (event: SpotifyImportProgressEvent) => void) => {
       const handler = (_: unknown, data: SpotifyImportProgressEvent) => cb(data)
       ipcRenderer.on('spotify:progress', handler)

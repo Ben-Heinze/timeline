@@ -292,8 +292,8 @@ function Main() {
     setImportPending({ paths, count })
   }
 
-  async function handleImport() {
-    const paths = await window.api.ingest.pickFiles()
+  async function handleImport(mode: 'files' | 'folder') {
+    const paths = await window.api.ingest.pickFiles(mode)
     await startImportFlow(paths)
   }
 
@@ -421,7 +421,18 @@ function Main() {
               }}
             >{isSyncing ? 'Syncing…' : 'Sync'}</button>
             <button
-              onClick={handleImport}
+              onClick={() => handleImport('folder')}
+              disabled={importBusy}
+              style={{
+                padding: '6px 14px',
+                background: 'var(--bg-subtle)',
+                border: 'none', borderRadius: 4,
+                color: isImporting ? 'var(--text-3)' : 'var(--text-2)', fontSize: 13, fontWeight: 600,
+                cursor: isImporting ? 'not-allowed' : 'pointer',
+              }}
+            >Import folder…</button>
+            <button
+              onClick={() => handleImport('files')}
               disabled={importBusy}
               style={{
                 padding: '6px 14px',

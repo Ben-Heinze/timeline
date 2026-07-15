@@ -171,6 +171,7 @@ export interface AppSettings {
   curveTension: number             // 0 = angular, 1 = fully smooth (quadratic bezier midpoint)
   fileBrowserHeight: number
   fileBrowserMode: FileViewMode
+  spotifyHistoryCollapsed: boolean
   mapMode: MapMode
   groupSidebarWidth: number
   eventsPanelWidth: number
@@ -313,4 +314,28 @@ export interface YearlySpotifySummary {
   topArtists: ArtistPlaytime[] // up to 5, highest first
   topTrack: TrackPlaytime | null
   monthly: number[]            // length 12, ms_played per calendar month (Jan..Dec)
+}
+
+export interface AlbumPlaytime {
+  album_name: string
+  artist_name: string | null
+  ms_played: number
+  play_count: number
+}
+
+export interface YearDetail {
+  year: number
+  msPlayed: number
+  playCount: number
+  uniqueArtists: number
+  uniqueTracks: number
+  uniqueAlbums: number
+  firstPlay: number | null
+  lastPlay: number | null
+  topArtists: ArtistPlaytime[] // up to 15, highest first
+  topTracks: TrackPlaytime[]   // up to 15, highest first
+  topAlbums: AlbumPlaytime[]   // up to 15, highest first
+  monthly: number[]            // length 12, ms_played per calendar month (Jan..Dec)
+  dayOfWeek: number[]          // length 7, ms_played per weekday (0=Sun..6=Sat)
+  hourOfDay: number[]          // length 24, ms_played per local hour of day
 }

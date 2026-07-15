@@ -1,7 +1,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import path from 'path'
 import { expandSpotifyPaths, parseSpotifyFile } from '../spotify'
-import { insertPlays, getPlaysForPeriod, getTopArtists, getListeningHistogram, getYearlySummaries } from '../db/queries/listeningHistory'
+import { insertPlays, getPlaysForPeriod, getTopArtists, getListeningHistogram, getYearlySummaries, getYearDetail, getArtistMonthlyForYear } from '../db/queries/listeningHistory'
 import type { SpotifyImportProgressEvent, SpotifyImportResult } from '../../shared/types'
 
 export function registerSpotifyHandlers(): void {
@@ -54,4 +54,9 @@ export function registerSpotifyHandlers(): void {
     getListeningHistogram(from, to, zoomLevel))
 
   ipcMain.handle('spotify:yearlySummaries', () => getYearlySummaries())
+
+  ipcMain.handle('spotify:yearDetail', (_, year: number) => getYearDetail(year))
+
+  ipcMain.handle('spotify:artistMonthlyForYear', (_, year: number, artistName: string) =>
+    getArtistMonthlyForYear(year, artistName))
 }

@@ -40,10 +40,11 @@ function getSettings() {
       mapMode: parsed.mapMode ?? "offline",
       groupSidebarWidth: parsed.groupSidebarWidth ?? 220,
       eventsPanelWidth: parsed.eventsPanelWidth ?? 272,
-      spotifyPanelWidth: parsed.spotifyPanelWidth ?? 272
+      spotifyPanelWidth: parsed.spotifyPanelWidth ?? 272,
+      spotifyHistoryCollapsed: parsed.spotifyHistoryCollapsed ?? false
     };
   } catch {
-    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium", mapMode: "offline", groupSidebarWidth: 220, eventsPanelWidth: 272, spotifyPanelWidth: 272 };
+    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium", mapMode: "offline", groupSidebarWidth: 220, eventsPanelWidth: 272, spotifyPanelWidth: 272, spotifyHistoryCollapsed: false };
   }
   return cached;
 }
@@ -243,6 +244,19 @@ function getGroupSubtreeIds(rootId) {
     SELECT id FROM subtree
   `).all(rootId);
   return rows.map((r) => r.id);
+}
+function getGroupDateRange(groupId) {
+  const db2 = getDb();
+  const group = db2.prepare("SELECT date_from, date_to FROM groups WHERE id = ?").get(groupId);
+  if (group?.date_from != null && group.date_to != null) {
+    return { from: group.date_from, to: group.date_to };
+  }
+  const ids = getGroupSubtreeIds(groupId);
+  const row = db2.prepare(
+    `SELECT MIN(timestamp) AS min, MAX(timestamp) AS max FROM entries WHERE group_id IN (${ids.join(", ")})`
+  ).get();
+  if (row.min == null) return null;
+  return { from: row.min, to: row.max + 1 };
 }
 function getGroupStatsForPeriod(from, to) {
   return getDb().prepare(`
@@ -1769,6 +1783,7 @@ function registerEventHandlers() {
 function registerGroupHandlers() {
   electron.ipcMain.handle("groups:list", () => listGroups());
   electron.ipcMain.handle("groups:statsForPeriod", (_, from, to) => getGroupStatsForPeriod(from, to));
+  electron.ipcMain.handle("groups:dateRange", (_, groupId) => getGroupDateRange(groupId));
   electron.ipcMain.handle("groups:create", (_, data) => createGroup(data));
   electron.ipcMain.handle("groups:update", (_, id, patch) => updateGroup(id, patch));
   electron.ipcMain.handle("groups:delete", (_, id) => deleteGroup(id));
@@ -1856,11 +1871,14 @@ async function writeImportErrorLog(failures) {
   }
 }
 function registerIngestHandlers() {
-  electron.ipcMain.handle("ingest:pickFiles", async () => {
+  electron.ipcMain.handle("ingest:pickFiles", async (_event, mode = "files") => {
     const win = electron.BrowserWindow.getFocusedWindow() ?? electron.BrowserWindow.getAllWindows()[0];
-    const result = await electron.dialog.showOpenDialog(win, {
-      title: "Import files or folders",
-      properties: ["openFile", "openDirectory", "multiSelections"],
+    const result = await electron.dialog.showOpenDialog(win, mode === "folder" ? {
+      title: "Import folder",
+      properties: ["openDirectory", "multiSelections"]
+    } : {
+      title: "Import files",
+      properties: ["openFile", "multiSelections"],
       filters: [{ name: "All files", extensions: ["*"] }]
     });
     if (result.canceled) return [];
@@ -2683,6 +2701,91 @@ function getYearlySummaries() {
   }));
   return yearlySummariesCache;
 }
+function getYearDetail(year) {
+  const db2 = getDb();
+  const from = new Date(year, 0, 1).getTime();
+  const to = new Date(year + 1, 0, 1).getTime();
+  const totals = db2.prepare(`
+    SELECT SUM(ms_played) AS ms_played, COUNT(*) AS play_count,
+           MIN(timestamp) AS first_play, MAX(timestamp) AS last_play
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ?
+  `).get(from, to);
+  if (!totals.play_count) return null;
+  const uniqueCounts = db2.prepare(`
+    SELECT COUNT(DISTINCT artist_name) AS artists, COUNT(DISTINCT track_name) AS tracks, COUNT(DISTINCT album_name) AS albums
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track'
+  `).get(from, to);
+  const topArtists = db2.prepare(`
+    SELECT artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND artist_name IS NOT NULL
+    GROUP BY artist_name ORDER BY ms_played DESC LIMIT 15
+  `).all(from, to);
+  const topTracks = db2.prepare(`
+    SELECT track_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND track_name IS NOT NULL
+    GROUP BY track_name, artist_name ORDER BY ms_played DESC LIMIT 15
+  `).all(from, to);
+  const topAlbums = db2.prepare(`
+    SELECT album_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND album_name IS NOT NULL
+    GROUP BY album_name, artist_name ORDER BY ms_played DESC LIMIT 15
+  `).all(from, to);
+  const monthlyRows = db2.prepare(`
+    SELECT CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
+           SUM(ms_played) AS ms_played
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY month
+  `).all(from, to);
+  const monthly = new Array(12).fill(0);
+  for (const r of monthlyRows) monthly[r.month - 1] = r.ms_played;
+  const dowRows = db2.prepare(`
+    SELECT CAST(strftime('%w', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS dow,
+           SUM(ms_played) AS ms_played
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY dow
+  `).all(from, to);
+  const dayOfWeek = new Array(7).fill(0);
+  for (const r of dowRows) dayOfWeek[r.dow] = r.ms_played;
+  const hourRows = db2.prepare(`
+    SELECT CAST(strftime('%H', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
+           SUM(ms_played) AS ms_played
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY hour
+  `).all(from, to);
+  const hourOfDay = new Array(24).fill(0);
+  for (const r of hourRows) hourOfDay[r.hour] = r.ms_played;
+  return {
+    year,
+    msPlayed: totals.ms_played ?? 0,
+    playCount: totals.play_count,
+    uniqueArtists: uniqueCounts.artists,
+    uniqueTracks: uniqueCounts.tracks,
+    uniqueAlbums: uniqueCounts.albums,
+    firstPlay: totals.first_play,
+    lastPlay: totals.last_play,
+    topArtists,
+    topTracks,
+    topAlbums,
+    monthly,
+    dayOfWeek,
+    hourOfDay
+  };
+}
+function getArtistMonthlyForYear(year, artistName) {
+  const db2 = getDb();
+  const from = new Date(year, 0, 1).getTime();
+  const to = new Date(year + 1, 0, 1).getTime();
+  const rows = db2.prepare(`
+    SELECT CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
+           SUM(ms_played) AS ms_played
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND artist_name = ?
+    GROUP BY month
+  `).all(from, to, artistName);
+  const monthly = new Array(12).fill(0);
+  for (const r of rows) monthly[r.month - 1] = r.ms_played;
+  return monthly;
+}
 function registerSpotifyHandlers() {
   electron.ipcMain.handle("spotify:pickExport", async (_event, mode = "files") => {
     const win = electron.BrowserWindow.getFocusedWindow() ?? electron.BrowserWindow.getAllWindows()[0];
@@ -2720,6 +2823,8 @@ function registerSpotifyHandlers() {
   electron.ipcMain.handle("spotify:topArtists", (_, from, to, limit = 50) => getTopArtists(from, to, limit));
   electron.ipcMain.handle("spotify:histogram", (_, from, to, zoomLevel) => getListeningHistogram(from, to, zoomLevel));
   electron.ipcMain.handle("spotify:yearlySummaries", () => getYearlySummaries());
+  electron.ipcMain.handle("spotify:yearDetail", (_, year) => getYearDetail(year));
+  electron.ipcMain.handle("spotify:artistMonthlyForYear", (_, year, artistName) => getArtistMonthlyForYear(year, artistName));
 }
 function registerVolumeHandlers() {
   electron.ipcMain.handle("volumes:list", () => getVolumeStatuses());

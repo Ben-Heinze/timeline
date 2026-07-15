@@ -66,6 +66,8 @@ interface TimelineStore {
   spotifySummaries: YearlySpotifySummary[] | null
   spotifySummariesKey: number | null
   setSpotifySummaries: (summaries: YearlySpotifySummary[], key: number) => void
+  selectedSpotifyYear: number | null
+  setSelectedSpotifyYear: (year: number | null) => void
   groupSidebarOpen: boolean
   setGroupSidebarOpen: (open: boolean) => void
   focusedEventId: number | null
@@ -141,6 +143,8 @@ export const useStore = create<TimelineStore>((set) => ({
   spotifySummaries: null,
   spotifySummariesKey: null,
   setSpotifySummaries: (summaries, key) => set({ spotifySummaries: summaries, spotifySummariesKey: key }),
+  selectedSpotifyYear: null,
+  setSelectedSpotifyYear: (year) => set({ selectedSpotifyYear: year }),
   groupSidebarOpen: true,
   setGroupSidebarOpen: (open) => set({ groupSidebarOpen: open }),
   focusedEventId: null,

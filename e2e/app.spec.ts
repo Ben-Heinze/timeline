@@ -21,6 +21,7 @@ test.describe('App launch and navigation', () => {
     await expect(page.getByRole('button', { name: '+ Journal' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Sync' })).toBeVisible()
     await expect(page.getByRole('button', { name: '+ Import' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Import folder…' })).toBeVisible()
   })
 
   test('shows sidebar with Groups label and All entries row', async ({ appPage: page }) => {

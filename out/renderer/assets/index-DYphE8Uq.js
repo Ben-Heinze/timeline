@@ -7223,6 +7223,8 @@ const useStore = create((set) => ({
   spotifySummaries: null,
   spotifySummariesKey: null,
   setSpotifySummaries: (summaries, key) => set({ spotifySummaries: summaries, spotifySummariesKey: key }),
+  selectedSpotifyYear: null,
+  setSelectedSpotifyYear: (year) => set({ selectedSpotifyYear: year }),
   groupSidebarOpen: true,
   setGroupSidebarOpen: (open) => set({ groupSidebarOpen: open }),
   focusedEventId: null,
@@ -94757,8 +94759,8 @@ const world110 = {
   features,
   bbox
 };
-const OCEAN = "#aad3df";
-const LAND_STYLE = { fillColor: "#ece7d8", fillOpacity: 1, color: "#998f7a", weight: 0.8 };
+const OCEAN$1 = "#aad3df";
+const LAND_STYLE$1 = { fillColor: "#ece7d8", fillOpacity: 1, color: "#998f7a", weight: 0.8 };
 const STATE_STYLE = { color: "#a89f8d", weight: 0.7, dashArray: "4 3", fill: false };
 const FIT_MAX_ZOOM = { offline: 5, hires: 7, online: 11 };
 const MODE_LABEL = {
@@ -94844,7 +94846,7 @@ function MapView() {
       map2.setMaxZoom(19);
     } else if (mode === "hires" && hiresData) {
       add(L$1.geoJSON(hiresData.countries, {
-        style: LAND_STYLE,
+        style: LAND_STYLE$1,
         pane: "basemap",
         attribution: "Natural Earth"
       }));
@@ -94866,7 +94868,7 @@ function MapView() {
       map2.setMaxZoom(11);
     } else {
       add(L$1.geoJSON(world110, {
-        style: LAND_STYLE,
+        style: LAND_STYLE$1,
         pane: "basemap",
         attribution: "Natural Earth"
       }));
@@ -94984,8 +94986,8 @@ function MapView() {
     fontWeight: active ? 600 : 400
   });
   const showDownloadPrompt = mode === "hires" && hiresDownloaded === false;
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, position: "relative", minHeight: 0 }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: containerRef, style: { position: "absolute", inset: 0, background: OCEAN } }),
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, position: "relative", minHeight: 0, isolation: "isolate" }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: containerRef, style: { position: "absolute", inset: 0, background: OCEAN$1 } }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
       ...panel,
       position: "absolute",
@@ -96327,6 +96329,279 @@ const selectStyle = {
   background: "var(--bg-input)",
   color: "var(--text)"
 };
+const MONTH_LABELS$1 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => `${h}:00`);
+const HOUR_TICKS = HOUR_LABELS.map((l2, i) => i % 3 === 0 ? String(i) : "");
+function formatPlaytime$2(ms) {
+  const totalMin = Math.round(ms / 6e4);
+  if (totalMin < 60) return `${totalMin}m`;
+  const h = Math.floor(totalMin / 60);
+  const m2 = totalMin % 60;
+  return m2 === 0 ? `${h}h` : `${h}h ${m2}m`;
+}
+function formatDay(ts) {
+  return new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+function Card({ children }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+    background: "var(--bg-surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    padding: 18
+  }, children });
+}
+function SectionLabel({ children }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: "var(--text-4)"
+  }, children });
+}
+function BarChart({
+  data,
+  tickLabels,
+  tooltipLabels,
+  color,
+  height = 120
+}) {
+  const max = Math.max(1, ...data);
+  const labelsForTooltip = tooltipLabels ?? tickLabels;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "flex-end", gap: 3, height }, children: data.map((v2, i) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        title: `${labelsForTooltip[i]}: ${formatPlaytime$2(v2)}`,
+        style: {
+          flex: 1,
+          height: Math.max(2, v2 / max * height),
+          background: color,
+          opacity: v2 > 0 ? 0.85 : 0.15,
+          borderRadius: 2
+        }
+      },
+      i
+    )) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 3, marginTop: 4 }, children: tickLabels.map((l2, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, fontSize: 9, textAlign: "center", color: "var(--text-4)" }, children: l2 }, i)) })
+  ] });
+}
+function RankedList({
+  title,
+  items,
+  getKey,
+  getLabel,
+  getSubLabel,
+  getMs
+}) {
+  const maxMs = items[0] ? getMs(items[0]) : 0;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 240 }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(SectionLabel, { children: title }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginTop: 10 }, children: items.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-4)" }, children: "No data." }) : items.map((item, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 7 }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "baseline", gap: 8 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", fontWeight: 600, width: 16, flexShrink: 0 }, children: i + 1 }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: {
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: "var(--text)",
+          flex: 1,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap"
+        }, children: [
+          getLabel(item),
+          getSubLabel(item) && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontWeight: 400, color: "var(--text-3)" }, children: [
+            " — ",
+            getSubLabel(item)
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-3)", flexShrink: 0 }, children: formatPlaytime$2(getMs(item)) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 4, background: "var(--bg-subtle)", borderRadius: 2, marginTop: 3, marginLeft: 24, overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+        width: `${maxMs > 0 ? getMs(item) / maxMs * 100 : 0}%`,
+        height: "100%",
+        background: "#1DB954",
+        borderRadius: 2
+      } }) })
+    ] }, getKey(item))) })
+  ] });
+}
+function StatTile({ label, value }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 20, fontWeight: 800, color: "var(--text)" }, children: value }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10.5, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 }, children: label })
+  ] });
+}
+function SpotifyYearDetail({ year, onBack }) {
+  const [detail, setDetail] = reactExports.useState(null);
+  const [loading, setLoading] = reactExports.useState(true);
+  const [artistFilter, setArtistFilter] = reactExports.useState("");
+  const [filteredMonthly, setFilteredMonthly] = reactExports.useState(null);
+  reactExports.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setDetail(null);
+    setArtistFilter("");
+    setFilteredMonthly(null);
+    window.api.spotify.yearDetail(year).then((res) => {
+      if (!cancelled) {
+        setDetail(res);
+        setLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [year]);
+  reactExports.useEffect(() => {
+    if (!artistFilter) {
+      setFilteredMonthly(null);
+      return;
+    }
+    let cancelled = false;
+    window.api.spotify.artistMonthlyForYear(year, artistFilter).then((res) => {
+      if (!cancelled) setFilteredMonthly(res);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [year, artistFilter]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: 20 }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { maxWidth: 960, margin: "0 auto" }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        onClick: onBack,
+        style: {
+          border: "none",
+          background: "transparent",
+          cursor: "pointer",
+          padding: "4px 0",
+          fontSize: 12.5,
+          color: "var(--text-3)",
+          fontWeight: 600,
+          marginBottom: 12
+        },
+        children: "← All years"
+      }
+    ),
+    loading ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 32, color: "var(--text-3)", fontSize: 13 }, children: "Loading…" }) : detail === null ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: 32, textAlign: "center", color: "var(--text-4)", fontSize: 13 }, children: [
+      "No listening history for ",
+      year,
+      "."
+    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap", marginBottom: 4 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 34, fontWeight: 800, color: "var(--text)" }, children: year }),
+        detail.firstPlay !== null && detail.lastPlay !== null && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-4)" }, children: [
+          formatDay(detail.firstPlay),
+          " – ",
+          formatDay(detail.lastPlay)
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        display: "flex",
+        gap: 28,
+        flexWrap: "wrap",
+        padding: "16px 0 20px",
+        borderBottom: "1px solid var(--border-light)",
+        marginBottom: 20
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(StatTile, { label: "Listening time", value: formatPlaytime$2(detail.msPlayed) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(StatTile, { label: "Plays", value: detail.playCount.toLocaleString() }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(StatTile, { label: "Artists", value: detail.uniqueArtists.toLocaleString() }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(StatTile, { label: "Albums", value: detail.uniqueAlbums.toLocaleString() }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(StatTile, { label: "Tracks", value: detail.uniqueTracks.toLocaleString() })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginBottom: 16 }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs(Card, { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(SectionLabel, { children: "Listening by month" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "select",
+            {
+              value: artistFilter,
+              onChange: (e) => setArtistFilter(e.target.value),
+              style: {
+                fontSize: 11.5,
+                padding: "4px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--border)",
+                background: "var(--bg-subtle)",
+                color: "var(--text)"
+              },
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "All music" }),
+                detail.topArtists.map((a) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: a.artist_name, children: a.artist_name }, a.artist_name))
+              ]
+            }
+          )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          BarChart,
+          {
+            data: artistFilter ? filteredMonthly ?? new Array(12).fill(0) : detail.monthly,
+            tickLabels: MONTH_LABELS$1,
+            color: "#1DB954",
+            height: 130
+          }
+        )
+      ] }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, minWidth: 300 }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs(Card, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(SectionLabel, { children: "By day of week" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginTop: 12 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(BarChart, { data: detail.dayOfWeek, tickLabels: DOW_LABELS, color: "#1DB954", height: 90 }) })
+        ] }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, minWidth: 300 }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs(Card, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(SectionLabel, { children: "By hour of day" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { marginTop: 12 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+            BarChart,
+            {
+              data: detail.hourOfDay,
+              tickLabels: HOUR_TICKS,
+              tooltipLabels: HOUR_LABELS,
+              color: "#1DB954",
+              height: 90
+            }
+          ) })
+        ] }) })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Card, { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 28, flexWrap: "wrap" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          RankedList,
+          {
+            title: "Top artists",
+            items: detail.topArtists.slice(0, 10),
+            getKey: (a) => a.artist_name,
+            getLabel: (a) => a.artist_name,
+            getSubLabel: () => null,
+            getMs: (a) => a.ms_played
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          RankedList,
+          {
+            title: "Top albums",
+            items: detail.topAlbums.slice(0, 10),
+            getKey: (a) => `${a.album_name}::${a.artist_name ?? ""}`,
+            getLabel: (a) => a.album_name,
+            getSubLabel: (a) => a.artist_name,
+            getMs: (a) => a.ms_played
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          RankedList,
+          {
+            title: "Top tracks",
+            items: detail.topTracks.slice(0, 10),
+            getKey: (t2) => `${t2.track_name}::${t2.artist_name ?? ""}`,
+            getLabel: (t2) => t2.track_name,
+            getSubLabel: (t2) => t2.artist_name,
+            getMs: (t2) => t2.ms_played
+          }
+        )
+      ] }) })
+    ] })
+  ] }) });
+}
 const MONTH_LABELS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
 function formatPlaytime$1(ms) {
   const totalMin = Math.round(ms / 6e4);
@@ -96335,80 +96610,101 @@ function formatPlaytime$1(ms) {
   const m2 = totalMin % 60;
   return m2 === 0 ? `${h}h` : `${h}h ${m2}m`;
 }
-function YearCard({ summary }) {
+function YearCard({ summary, onOpen }) {
   const maxArtistMs = summary.topArtists[0]?.ms_played ?? 0;
   const maxMonthMs = Math.max(1, ...summary.monthly);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-    background: "var(--bg-surface)",
-    border: "1px solid var(--border)",
-    borderRadius: 10,
-    padding: 18,
-    display: "flex",
-    gap: 24,
-    flexWrap: "wrap"
-  }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { minWidth: 140, flexShrink: 0 }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 26, fontWeight: 800, color: "var(--text)" }, children: summary.year }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-3)", marginTop: 2 }, children: [
-        formatPlaytime$1(summary.msPlayed),
-        " · ",
-        summary.playCount.toLocaleString(),
-        " plays"
-      ] }),
-      summary.topTrack && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: 12 }, children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--text-4)" }, children: "Most played" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12.5, fontWeight: 600, color: "var(--text)", marginTop: 3 }, children: summary.topTrack.track_name }),
-        summary.topTrack.artist_name && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-3)" }, children: summary.topTrack.artist_name }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 10.5, color: "var(--text-4)", marginTop: 1 }, children: [
-          summary.topTrack.play_count,
-          " play",
-          summary.topTrack.play_count === 1 ? "" : "s"
-        ] })
-      ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "flex-end", gap: 2, height: 32, marginTop: 14 }, children: summary.monthly.map((ms, i) => /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "div",
-        {
-          title: `${formatPlaytime$1(ms)}`,
-          style: {
-            flex: 1,
-            height: `${Math.max(2, ms / maxMonthMs * 32)}px`,
-            background: "#1DB954",
-            opacity: ms > 0 ? 0.75 : 0.15,
-            borderRadius: 1.5
-          }
-        },
-        i
-      )) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 2, marginTop: 3 }, children: MONTH_LABELS.map((m2, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, fontSize: 8, textAlign: "center", color: "var(--text-4)" }, children: m2 }, i)) })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 220 }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--text-4)", marginBottom: 6 }, children: "Top artists" }),
-      summary.topArtists.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-4)" }, children: "No music plays this year." }) : summary.topArtists.map((a, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 6 }, children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "baseline", gap: 8 }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", fontWeight: 600, width: 14, flexShrink: 0 }, children: i + 1 }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
-            fontSize: 12.5,
-            fontWeight: 600,
-            color: "var(--text)",
-            flex: 1,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap"
-          }, children: a.artist_name }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-3)", flexShrink: 0 }, children: formatPlaytime$1(a.ms_played) })
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      onClick: onOpen,
+      role: "button",
+      tabIndex: 0,
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") onOpen();
+      },
+      style: {
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 10,
+        padding: 18,
+        display: "flex",
+        gap: 24,
+        flexWrap: "wrap",
+        cursor: "pointer"
+      },
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { minWidth: 140, flexShrink: 0 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 26, fontWeight: 800, color: "var(--text)" }, children: summary.year }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-3)", marginTop: 2 }, children: [
+            formatPlaytime$1(summary.msPlayed),
+            " · ",
+            summary.playCount.toLocaleString(),
+            " plays"
+          ] }),
+          summary.topTrack && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: 12 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--text-4)" }, children: "Most played" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12.5, fontWeight: 600, color: "var(--text)", marginTop: 3 }, children: summary.topTrack.track_name }),
+            summary.topTrack.artist_name && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-3)" }, children: summary.topTrack.artist_name }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 10.5, color: "var(--text-4)", marginTop: 1 }, children: [
+              summary.topTrack.play_count,
+              " play",
+              summary.topTrack.play_count === 1 ? "" : "s"
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "flex-end", gap: 2, height: 32, marginTop: 14 }, children: summary.monthly.map((ms, i) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "div",
+            {
+              title: `${formatPlaytime$1(ms)}`,
+              style: {
+                flex: 1,
+                height: `${Math.max(2, ms / maxMonthMs * 32)}px`,
+                background: "#1DB954",
+                opacity: ms > 0 ? 0.75 : 0.15,
+                borderRadius: 1.5
+              }
+            },
+            i
+          )) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 2, marginTop: 3 }, children: MONTH_LABELS.map((m2, i) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, fontSize: 8, textAlign: "center", color: "var(--text-4)" }, children: m2 }, i)) })
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 4, background: "var(--bg-subtle)", borderRadius: 2, marginTop: 3, marginLeft: 22, overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-          width: `${maxArtistMs > 0 ? a.ms_played / maxArtistMs * 100 : 0}%`,
-          height: "100%",
-          background: "#1DB954",
-          borderRadius: 2
-        } }) })
-      ] }, a.artist_name))
-    ] })
-  ] });
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 220 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--text-4)", marginBottom: 6 }, children: "Top artists" }),
+          summary.topArtists.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 12, color: "var(--text-4)" }, children: "No music plays this year." }) : summary.topArtists.map((a, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginBottom: 6 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "baseline", gap: 8 }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", fontWeight: 600, width: 14, flexShrink: 0 }, children: i + 1 }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+                fontSize: 12.5,
+                fontWeight: 600,
+                color: "var(--text)",
+                flex: 1,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+              }, children: a.artist_name }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-3)", flexShrink: 0 }, children: formatPlaytime$1(a.ms_played) })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 4, background: "var(--bg-subtle)", borderRadius: 2, marginTop: 3, marginLeft: 22, overflow: "hidden" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+              width: `${maxArtistMs > 0 ? a.ms_played / maxArtistMs * 100 : 0}%`,
+              height: "100%",
+              background: "#1DB954",
+              borderRadius: 2
+            } }) })
+          ] }, a.artist_name))
+        ] })
+      ]
+    }
+  );
 }
 function SpotifyView() {
-  const { activeView, refreshKey, spotifySummaries, spotifySummariesKey, setSpotifySummaries } = useStore();
+  const {
+    activeView,
+    refreshKey,
+    spotifySummaries,
+    spotifySummariesKey,
+    setSpotifySummaries,
+    selectedSpotifyYear,
+    setSelectedSpotifyYear
+  } = useStore();
   const isStale = spotifySummariesKey !== refreshKey;
   const summaries = isStale ? null : spotifySummaries;
   reactExports.useEffect(() => {
@@ -96421,11 +96717,14 @@ function SpotifyView() {
       cancelled = true;
     };
   }, [activeView, refreshKey, isStale, setSpotifySummaries]);
+  if (selectedSpotifyYear !== null) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyYearDetail, { year: selectedSpotifyYear, onBack: () => setSelectedSpotifyYear(null) });
+  }
   return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: 20 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }, children: summaries === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 32, color: "var(--text-3)", fontSize: 13 }, children: "Loading…" }) : summaries.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: 32, textAlign: "center", color: "var(--text-4)", fontSize: 13, lineHeight: 1.6 }, children: [
     "No listening history imported yet.",
     /* @__PURE__ */ jsxRuntimeExports.jsx("br", {}),
     'Import your Spotify "Extended streaming history" export from Settings to see yearly recaps here.'
-  ] }) : summaries.map((s) => /* @__PURE__ */ jsxRuntimeExports.jsx(YearCard, { summary: s }, s.year)) }) });
+  ] }) : summaries.map((s) => /* @__PURE__ */ jsxRuntimeExports.jsx(YearCard, { summary: s, onOpen: () => setSelectedSpotifyYear(s.year) }, s.year)) }) });
 }
 const MS_DAY$1 = 864e5;
 function periodLabel(from2, to) {
@@ -96504,6 +96803,7 @@ function FileBrowser() {
   const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(entries);
   const height = settings?.fileBrowserHeight ?? 240;
   const viewMode = settings?.fileBrowserMode ?? "medium";
+  const historyCollapsed = settings?.spotifyHistoryCollapsed ?? false;
   const isOpen = fileBrowserOpen || selectedPeriod !== null || selectedLocation !== null;
   const scope = reactExports.useMemo(
     () => isOpen && !selectedLocation ? computeScope(selectedPeriod, zoomLevel, visibleRange, dataExtent) : null,
@@ -96533,18 +96833,33 @@ function FileBrowser() {
       setPlays([]);
       return;
     }
+    let cancelled = false;
+    if (selectedGroupId != null) {
+      window.api.groups.dateRange(selectedGroupId).then((range) => {
+        if (cancelled) return;
+        if (!range) {
+          setPlays([]);
+          return;
+        }
+        window.api.spotify.forPeriod(range.from, range.to).then((res) => {
+          if (!cancelled) setPlays(res);
+        });
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
     if (scopeFrom === null || scopeTo === null) {
       setPlays([]);
       return;
     }
-    let cancelled = false;
     window.api.spotify.forPeriod(scopeFrom, scopeTo).then((res) => {
       if (!cancelled) setPlays(res);
     });
     return () => {
       cancelled = true;
     };
-  }, [scopeFrom, scopeTo, refreshKey, selectedLocation]);
+  }, [scopeFrom, scopeTo, refreshKey, selectedLocation, selectedGroupId]);
   const playGroups = reactExports.useMemo(() => {
     const map2 = /* @__PURE__ */ new Map();
     const order = [];
@@ -96593,6 +96908,12 @@ function FileBrowser() {
     setSettings({ ...settings, fileBrowserMode: m2 });
     window.api.settings.set({ fileBrowserMode: m2 });
   }, [settings, setSettings]);
+  const toggleHistoryCollapsed = reactExports.useCallback(() => {
+    if (!settings) return;
+    const next = !historyCollapsed;
+    setSettings({ ...settings, spotifyHistoryCollapsed: next });
+    window.api.settings.set({ spotifyHistoryCollapsed: next });
+  }, [settings, setSettings, historyCollapsed]);
   const onResizeMouseDown = reactExports.useCallback((e) => {
     if (!settings) return;
     e.preventDefault();
@@ -96758,22 +97079,42 @@ function FileBrowser() {
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, overflowY: "auto", minHeight: 0 }, children: [
       playGroups.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
-          position: "sticky",
-          top: 0,
-          zIndex: 1,
-          background: "var(--bg-app)",
-          padding: "10px 14px 6px",
-          fontSize: 12,
-          fontWeight: 700,
-          color: "var(--text-2)",
-          letterSpacing: 0.4,
-          borderBottom: "1px solid var(--border-light)"
-        }, children: [
-          "Listening History",
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "var(--text-4)", fontWeight: 400 }, children: playGroups.length })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "6px 14px 12px", display: "flex", flexDirection: "column", gap: 3 }, children: playGroups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "header",
+          {
+            onClick: toggleHistoryCollapsed,
+            title: historyCollapsed ? "Expand listening history" : "Collapse listening history",
+            style: {
+              position: "sticky",
+              top: 0,
+              zIndex: 1,
+              background: "var(--bg-app)",
+              padding: "10px 14px 6px",
+              fontSize: 12,
+              fontWeight: 700,
+              color: "var(--text-2)",
+              letterSpacing: 0.4,
+              borderBottom: historyCollapsed ? "none" : "1px solid var(--border-light)",
+              cursor: "pointer",
+              userSelect: "none",
+              display: "flex",
+              alignItems: "center",
+              gap: 6
+            },
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+                display: "inline-block",
+                fontSize: 10,
+                color: "var(--text-4)",
+                transform: historyCollapsed ? "rotate(-90deg)" : "rotate(0deg)",
+                transition: "transform 0.12s ease"
+              }, children: "▾" }),
+              "Listening History",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-4)", fontWeight: 400 }, children: playGroups.length })
+            ]
+          }
+        ),
+        !historyCollapsed && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "6px 14px 12px", display: "flex", flexDirection: "column", gap: 3 }, children: playGroups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
           display: "flex",
           alignItems: "baseline",
           gap: 8,
@@ -115661,6 +116002,62 @@ const StarterKit = Extension.create({
     return extensions;
   }
 });
+const OCEAN = "#aad3df";
+const LAND_STYLE = { fillColor: "#ece7d8", fillOpacity: 1, color: "#998f7a", weight: 0.8 };
+const PIN_STYLE = { weight: 2, color: "#fff", fillColor: "#3b82f6", fillOpacity: 1 };
+const ZOOM = { offline: 6, hires: 8, online: 13 };
+function LocationMiniMap({ latitude, longitude }) {
+  const { settings } = useStore();
+  const mode = settings?.mapMode ?? "offline";
+  const containerRef = reactExports.useRef(null);
+  const [hiresCountries, setHiresCountries] = reactExports.useState(null);
+  reactExports.useEffect(() => {
+    if (mode !== "hires") return;
+    let cancelled = false;
+    window.api.map.hiresStatus().then((s) => {
+      if (cancelled || !s.downloaded) return;
+      window.api.map.getLayer("countries").then((c) => {
+        if (!cancelled && c) setHiresCountries(JSON.parse(c));
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+  reactExports.useEffect(() => {
+    if (!containerRef.current) return;
+    const map2 = L$1.map(containerRef.current, {
+      center: [latitude, longitude],
+      zoom: ZOOM[mode],
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      boxZoom: false,
+      keyboard: false,
+      touchZoom: false
+    });
+    if (mode === "online") {
+      L$1.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map2);
+    } else {
+      L$1.geoJSON(mode === "hires" && hiresCountries ? hiresCountries : world110, {
+        style: LAND_STYLE
+      }).addTo(map2);
+    }
+    L$1.circleMarker([latitude, longitude], { ...PIN_STYLE, radius: 7 }).addTo(map2);
+    return () => {
+      map2.remove();
+    };
+  }, [latitude, longitude, mode, hiresCountries]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      ref: containerRef,
+      style: { width: "100%", height: 160, borderRadius: 8, background: OCEAN }
+    }
+  );
+}
 const TYPE_COLORS$1 = {
   photo: "#3b82f6",
   video: "#8b5cf6",
@@ -115873,7 +116270,7 @@ function MetadataPanel({ entry }) {
   }
   if (entry.is_missing) rows.push(["Status", /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "#ef4444" }, children: "File is missing" })]);
   if (entry.needs_date_review) rows.push(["Date review", "Needs review"]);
-  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
     marginTop: 20,
     borderTop: "1px solid var(--border-light)",
     paddingTop: 14,
@@ -115882,18 +116279,21 @@ function MetadataPanel({ entry }) {
     columnGap: 16,
     rowGap: 6,
     fontSize: 12
-  }, children: rows.map(([label, value]) => /* @__PURE__ */ jsxRuntimeExports.jsxs(React$2.Fragment, { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
-      color: "var(--text-4)",
-      fontWeight: 600,
-      letterSpacing: 0.4,
-      textTransform: "uppercase",
-      fontSize: 10,
-      alignSelf: "baseline",
-      paddingTop: 1
-    }, children: label }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-2)", wordBreak: "break-all", alignSelf: "baseline" }, children: value })
-  ] }, label)) });
+  }, children: [
+    rows.map(([label, value]) => /* @__PURE__ */ jsxRuntimeExports.jsxs(React$2.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+        color: "var(--text-4)",
+        fontWeight: 600,
+        letterSpacing: 0.4,
+        textTransform: "uppercase",
+        fontSize: 10,
+        alignSelf: "baseline",
+        paddingTop: 1
+      }, children: label }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-2)", wordBreak: "break-all", alignSelf: "baseline" }, children: value })
+    ] }, label)),
+    entry.latitude != null && entry.longitude != null && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { gridColumn: "1 / -1", marginTop: 4 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(LocationMiniMap, { latitude: entry.latitude, longitude: entry.longitude }) })
+  ] });
 }
 const fileBtnStyle = {
   background: "none",
@@ -116617,6 +117017,11 @@ function GroupSidebar() {
     await window.api.groups.update(target.id, { name: name2 });
     refreshGroups();
   };
+  const extractGroup = async (g) => {
+    setMenu(null);
+    await window.api.groups.update(g.id, { parent_id: null });
+    refreshGroups();
+  };
   const toggleExpand = (id2) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -116872,6 +117277,7 @@ function GroupSidebar() {
           setMenu(null);
           openEdit(menu.group);
         } }),
+        menu.group.parent_id !== null && /* @__PURE__ */ jsxRuntimeExports.jsx(GroupMenuItem, { label: "Remove from parent", onClick: () => extractGroup(menu.group) }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "var(--border-light)", margin: "4px 0" } }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(GroupMenuItem, { label: "Delete…", danger: true, onClick: () => {
           setMenu(null);
@@ -119823,8 +120229,8 @@ function Main() {
     const count = await window.api.ingest.countFiles(paths);
     setImportPending({ paths, count });
   }
-  async function handleImport() {
-    const paths = await window.api.ingest.pickFiles();
+  async function handleImport(mode) {
+    const paths = await window.api.ingest.pickFiles(mode);
     await startImportFlow(paths);
   }
   const handleDragEnter = React$2.useCallback((e) => {
@@ -119954,7 +120360,25 @@ function Main() {
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "button",
               {
-                onClick: handleImport,
+                onClick: () => handleImport("folder"),
+                disabled: importBusy,
+                style: {
+                  padding: "6px 14px",
+                  background: "var(--bg-subtle)",
+                  border: "none",
+                  borderRadius: 4,
+                  color: isImporting ? "var(--text-3)" : "var(--text-2)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: isImporting ? "not-allowed" : "pointer"
+                },
+                children: "Import folder…"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: () => handleImport("files"),
                 disabled: importBusy,
                 style: {
                   padding: "6px 14px",

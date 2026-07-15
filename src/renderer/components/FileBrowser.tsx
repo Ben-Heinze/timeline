@@ -36,6 +36,7 @@ export default function FileBrowser() {
 
   const height = settings?.fileBrowserHeight ?? 240
   const viewMode: FileViewMode = settings?.fileBrowserMode ?? 'medium'
+  const historyCollapsed = settings?.spotifyHistoryCollapsed ?? false
 
   const isOpen = fileBrowserOpen || selectedPeriod !== null || selectedLocation !== null
   const scope = useMemo(
@@ -57,13 +58,26 @@ export default function FileBrowser() {
 
   useEffect(() => {
     if (selectedLocation) { setPlays([]); return }
-    if (scopeFrom === null || scopeTo === null) { setPlays([]); return }
     let cancelled = false
+    // A selected group narrows the listening history to that group's own
+    // timeframe (its date range, or its entries' span) rather than whatever
+    // period the timeline happens to be zoomed to.
+    if (selectedGroupId != null) {
+      window.api.groups.dateRange(selectedGroupId).then(range => {
+        if (cancelled) return
+        if (!range) { setPlays([]); return }
+        window.api.spotify.forPeriod(range.from, range.to).then(res => {
+          if (!cancelled) setPlays(res)
+        })
+      })
+      return () => { cancelled = true }
+    }
+    if (scopeFrom === null || scopeTo === null) { setPlays([]); return }
     window.api.spotify.forPeriod(scopeFrom, scopeTo).then(res => {
       if (!cancelled) setPlays(res)
     })
     return () => { cancelled = true }
-  }, [scopeFrom, scopeTo, refreshKey, selectedLocation])
+  }, [scopeFrom, scopeTo, refreshKey, selectedLocation, selectedGroupId])
 
   const playGroups = useMemo(() => {
     interface PlayGroup {
@@ -125,6 +139,13 @@ export default function FileBrowser() {
     setSettings({ ...settings, fileBrowserMode: m })
     window.api.settings.set({ fileBrowserMode: m })
   }, [settings, setSettings])
+
+  const toggleHistoryCollapsed = useCallback(() => {
+    if (!settings) return
+    const next = !historyCollapsed
+    setSettings({ ...settings, spotifyHistoryCollapsed: next })
+    window.api.settings.set({ spotifyHistoryCollapsed: next })
+  }, [settings, setSettings, historyCollapsed])
 
   const onResizeMouseDown = useCallback((e: React.MouseEvent) => {
     if (!settings) return
@@ -287,39 +308,52 @@ export default function FileBrowser() {
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         {playGroups.length > 0 && (
           <section>
-            <header style={{
-              position: 'sticky', top: 0, zIndex: 1,
-              background: 'var(--bg-app)',
-              padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
-              color: 'var(--text-2)', letterSpacing: 0.4,
-              borderBottom: '1px solid var(--border-light)',
-            }}>
+            <header
+              onClick={toggleHistoryCollapsed}
+              title={historyCollapsed ? 'Expand listening history' : 'Collapse listening history'}
+              style={{
+                position: 'sticky', top: 0, zIndex: 1,
+                background: 'var(--bg-app)',
+                padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
+                color: 'var(--text-2)', letterSpacing: 0.4,
+                borderBottom: historyCollapsed ? 'none' : '1px solid var(--border-light)',
+                cursor: 'pointer', userSelect: 'none',
+                display: 'flex', alignItems: 'center', gap: 6,
+              }}
+            >
+              <span style={{
+                display: 'inline-block', fontSize: 10, color: 'var(--text-4)',
+                transform: historyCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+                transition: 'transform 0.12s ease',
+              }}>▾</span>
               Listening History
-              <span style={{ marginLeft: 8, color: 'var(--text-4)', fontWeight: 400 }}>
+              <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
                 {playGroups.length}
               </span>
             </header>
-            <div style={{ padding: '6px 14px 12px', display: 'flex', flexDirection: 'column', gap: 3 }}>
-              {playGroups.map(g => (
-                <div key={g.key} style={{
-                  display: 'flex', alignItems: 'baseline', gap: 8,
-                  fontSize: 12.5, color: 'var(--text)',
-                }}>
-                  <span style={{ flexShrink: 0 }}>{g.mediaType === 'episode' ? '🎙️' : '🎵'}</span>
-                  <span style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {g.track}
-                  </span>
-                  {g.artist && (
-                    <span style={{ color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      — {g.artist}
+            {!historyCollapsed && (
+              <div style={{ padding: '6px 14px 12px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {playGroups.map(g => (
+                  <div key={g.key} style={{
+                    display: 'flex', alignItems: 'baseline', gap: 8,
+                    fontSize: 12.5, color: 'var(--text)',
+                  }}>
+                    <span style={{ flexShrink: 0 }}>{g.mediaType === 'episode' ? '🎙️' : '🎵'}</span>
+                    <span style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {g.track}
                     </span>
-                  )}
-                  <span style={{ marginLeft: 'auto', color: 'var(--text-4)', fontSize: 11.5, flexShrink: 0 }}>
-                    {g.count > 1 ? `×${g.count} · ` : ''}{formatPlayDuration(g.msPlayed)}
-                  </span>
-                </div>
-              ))}
-            </div>
+                    {g.artist && (
+                      <span style={{ color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        — {g.artist}
+                      </span>
+                    )}
+                    <span style={{ marginLeft: 'auto', color: 'var(--text-4)', fontSize: 11.5, flexShrink: 0 }}>
+                      {g.count > 1 ? `×${g.count} · ` : ''}{formatPlayDuration(g.msPlayed)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
         {entries.length === 0 && playGroups.length === 0 ? (

@@ -440,6 +440,14 @@ export default function GroupSidebar() {
     refreshGroups()
   }
 
+  // Detach a subgroup from its parent, turning it into a top-level group.
+  // Entries and any children of this group keep their assignments untouched.
+  const extractGroup = async (g: Group) => {
+    setMenu(null)
+    await window.api.groups.update(g.id, { parent_id: null })
+    refreshGroups()
+  }
+
   const toggleExpand = (id: number) => {
     setExpanded(prev => {
       const next = new Set(prev)
@@ -652,6 +660,9 @@ export default function GroupSidebar() {
           }}>
             <GroupMenuItem label="Rename" onClick={() => startRename(menu.group)} />
             <GroupMenuItem label="Edit…" onClick={() => { setMenu(null); openEdit(menu.group) }} />
+            {menu.group.parent_id !== null && (
+              <GroupMenuItem label="Remove from parent" onClick={() => extractGroup(menu.group)} />
+            )}
             <div style={{ height: 1, background: 'var(--border-light)', margin: '4px 0' }} />
             <GroupMenuItem label="Delete…" danger onClick={() => { setMenu(null); handleDelete(menu.group.id) }} />
           </div>

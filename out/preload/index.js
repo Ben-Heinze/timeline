@@ -2,7 +2,7 @@
 const electron = require("electron");
 electron.contextBridge.exposeInMainWorld("api", {
   ingest: {
-    pickFiles: () => electron.ipcRenderer.invoke("ingest:pickFiles"),
+    pickFiles: (mode) => electron.ipcRenderer.invoke("ingest:pickFiles", mode),
     countFiles: (paths) => electron.ipcRenderer.invoke("ingest:countFiles", paths),
     start: (filePaths, tagNames) => electron.ipcRenderer.invoke("ingest:start", filePaths, tagNames ?? []),
     getPathForFile: (file) => electron.webUtils.getPathForFile(file),
@@ -59,6 +59,7 @@ electron.contextBridge.exposeInMainWorld("api", {
   groups: {
     list: () => electron.ipcRenderer.invoke("groups:list"),
     statsForPeriod: (from, to) => electron.ipcRenderer.invoke("groups:statsForPeriod", from, to),
+    dateRange: (groupId) => electron.ipcRenderer.invoke("groups:dateRange", groupId),
     create: (data) => electron.ipcRenderer.invoke("groups:create", data),
     update: (id, patch) => electron.ipcRenderer.invoke("groups:update", id, patch),
     delete: (id) => electron.ipcRenderer.invoke("groups:delete", id),
@@ -117,6 +118,8 @@ electron.contextBridge.exposeInMainWorld("api", {
     topArtists: (from, to, limit) => electron.ipcRenderer.invoke("spotify:topArtists", from, to, limit ?? 50),
     histogram: (from, to, zoomLevel) => electron.ipcRenderer.invoke("spotify:histogram", from, to, zoomLevel),
     yearlySummaries: () => electron.ipcRenderer.invoke("spotify:yearlySummaries"),
+    yearDetail: (year) => electron.ipcRenderer.invoke("spotify:yearDetail", year),
+    artistMonthlyForYear: (year, artistName) => electron.ipcRenderer.invoke("spotify:artistMonthlyForYear", year, artistName),
     onProgress: (cb) => {
       const handler = (_, data) => cb(data);
       electron.ipcRenderer.on("spotify:progress", handler);

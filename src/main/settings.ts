@@ -35,9 +35,10 @@ export function getSettings(): AppSettings {
       groupSidebarWidth: parsed.groupSidebarWidth ?? 220,
       eventsPanelWidth: parsed.eventsPanelWidth ?? 272,
       spotifyPanelWidth: parsed.spotifyPanelWidth ?? 272,
+      spotifyHistoryCollapsed: parsed.spotifyHistoryCollapsed ?? false,
     }
   } catch {
-    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: 'medium', mapMode: 'offline', groupSidebarWidth: 220, eventsPanelWidth: 272, spotifyPanelWidth: 272 }
+    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: 'medium', mapMode: 'offline', groupSidebarWidth: 220, eventsPanelWidth: 272, spotifyPanelWidth: 272, spotifyHistoryCollapsed: false }
   }
   return cached
 }

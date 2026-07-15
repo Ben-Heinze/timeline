@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react'
 import { useStore } from '../store/useStore'
 import type { YearlySpotifySummary } from '../../shared/types'
+import SpotifyYearDetail from './SpotifyYearDetail'
 
 const MONTH_LABELS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
 
@@ -12,15 +13,21 @@ function formatPlaytime(ms: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`
 }
 
-function YearCard({ summary }: { summary: YearlySpotifySummary }) {
+function YearCard({ summary, onOpen }: { summary: YearlySpotifySummary; onOpen: () => void }) {
   const maxArtistMs = summary.topArtists[0]?.ms_played ?? 0
   const maxMonthMs = Math.max(1, ...summary.monthly)
 
   return (
-    <div style={{
-      background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10,
-      padding: 18, display: 'flex', gap: 24, flexWrap: 'wrap',
-    }}>
+    <div
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onOpen() }}
+      style={{
+        background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10,
+        padding: 18, display: 'flex', gap: 24, flexWrap: 'wrap', cursor: 'pointer',
+      }}
+    >
       <div style={{ minWidth: 140, flexShrink: 0 }}>
         <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text)' }}>{summary.year}</div>
         <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
@@ -101,7 +108,10 @@ function YearCard({ summary }: { summary: YearlySpotifySummary }) {
 }
 
 export default function SpotifyView() {
-  const { activeView, refreshKey, spotifySummaries, spotifySummariesKey, setSpotifySummaries } = useStore()
+  const {
+    activeView, refreshKey, spotifySummaries, spotifySummariesKey, setSpotifySummaries,
+    selectedSpotifyYear, setSelectedSpotifyYear,
+  } = useStore()
 
   // Serve the store cache immediately; only refetch when it's missing or stale
   // (an import bumps refreshKey). This avoids the "Loading…" flash and the heavy
@@ -118,6 +128,10 @@ export default function SpotifyView() {
     return () => { cancelled = true }
   }, [activeView, refreshKey, isStale, setSpotifySummaries])
 
+  if (selectedSpotifyYear !== null) {
+    return <SpotifyYearDetail year={selectedSpotifyYear} onBack={() => setSelectedSpotifyYear(null)} />
+  }
+
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
       <div style={{ maxWidth: 720, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -129,7 +143,7 @@ export default function SpotifyView() {
             Import your Spotify "Extended streaming history" export from Settings to see yearly recaps here.
           </div>
         ) : (
-          summaries.map(s => <YearCard key={s.year} summary={s} />)
+          summaries.map(s => <YearCard key={s.year} summary={s} onOpen={() => setSelectedSpotifyYear(s.year)} />)
         )}
       </div>
     </div>

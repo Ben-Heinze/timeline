@@ -6,6 +6,7 @@ import type { Entry, Tag, FileInfo } from '../../shared/types'
 import TagEditor from './TagEditor'
 import ChangeDateModal from './ChangeDateModal'
 import { useVolumeStatus, VolumeBadgeInline } from './VolumeBadge'
+import LocationMiniMap from './LocationMiniMap'
 
 const TYPE_COLORS: Record<string, string> = {
   photo:    '#3b82f6',
@@ -262,6 +263,11 @@ function MetadataPanel({ entry }: { entry: Entry }) {
           </span>
         </React.Fragment>
       ))}
+      {entry.latitude != null && entry.longitude != null && (
+        <div style={{ gridColumn: '1 / -1', marginTop: 4 }}>
+          <LocationMiniMap latitude={entry.latitude} longitude={entry.longitude} />
+        </div>
+      )}
     </div>
   )
 }
