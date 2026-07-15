@@ -3,6 +3,10 @@ import path from 'path'
 import { ipcMain, shell } from 'electron'
 import * as q from '../db/queries/entries'
 import { getLibraryPath } from '../library'
+import { resolveEntryAbsolutePath } from '../volumes/paths'
+import { computeFileHash, rescanLibrary } from '../ingest'
+import { writePhotoDate } from '../exif'
+import type { SetDateParams, SetDateResult, RescanResult } from '../../shared/types'
 
 export function registerEntryHandlers(): void {
   ipcMain.handle('entries:histogram', (_, from, to, zoomLevel, groupId) =>
@@ -23,6 +27,47 @@ export function registerEntryHandlers(): void {
     q.getEntry(id))
   ipcMain.handle('entries:update', (_, id, patch) =>
     q.updateEntry(id, patch))
+
+  ipcMain.handle('entries:setDate', async (_, params: SetDateParams): Promise<SetDateResult> => {
+    const { ids, mode, value, writeExif } = params
+
+    // 1. Update the in-app date for every selected entry.
+    if (mode === 'set') q.setEntriesTimestamp(ids, value)
+    else q.shiftEntriesTimestamp(ids, value)
+
+    const result: SetDateResult = { updated: ids.length, exifWritten: 0, exifSkipped: 0, exifFailed: 0 }
+    if (!writeExif) return result
+
+    // 2. Best-effort write of the new date back into the file's metadata.
+    //    Only copy-mode photos/videos the app owns are touched; referenced
+    //    originals and anything unreachable are left alone.
+    for (const id of ids) {
+      const entry = q.getEntry(id)
+      const writable = entry
+        && (entry.type === 'photo' || entry.type === 'video')
+        && entry.import_mode === 'copy'
+        && !entry.is_missing
+      const abs = writable ? resolveEntryAbsolutePath(entry) : null
+      if (!abs) { result.exifSkipped++; continue }
+      try {
+        await writePhotoDate(abs, entry!.timestamp)
+        // Rewriting the file changes its bytes; keep the dedupe hash accurate.
+        const hash = await computeFileHash(abs)
+        q.updateEntry(id, { content_hash: hash })
+        result.exifWritten++
+      } catch {
+        result.exifFailed++
+      }
+    }
+    return result
+  })
+
+  ipcMain.handle('library:rescan', async (event): Promise<RescanResult> => {
+    const sender = event.sender
+    return rescanLibrary(evt => {
+      if (!sender.isDestroyed()) sender.send('library:rescanProgress', evt)
+    })
+  })
 
   ipcMain.handle('entries:delete', async (_, ids: number[]) => {
     const entries = (ids as number[]).map(id => q.getEntry(id)).filter(Boolean)

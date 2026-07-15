@@ -8,9 +8,11 @@ const archiver = require("archiver");
 const extractZip = require("extract-zip");
 const chokidar = require("chokidar");
 const crypto = require("crypto");
+const child_process = require("child_process");
+const ffmpegStatic = require("ffmpeg-static");
 const sharp = require("sharp");
 const exifr = require("exifr");
-const child_process = require("child_process");
+const exiftoolVendored = require("exiftool-vendored");
 const http = require("http");
 const settingsFile = () => path.join(electron.app.getPath("userData"), "settings.json");
 let cached = null;
@@ -457,6 +459,18 @@ function getUnscannedGpsPhotos() {
     `SELECT * FROM entries WHERE type = 'photo' AND gps_scanned = 0 AND file_path IS NOT NULL AND is_missing = 0`
   ).all();
 }
+function getEntriesNeedingBackfill() {
+  return getDb().prepare(`
+    SELECT * FROM entries
+    WHERE file_path IS NOT NULL AND is_missing = 0
+      AND (
+        type = 'document'
+        OR (type = 'photo' AND (thumbnail_small IS NULL OR needs_date_review = 1 OR gps_scanned = 0))
+        OR (type = 'video' AND (thumbnail_small IS NULL OR needs_date_review = 1 OR latitude IS NULL))
+      )
+    ORDER BY id
+  `).all();
+}
 function getEntriesWithFilePathPrefix(prefix) {
   return getDb().prepare(
     `SELECT * FROM entries WHERE file_path LIKE ? AND import_mode = 'reference'`
@@ -467,6 +481,20 @@ function findEntryByHash(hash) {
 }
 function getAllEntriesWithFilePaths() {
   return getDb().prepare("SELECT * FROM entries WHERE file_path IS NOT NULL").all();
+}
+function setEntriesTimestamp(ids, timestamp) {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => "?").join(", ");
+  getDb().prepare(
+    `UPDATE entries SET timestamp = ?, needs_date_review = 0 WHERE id IN (${placeholders})`
+  ).run(timestamp, ...ids);
+}
+function shiftEntriesTimestamp(ids, deltaMs) {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => "?").join(", ");
+  getDb().prepare(
+    `UPDATE entries SET timestamp = timestamp + ?, needs_date_review = 0 WHERE id IN (${placeholders})`
+  ).run(deltaMs, ...ids);
 }
 function markEntriesMissing(ids) {
   if (ids.length === 0) return;
@@ -597,6 +625,88 @@ function resolveEntryAbsolutePath(entry) {
   if (!mountPath) return null;
   return path.join(mountPath, entry.file_path);
 }
+let et = null;
+function tool() {
+  if (!et) et = new exiftoolVendored.ExifTool({ maxProcs: 1 });
+  return et;
+}
+async function endExifTool() {
+  if (!et) return;
+  const inst = et;
+  et = null;
+  try {
+    await inst.end();
+  } catch {
+  }
+}
+const RAW_PREVIEW_TAGS = ["JpgFromRaw", "PreviewImage", "ThumbnailImage"];
+async function extractRawPreview(absPath) {
+  for (const tag of RAW_PREVIEW_TAGS) {
+    try {
+      const buf = await tool().extractBinaryTagToBuffer(tag, absPath);
+      if (buf && buf.length > 0) return buf;
+    } catch {
+    }
+  }
+  return null;
+}
+async function readRawMetadata(absPath) {
+  let tags;
+  try {
+    tags = await tool().read(absPath);
+  } catch {
+    return { timestamp: null, gps: null };
+  }
+  let timestamp = null;
+  const dt = tags.DateTimeOriginal ?? tags.CreateDate;
+  if (dt instanceof exiftoolVendored.ExifDateTime) {
+    const ms = new Date(dt.year, dt.month - 1, dt.day, dt.hour, dt.minute, dt.second).getTime();
+    if (!Number.isNaN(ms)) timestamp = ms;
+  }
+  return { timestamp, gps: parseGps(tags) };
+}
+function parseGps(tags) {
+  let lat = Number(tags.GPSLatitude);
+  let lon = Number(tags.GPSLongitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (/^S/i.test(String(tags.GPSLatitudeRef ?? ""))) lat = -Math.abs(lat);
+  if (/^W/i.test(String(tags.GPSLongitudeRef ?? ""))) lon = -Math.abs(lon);
+  if (lat === 0 && lon === 0) return null;
+  return { latitude: lat, longitude: lon };
+}
+const VIDEO_DATE_TAGS = ["CreationDate", "DateTimeOriginal", "CreateDate", "MediaCreateDate", "TrackCreateDate"];
+async function readVideoMetadata(absPath) {
+  let tags;
+  try {
+    tags = await tool().read(absPath);
+  } catch {
+    return { timestamp: null, gps: null };
+  }
+  let timestamp = null;
+  for (const tag of VIDEO_DATE_TAGS) {
+    const v = tags[tag];
+    if (v instanceof exiftoolVendored.ExifDateTime && v.year >= 1971) {
+      const ms = v.toMillis();
+      if (Number.isFinite(ms)) {
+        timestamp = ms;
+        break;
+      }
+    }
+  }
+  return { timestamp, gps: parseGps(tags) };
+}
+function pad(n) {
+  return String(n).padStart(2, "0");
+}
+async function writePhotoDate(absPath, timestampMs) {
+  const d = new Date(timestampMs);
+  const stamp = `${d.getFullYear()}:${pad(d.getMonth() + 1)}:${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  await tool().write(
+    absPath,
+    { DateTimeOriginal: stamp, CreateDate: stamp, ModifyDate: stamp },
+    { writeArgs: ["-overwrite_original"] }
+  );
+}
 function mountPathForVolumeId(volumeId) {
   const vol = getVolumeById(volumeId);
   return vol ? getMountPathForSerial(vol.volume_serial) : null;
@@ -614,6 +724,31 @@ const IMAGE_EXTS = /* @__PURE__ */ new Set([
   ".heif",
   ".avif",
   ".svg"
+]);
+const RAW_EXTS = /* @__PURE__ */ new Set([
+  ".arw",
+  ".sr2",
+  ".srf",
+  // Sony
+  ".cr2",
+  ".cr3",
+  ".crw",
+  // Canon
+  ".nef",
+  ".nrw",
+  // Nikon
+  ".dng",
+  // Adobe / generic
+  ".raf",
+  // Fujifilm
+  ".rw2",
+  // Panasonic
+  ".orf",
+  // Olympus
+  ".pef",
+  // Pentax
+  ".srw"
+  // Samsung
 ]);
 const VIDEO_EXTS = /* @__PURE__ */ new Set([
   ".mp4",
@@ -639,7 +774,7 @@ const AUDIO_EXTS = /* @__PURE__ */ new Set([
 ]);
 function detectType(ext) {
   const e = ext.toLowerCase();
-  if (IMAGE_EXTS.has(e)) return "photo";
+  if (IMAGE_EXTS.has(e) || RAW_EXTS.has(e)) return "photo";
   if (VIDEO_EXTS.has(e)) return "video";
   if (AUDIO_EXTS.has(e)) return "audio";
   return "document";
@@ -699,7 +834,7 @@ async function relinkEntry(entry, sourcePath, relDir, fileName) {
   }
   updateEntry(entry.id, { file_path: storedFilePath, is_missing: 0 });
 }
-async function generateImageThumbnails(sourcePath, baseName) {
+async function generateImageThumbnails(source, baseName) {
   const sizes = [
     ["small", 128],
     ["medium", 256],
@@ -710,13 +845,78 @@ async function generateImageThumbnails(sourcePath, baseName) {
     for (const [size, dim] of sizes) {
       const fileName = `${baseName}.webp`;
       const outPath = path.join(getThumbnailPath(size), fileName);
-      await sharp(sourcePath).rotate().resize(dim, dim, { fit: "inside", withoutEnlargement: true }).webp({ quality: 82 }).toFile(outPath);
+      await sharp(source, { failOn: "none", limitInputPixels: false }).rotate().resize(dim, dim, { fit: "inside", withoutEnlargement: true }).webp({ quality: 82 }).toFile(outPath);
       out[size] = `thumbnails/${size}/${fileName}`;
     }
     return out;
-  } catch {
+  } catch (err) {
+    if (typeof source === "string") {
+      console.warn(`Thumbnail generation failed for ${source}: ${err.message}`);
+    }
     return null;
   }
+}
+let ffmpegPath;
+function resolveFfmpeg() {
+  if (ffmpegPath !== void 0) return ffmpegPath;
+  const bundled = ffmpegStatic ? ffmpegStatic.replace("app.asar", "app.asar.unpacked") : null;
+  const candidates = [process.env.TIMELINE_FFMPEG, "ffmpeg", bundled].filter(Boolean);
+  for (const cand of candidates) {
+    try {
+      if (child_process.spawnSync(cand, ["-version"], { stdio: "ignore" }).status === 0) {
+        ffmpegPath = cand;
+        return cand;
+      }
+    } catch {
+    }
+  }
+  ffmpegPath = null;
+  console.warn("ffmpeg not found (set TIMELINE_FFMPEG or add it to PATH) — video thumbnails will be skipped");
+  return null;
+}
+function extractVideoFrame(videoPath, seekSeconds) {
+  const ffmpeg = resolveFfmpeg();
+  if (!ffmpeg) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const args = [
+      "-loglevel",
+      "error",
+      "-ss",
+      String(seekSeconds),
+      "-i",
+      videoPath,
+      "-frames:v",
+      "1",
+      "-f",
+      "image2pipe",
+      "-vcodec",
+      "mjpeg",
+      "pipe:1"
+    ];
+    const proc = child_process.spawn(ffmpeg, args);
+    const chunks = [];
+    let failed = false;
+    proc.stdout.on("data", (d) => chunks.push(d));
+    proc.on("error", () => {
+      failed = true;
+      resolve(null);
+    });
+    proc.on("close", (code) => {
+      if (failed) return;
+      const buf = Buffer.concat(chunks);
+      resolve(code === 0 && buf.length > 0 ? buf : null);
+    });
+  });
+}
+async function generateVideoThumbnails(videoPath, baseName) {
+  for (const seek of [1, 0]) {
+    const frame = await extractVideoFrame(videoPath, seek);
+    if (frame) {
+      const thumb = await generateImageThumbnails(frame, baseName);
+      if (thumb) return thumb;
+    }
+  }
+  return null;
 }
 async function copyWithUniqueName(sourcePath, destDir, fileName) {
   const ext = path.extname(fileName);
@@ -771,7 +971,16 @@ async function ingestOne(sourcePath, relDir, groupPath, mode, volumeId) {
     let needsDateReview = 1;
     let thumb = null;
     let gps = null;
-    if (type === "photo" && ext.toLowerCase() !== ".svg") {
+    if (type === "photo" && RAW_EXTS.has(ext.toLowerCase())) {
+      const meta = await readRawMetadata(sourcePath);
+      if (meta.timestamp !== null) {
+        timestamp = meta.timestamp;
+        needsDateReview = 0;
+      }
+      gps = meta.gps;
+      const preview = await extractRawPreview(sourcePath);
+      if (preview) thumb = await generateImageThumbnails(preview, baseName);
+    } else if (type === "photo" && ext.toLowerCase() !== ".svg") {
       const exifTimestamp = await extractExifTimestamp(sourcePath);
       if (exifTimestamp !== null) {
         timestamp = exifTimestamp;
@@ -779,6 +988,14 @@ async function ingestOne(sourcePath, relDir, groupPath, mode, volumeId) {
       }
       gps = await extractExifGps(sourcePath);
       thumb = await generateImageThumbnails(sourcePath, baseName);
+    } else if (type === "video") {
+      const meta = await readVideoMetadata(sourcePath);
+      if (meta.timestamp !== null) {
+        timestamp = meta.timestamp;
+        needsDateReview = 0;
+      }
+      gps = meta.gps;
+      thumb = await generateVideoThumbnails(sourcePath, baseName);
     }
     const id = insertEntry({
       type,
@@ -812,7 +1029,7 @@ async function backfillGps() {
   for (const entry of photos) {
     const absPath = resolveEntryAbsolutePath(entry);
     if (!absPath) continue;
-    const gps = await extractExifGps(absPath);
+    const gps = RAW_EXTS.has(path.extname(absPath).toLowerCase()) ? (await readRawMetadata(absPath)).gps : await extractExifGps(absPath);
     if (gps) {
       updateEntry(entry.id, { latitude: gps.latitude, longitude: gps.longitude, gps_scanned: 1 });
       found++;
@@ -821,6 +1038,92 @@ async function backfillGps() {
     }
   }
   return found;
+}
+async function rescanLibrary(onProgress) {
+  const candidates = getEntriesNeedingBackfill();
+  const result = { scanned: 0, reclassified: 0, thumbnailsAdded: 0, datesUpdated: 0, gpsAdded: 0 };
+  const total = candidates.length;
+  for (const entry of candidates) {
+    onProgress({ processed: result.scanned, total, current: path.basename(entry.file_path ?? "") });
+    result.scanned++;
+    const absPath = resolveEntryAbsolutePath(entry);
+    if (!absPath) continue;
+    const ext = path.extname(absPath).toLowerCase();
+    if (entry.type === "video") {
+      if (!VIDEO_EXTS.has(ext)) continue;
+      const patch2 = {};
+      if (!entry.thumbnail_small) {
+        const baseName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
+        const thumb = await generateVideoThumbnails(absPath, baseName);
+        if (thumb) {
+          patch2.thumbnail_small = thumb.small;
+          patch2.thumbnail_medium = thumb.medium;
+          patch2.thumbnail_large = thumb.large;
+        }
+      }
+      const needDate2 = entry.needs_date_review === 1;
+      const needGps2 = entry.latitude == null;
+      if (needDate2 || needGps2) {
+        const meta = await readVideoMetadata(absPath);
+        if (needDate2 && meta.timestamp !== null) {
+          patch2.timestamp = meta.timestamp;
+          patch2.needs_date_review = 0;
+        }
+        if (needGps2 && meta.gps) {
+          patch2.latitude = meta.gps.latitude;
+          patch2.longitude = meta.gps.longitude;
+        }
+      }
+      if (Object.keys(patch2).length > 0) updateEntry(entry.id, patch2);
+      if (patch2.thumbnail_small) result.thumbnailsAdded++;
+      if (patch2.needs_date_review === 0) result.datesUpdated++;
+      if (patch2.latitude != null) result.gpsAdded++;
+      continue;
+    }
+    const isRaw = RAW_EXTS.has(ext);
+    const isImage = IMAGE_EXTS.has(ext);
+    if (!isRaw && !isImage) continue;
+    const patch = {};
+    const wasDocument = entry.type === "document";
+    if (wasDocument) patch.type = "photo";
+    const needDate = entry.needs_date_review === 1;
+    const needGps = entry.gps_scanned === 0 || wasDocument;
+    const rawMeta = isRaw && (needDate || needGps) ? await readRawMetadata(absPath) : null;
+    if (!entry.thumbnail_small && ext !== ".svg") {
+      const baseName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
+      const source = isRaw ? await extractRawPreview(absPath) : absPath;
+      if (source) {
+        const thumb = await generateImageThumbnails(source, baseName);
+        if (thumb) {
+          patch.thumbnail_small = thumb.small;
+          patch.thumbnail_medium = thumb.medium;
+          patch.thumbnail_large = thumb.large;
+        }
+      }
+    }
+    if (needDate) {
+      const ts = isRaw ? rawMeta?.timestamp ?? null : await extractExifTimestamp(absPath);
+      if (ts !== null) {
+        patch.timestamp = ts;
+        patch.needs_date_review = 0;
+      }
+    }
+    if (needGps) {
+      const gps = isRaw ? rawMeta?.gps ?? null : await extractExifGps(absPath);
+      if (gps) {
+        patch.latitude = gps.latitude;
+        patch.longitude = gps.longitude;
+      }
+      patch.gps_scanned = 1;
+    }
+    if (Object.keys(patch).length > 0) updateEntry(entry.id, patch);
+    if (patch.type) result.reclassified++;
+    if (patch.thumbnail_small) result.thumbnailsAdded++;
+    if (patch.needs_date_review === 0) result.datesUpdated++;
+    if (patch.latitude != null) result.gpsAdded++;
+  }
+  onProgress({ processed: total, total, current: "" });
+  return result;
 }
 async function walkDir(root, rootName, dir, out) {
   const entries = await fs$1.readdir(dir, { withFileTypes: true });
@@ -1329,6 +1632,37 @@ function registerEntryHandlers() {
   electron.ipcMain.handle("entries:listAll", (_, opts) => listAllEntries(opts));
   electron.ipcMain.handle("entries:get", (_, id) => getEntry(id));
   electron.ipcMain.handle("entries:update", (_, id, patch) => updateEntry(id, patch));
+  electron.ipcMain.handle("entries:setDate", async (_, params) => {
+    const { ids, mode, value, writeExif } = params;
+    if (mode === "set") setEntriesTimestamp(ids, value);
+    else shiftEntriesTimestamp(ids, value);
+    const result = { updated: ids.length, exifWritten: 0, exifSkipped: 0, exifFailed: 0 };
+    if (!writeExif) return result;
+    for (const id of ids) {
+      const entry = getEntry(id);
+      const writable = entry && (entry.type === "photo" || entry.type === "video") && entry.import_mode === "copy" && !entry.is_missing;
+      const abs = writable ? resolveEntryAbsolutePath(entry) : null;
+      if (!abs) {
+        result.exifSkipped++;
+        continue;
+      }
+      try {
+        await writePhotoDate(abs, entry.timestamp);
+        const hash = await computeFileHash(abs);
+        updateEntry(id, { content_hash: hash });
+        result.exifWritten++;
+      } catch {
+        result.exifFailed++;
+      }
+    }
+    return result;
+  });
+  electron.ipcMain.handle("library:rescan", async (event) => {
+    const sender = event.sender;
+    return rescanLibrary((evt) => {
+      if (!sender.isDestroyed()) sender.send("library:rescanProgress", evt);
+    });
+  });
   electron.ipcMain.handle("entries:delete", async (_, ids) => {
     const entries = ids.map((id) => getEntry(id)).filter(Boolean);
     deleteEntries(ids);
@@ -2166,6 +2500,7 @@ async function parseSpotifyFile(filePath) {
   }
   return plays;
 }
+let yearlySummariesCache = null;
 function insertPlays(plays) {
   const db2 = getDb();
   const now = Date.now();
@@ -2176,14 +2511,16 @@ function insertPlays(plays) {
       (@timestamp, @track_name, @artist_name, @album_name, @ms_played, @media_type, @spotify_uri, @created_at)
   `);
   const insertMany = db2.transaction((rows) => {
-    let inserted = 0;
+    let inserted2 = 0;
     for (const row of rows) {
       const info = stmt.run({ ...row, created_at: now });
-      if (info.changes > 0) inserted++;
+      if (info.changes > 0) inserted2++;
     }
-    return inserted;
+    return inserted2;
   });
-  return insertMany(plays);
+  const inserted = insertMany(plays);
+  if (inserted > 0) yearlySummariesCache = null;
+  return inserted;
 }
 function getPlaysForPeriod(from, to) {
   return getDb().prepare(
@@ -2211,6 +2548,7 @@ function getListeningHistogram(from, to, zoomLevel) {
   `).all({ from, to });
 }
 function getYearlySummaries() {
+  if (yearlySummariesCache !== null) return yearlySummariesCache;
   const db2 = getDb();
   const yearExpr = `CAST(strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER)`;
   const totals = db2.prepare(`
@@ -2268,7 +2606,7 @@ function getYearlySummaries() {
     }
     arr[r.month - 1] = r.ms_played;
   }
-  return totals.sort((a, b) => b.year - a.year).map((t) => ({
+  yearlySummariesCache = totals.sort((a, b) => b.year - a.year).map((t) => ({
     year: t.year,
     msPlayed: t.ms_played,
     playCount: t.play_count,
@@ -2276,6 +2614,7 @@ function getYearlySummaries() {
     topTrack: trackByYear.get(t.year) ?? null,
     monthly: monthlyByYear.get(t.year) ?? new Array(12).fill(0)
   }));
+  return yearlySummariesCache;
 }
 function registerSpotifyHandlers() {
   electron.ipcMain.handle("spotify:pickExport", async (_event, mode = "files") => {
@@ -2384,4 +2723,7 @@ electron.app.on("window-all-closed", () => {
   stopWatcher();
   closeDb();
   if (process.platform !== "darwin") electron.app.quit();
+});
+electron.app.on("will-quit", () => {
+  void endExifTool();
 });

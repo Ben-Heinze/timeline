@@ -26,6 +26,39 @@ export interface Entry {
   created_at: number
 }
 
+// Bulk date-correction of one or more entries.
+export interface SetDateParams {
+  ids: number[]
+  // 'set' → `value` is an absolute epoch-ms timestamp applied to all entries.
+  // 'shift' → `value` is a signed delta in ms added to each entry's timestamp.
+  mode: 'set' | 'shift'
+  value: number
+  writeExif: boolean           // also write the date into copy-mode photo/video files
+}
+
+export interface SetDateResult {
+  updated: number              // entries whose in-app date changed
+  exifWritten: number          // files successfully rewritten on disk
+  exifSkipped: number          // not eligible (referenced original, non-photo, missing…)
+  exifFailed: number           // eligible but the write errored
+}
+
+export interface RescanProgressEvent {
+  processed: number
+  total: number
+  current: string
+}
+
+// Result of a library rescan: a retroactive pass that backfills data for entries
+// imported before newer ingest features (RAW thumbnails, RAW date/GPS reading).
+export interface RescanResult {
+  scanned: number         // entries examined
+  reclassified: number    // documents re-typed as photos (e.g. RAW files)
+  thumbnailsAdded: number // entries that gained thumbnails
+  datesUpdated: number    // unconfirmed dates filled from EXIF
+  gpsAdded: number        // entries that gained GPS coordinates
+}
+
 export interface WatchedFolder {
   path: string
   volumeId: number | null      // null = folder lives on the primary/always-available disk

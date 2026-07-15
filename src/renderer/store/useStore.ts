@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AppSettings, Bucket, Group, IngestProgress, Entry, ZoomLevel, Tag, SyncProgressEvent, LifeEvent, VolumeStatus } from '../../shared/types'
+import type { AppSettings, Bucket, Group, IngestProgress, Entry, ZoomLevel, Tag, SyncProgressEvent, LifeEvent, VolumeStatus, YearlySpotifySummary } from '../../shared/types'
 
 interface TimelineStore {
   tags: Tag[]
@@ -60,6 +60,12 @@ interface TimelineStore {
   setEventsPanelOpen: (open: boolean) => void
   spotifyPanelOpen: boolean
   setSpotifyPanelOpen: (open: boolean) => void
+  // Cached yearly recaps so the Spotify tab doesn't refetch (and re-run the heavy
+  // main-process aggregation) every time it remounts. spotifySummariesKey records the
+  // refreshKey the cache was built at, so an import (which bumps refreshKey) refreshes it.
+  spotifySummaries: YearlySpotifySummary[] | null
+  spotifySummariesKey: number | null
+  setSpotifySummaries: (summaries: YearlySpotifySummary[], key: number) => void
   groupSidebarOpen: boolean
   setGroupSidebarOpen: (open: boolean) => void
   focusedEventId: number | null
@@ -132,6 +138,9 @@ export const useStore = create<TimelineStore>((set) => ({
   setEventsPanelOpen: (open) => set({ eventsPanelOpen: open }),
   spotifyPanelOpen: false,
   setSpotifyPanelOpen: (open) => set({ spotifyPanelOpen: open }),
+  spotifySummaries: null,
+  spotifySummariesKey: null,
+  setSpotifySummaries: (summaries, key) => set({ spotifySummaries: summaries, spotifySummariesKey: key }),
   groupSidebarOpen: true,
   setGroupSidebarOpen: (open) => set({ groupSidebarOpen: open }),
   focusedEventId: null,

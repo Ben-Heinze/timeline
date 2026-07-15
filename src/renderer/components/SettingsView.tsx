@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
-import type { BackupExportType, BackupProgressEvent, DuplicateGroup, SpotifyImportProgressEvent } from '../../shared/types'
+import type { BackupExportType, BackupProgressEvent, DuplicateGroup, SpotifyImportProgressEvent, RescanProgressEvent, RescanResult } from '../../shared/types'
 import { THEMES } from '../theme'
 import { VolumeBadgeInline } from './VolumeBadge'
 
@@ -10,7 +10,7 @@ function ipcErrorMessage(e: unknown): string {
 }
 
 export default function SettingsView() {
-  const { settings, setSettings, volumes, setVolumes } = useStore()
+  const { settings, setSettings, volumes, setVolumes, bumpRefreshKey } = useStore()
   const [refreshingDrives, setRefreshingDrives] = useState(false)
   const [pendingVolumeFolder, setPendingVolumeFolder] = useState<{ path: string; volumeId: number; label: string } | null>(null)
   const [renamingVolumeId, setRenamingVolumeId] = useState<number | null>(null)
@@ -36,6 +36,9 @@ export default function SettingsView() {
   const [spotifyProgress, setSpotifyProgress] = useState<SpotifyImportProgressEvent | null>(null)
   const [spotifyMessage, setSpotifyMessage] = useState<string | null>(null)
   const [spotifyError, setSpotifyError] = useState<string | null>(null)
+  const [rescanBusy, setRescanBusy] = useState(false)
+  const [rescanProgress, setRescanProgress] = useState<RescanProgressEvent | null>(null)
+  const [rescanResult, setRescanResult] = useState<RescanResult | null>(null)
 
   type PathHealth = { exists: boolean; foundRatio: number | null }
   const [pathHealth, setPathHealth] = useState<Record<string, PathHealth>>({})
@@ -113,6 +116,11 @@ export default function SettingsView() {
   useEffect(() => {
     if (typeof window.api.spotify?.onProgress !== 'function') return
     return window.api.spotify.onProgress(setSpotifyProgress)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window.api.library?.onRescanProgress !== 'function') return
+    return window.api.library.onRescanProgress(setRescanProgress)
   }, [])
 
   if (!settings) {
@@ -328,12 +336,30 @@ export default function SettingsView() {
         setSpotifyError('No Streaming_History_Audio/Video JSON files found in the selected location. Point this at the folder from your Spotify "Extended streaming history" export.')
       } else {
         setSpotifyMessage(`Imported ${res.imported} play${res.imported === 1 ? '' : 's'} from ${res.totalFiles} file${res.totalFiles === 1 ? '' : 's'}.`)
+        // Invalidate cached Spotify views (yearly recap, top-artist panel, density ribbon).
+        if (res.imported > 0) bumpRefreshKey()
       }
     } catch (e) {
       setSpotifyError(ipcErrorMessage(e))
     } finally {
       setSpotifyBusy(false)
       setSpotifyProgress(null)
+    }
+  }
+
+  async function rescanLibrary() {
+    if (rescanBusy) return
+    setRescanBusy(true)
+    setRescanResult(null)
+    setRescanProgress(null)
+    try {
+      const res = await window.api.library.rescan()
+      setRescanResult(res)
+      // Refresh the timeline/map/etc. if anything actually changed.
+      if (res.thumbnailsAdded || res.datesUpdated || res.gpsAdded || res.reclassified) bumpRefreshKey()
+    } finally {
+      setRescanBusy(false)
+      setRescanProgress(null)
     }
   }
 
@@ -665,6 +691,46 @@ export default function SettingsView() {
               <div style={{ fontSize: 12, color: '#b91c1c', background: '#fee2e2', padding: '6px 10px', borderRadius: 4, width: '100%', boxSizing: 'border-box' }}>
                 {spotifyError}
               </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Library maintenance */}
+      <div style={section}>
+        <div style={sectionLabel}>Library maintenance</div>
+        <div style={card}>
+          <div style={{ ...rowLast, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Rescan library</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                Backfill data for files imported before recent updates: generate missing thumbnails
+                (Sony/Canon RAW previews and video poster frames included), reclassify RAW files
+                stored as documents into photos, and fill in GPS and any unconfirmed dates from each
+                file's metadata. Dates you've already confirmed or changed are left untouched.
+              </div>
+            </div>
+            <button
+              style={{ ...btn('default'), opacity: rescanBusy ? 0.6 : 1, flexShrink: 0 }}
+              onClick={rescanLibrary}
+              disabled={rescanBusy}
+            >
+              {rescanBusy ? 'Rescanning…' : 'Rescan library'}
+            </button>
+          </div>
+          {rescanBusy && rescanProgress && rescanProgress.total > 0 && (
+            <div style={{ ...rowLast, borderTop: '1px solid var(--border-light)', fontSize: 12, color: 'var(--text-3)' }}>
+              Scanning {rescanProgress.processed}/{rescanProgress.total}
+              {rescanProgress.current ? ` — ${rescanProgress.current}` : ''}
+            </div>
+          )}
+          {rescanResult && (
+            <div style={{ ...rowLast, borderTop: '1px solid var(--border-light)', fontSize: 12, color: '#16a34a' }}>
+              Scanned {rescanResult.scanned} file{rescanResult.scanned === 1 ? '' : 's'} — added{' '}
+              {rescanResult.thumbnailsAdded} thumbnail{rescanResult.thumbnailsAdded === 1 ? '' : 's'},{' '}
+              {rescanResult.datesUpdated} date{rescanResult.datesUpdated === 1 ? '' : 's'},{' '}
+              {rescanResult.gpsAdded} location{rescanResult.gpsAdded === 1 ? '' : 's'}
+              {rescanResult.reclassified > 0 ? `, reclassified ${rescanResult.reclassified} RAW file${rescanResult.reclassified === 1 ? '' : 's'}` : ''}.
             </div>
           )}
         </div>

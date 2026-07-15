@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect } from 'react'
 import { useStore } from '../store/useStore'
 import type { YearlySpotifySummary } from '../../shared/types'
 
@@ -101,17 +101,22 @@ function YearCard({ summary }: { summary: YearlySpotifySummary }) {
 }
 
 export default function SpotifyView() {
-  const { activeView, refreshKey } = useStore()
-  const [summaries, setSummaries] = useState<YearlySpotifySummary[] | null>(null)
+  const { activeView, refreshKey, spotifySummaries, spotifySummariesKey, setSpotifySummaries } = useStore()
+
+  // Serve the store cache immediately; only refetch when it's missing or stale
+  // (an import bumps refreshKey). This avoids the "Loading…" flash and the heavy
+  // main-process aggregation on every tab switch.
+  const isStale = spotifySummariesKey !== refreshKey
+  const summaries = isStale ? null : spotifySummaries
 
   useEffect(() => {
-    if (activeView !== 'spotify') return
+    if (activeView !== 'spotify' || !isStale) return
     let cancelled = false
     window.api.spotify.yearlySummaries().then(res => {
-      if (!cancelled) setSummaries(res)
+      if (!cancelled) setSpotifySummaries(res, refreshKey)
     })
     return () => { cancelled = true }
-  }, [activeView, refreshKey])
+  }, [activeView, refreshKey, isStale, setSpotifySummaries])
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>

@@ -13,6 +13,13 @@ module.exports = {
     'node_modules/better-sqlite3/**/*',
     'node_modules/sharp/**/*',
     'node_modules/@img/**/*',
+    // ExifTool ships a Perl script / standalone binary that must be exec'd from
+    // disk, so it can't live inside the asar archive.
+    'node_modules/exiftool-vendored/**/*',
+    'node_modules/exiftool-vendored.pl/**/*',
+    'node_modules/exiftool-vendored.exe/**/*',
+    // ffmpeg-static's binary is spawned from disk to build video thumbnails.
+    'node_modules/ffmpeg-static/**/*',
   ],
   win: {
     target: ['nsis', 'zip'],

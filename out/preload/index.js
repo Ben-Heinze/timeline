@@ -42,6 +42,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     listAll: (opts) => electron.ipcRenderer.invoke("entries:listAll", opts),
     get: (id) => electron.ipcRenderer.invoke("entries:get", id),
     update: (id, patch) => electron.ipcRenderer.invoke("entries:update", id, patch),
+    setDate: (params) => electron.ipcRenderer.invoke("entries:setDate", params),
     delete: (ids) => electron.ipcRenderer.invoke("entries:delete", ids),
     create: (data) => electron.ipcRenderer.invoke("entries:create", data)
   },
@@ -120,6 +121,14 @@ electron.contextBridge.exposeInMainWorld("api", {
       const handler = (_, data) => cb(data);
       electron.ipcRenderer.on("spotify:progress", handler);
       return () => electron.ipcRenderer.removeListener("spotify:progress", handler);
+    }
+  },
+  library: {
+    rescan: () => electron.ipcRenderer.invoke("library:rescan"),
+    onRescanProgress: (cb) => {
+      const handler = (_, data) => cb(data);
+      electron.ipcRenderer.on("library:rescanProgress", handler);
+      return () => electron.ipcRenderer.removeListener("library:rescanProgress", handler);
     }
   },
   volumes: {

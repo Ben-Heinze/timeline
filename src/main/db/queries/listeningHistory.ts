@@ -12,6 +12,11 @@ export interface SpotifyPlayInsert {
   spotify_uri: string | null
 }
 
+// getYearlySummaries runs four full-table aggregations with per-row strftime/datetime
+// conversions — expensive over a large export. The table only changes on import, so we
+// memoize the result and invalidate it whenever new plays are inserted.
+let yearlySummariesCache: YearlySpotifySummary[] | null = null
+
 export function insertPlays(plays: SpotifyPlayInsert[]): number {
   const db = getDb()
   const now = Date.now()
@@ -29,7 +34,9 @@ export function insertPlays(plays: SpotifyPlayInsert[]): number {
     }
     return inserted
   })
-  return insertMany(plays)
+  const inserted = insertMany(plays)
+  if (inserted > 0) yearlySummariesCache = null
+  return inserted
 }
 
 export function getPlaysForPeriod(from: number, to: number): SpotifyPlay[] {
@@ -71,6 +78,8 @@ interface YearMonthRow { year: number; month: number; ms_played: number }
 // One recap per calendar year that has any listening history: totals, top 5 artists,
 // the single most-played track, and a Jan..Dec breakdown for the "Spotify" tab's yearly cards.
 export function getYearlySummaries(): YearlySpotifySummary[] {
+  if (yearlySummariesCache !== null) return yearlySummariesCache
+
   const db = getDb()
   const yearExpr = `CAST(strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER)`
 
@@ -131,7 +140,7 @@ export function getYearlySummaries(): YearlySpotifySummary[] {
     arr[r.month - 1] = r.ms_played
   }
 
-  return totals
+  yearlySummariesCache = totals
     .sort((a, b) => b.year - a.year)
     .map(t => ({
       year: t.year,
@@ -141,4 +150,5 @@ export function getYearlySummaries(): YearlySpotifySummary[] {
       topTrack: trackByYear.get(t.year) ?? null,
       monthly: monthlyByYear.get(t.year) ?? new Array(12).fill(0),
     }))
+  return yearlySummariesCache
 }

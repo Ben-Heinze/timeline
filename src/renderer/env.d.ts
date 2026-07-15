@@ -8,6 +8,7 @@ import type {
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, VolumeStatus,
+  SetDateParams, SetDateResult, RescanProgressEvent, RescanResult,
 } from '../shared/types'
 
 interface Api {
@@ -36,6 +37,7 @@ interface Api {
     listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type' | 'tag'; sortDir: 'asc' | 'desc' }) => Promise<Entry[]>
     get: (id: number) => Promise<Entry | null>
     update: (id: number, patch: Record<string, unknown>) => Promise<void>
+    setDate: (params: SetDateParams) => Promise<SetDateResult>
     delete: (ids: number[]) => Promise<void>
     create: (data: { type: EntryType; timestamp: number; title: string | null; rich_text_json: string | null; group_id: number | null }) => Promise<number>
   }
@@ -94,6 +96,10 @@ interface Api {
     pickArchive: () => Promise<string | null>
     import: (zipPath: string, destDir: string) => Promise<BackupImportResult>
     onProgress: (cb: (event: BackupProgressEvent) => void) => () => void
+  }
+  library: {
+    rescan: () => Promise<RescanResult>
+    onRescanProgress: (cb: (event: RescanProgressEvent) => void) => () => void
   }
   spotify: {
     pickExport: (mode?: 'files' | 'folder') => Promise<string[]>

@@ -7,6 +7,7 @@ import type {
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, VolumeStatus,
+  SetDateParams, RescanProgressEvent, RescanResult,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -67,6 +68,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('entries:get', id),
     update: (id: number, patch: Record<string, unknown>) =>
       ipcRenderer.invoke('entries:update', id, patch),
+    setDate: (params: SetDateParams) =>
+      ipcRenderer.invoke('entries:setDate', params),
     delete: (ids: number[]) =>
       ipcRenderer.invoke('entries:delete', ids),
     create: (data: { type: EntryType; timestamp: number; title: string | null; rich_text_json: string | null; group_id: number | null }) =>
@@ -193,6 +196,15 @@ contextBridge.exposeInMainWorld('api', {
       const handler = (_: unknown, data: SpotifyImportProgressEvent) => cb(data)
       ipcRenderer.on('spotify:progress', handler)
       return () => ipcRenderer.removeListener('spotify:progress', handler)
+    },
+  },
+  library: {
+    rescan: (): Promise<RescanResult> =>
+      ipcRenderer.invoke('library:rescan'),
+    onRescanProgress: (cb: (event: RescanProgressEvent) => void) => {
+      const handler = (_: unknown, data: RescanProgressEvent) => cb(data)
+      ipcRenderer.on('library:rescanProgress', handler)
+      return () => ipcRenderer.removeListener('library:rescanProgress', handler)
     },
   },
   volumes: {

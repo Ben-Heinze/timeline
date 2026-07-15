@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
 import TagEditor from './TagEditor'
 import { GroupPickerList } from './GroupPicker'
+import ChangeDateModal from './ChangeDateModal'
 import type { Entry, Tag } from '../../shared/types'
 
 interface ContextMenuState {
@@ -22,6 +23,7 @@ export function useEntryContextMenu(entries: Entry[]) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   const [groupSubOpen, setGroupSubOpen] = useState(false)
   const [tagModalIds, setTagModalIds] = useState<number[] | null>(null)
+  const [dateModalIds, setDateModalIds] = useState<number[] | null>(null)
   const [pendingTagNames, setPendingTagNames] = useState<string[]>([])
   const [existingTags, setExistingTags] = useState<{ tag: Tag; count: number }[]>([])
 
@@ -94,6 +96,12 @@ export function useEntryContextMenu(entries: Entry[]) {
     if (!menu) return
     setPendingTagNames([])
     setTagModalIds(menu.ids)
+    closeMenu()
+  }, [menu, closeMenu])
+
+  const openDateModal = useCallback(() => {
+    if (!menu) return
+    setDateModalIds(menu.ids)
     closeMenu()
   }, [menu, closeMenu])
 
@@ -172,6 +180,7 @@ export function useEntryContextMenu(entries: Entry[]) {
                 </div>
               )}
             </div>
+            <MenuItem label="Change date…" onClick={openDateModal} />
             <div style={{ height: 1, background: 'var(--border-light)', margin: '4px 0' }} />
             <MenuItem label="Delete…" danger onClick={deleteSelected} />
           </div>
@@ -278,6 +287,15 @@ export function useEntryContextMenu(entries: Entry[]) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Change-date modal */}
+      {dateModalIds !== null && (
+        <ChangeDateModal
+          ids={dateModalIds}
+          onClose={() => setDateModalIds(null)}
+          onApplied={bumpRefreshKey}
+        />
       )}
     </>
   )

@@ -6,6 +6,7 @@ import { registerAllHandlers } from './ipc'
 import { startMediaServer } from './media'
 import { startWatcher, stopWatcher } from './sync'
 import { refreshVolumes, backfillWatchedFolderVolumes } from './volumes'
+import { endExifTool } from './exif'
 
 // Allow timeline:// to be used in img src without CSP issues
 protocol.registerSchemesAsPrivileged([
@@ -65,3 +66,6 @@ app.on('window-all-closed', () => {
   closeDb()
   if (process.platform !== 'darwin') app.quit()
 })
+
+// Shut the persistent ExifTool child process down cleanly on quit.
+app.on('will-quit', () => { void endExifTool() })

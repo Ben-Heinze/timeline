@@ -177,6 +177,22 @@ export function getUnscannedGpsPhotos(): Entry[] {
   ).all() as Entry[]
 }
 
+// Entries a library rescan might need to fix: photos still missing a thumbnail,
+// date, or GPS scan, plus every document (whose extension the caller re-checks —
+// RAW files imported before RAW support landed were stored as documents).
+export function getEntriesNeedingBackfill(): Entry[] {
+  return getDb().prepare(`
+    SELECT * FROM entries
+    WHERE file_path IS NOT NULL AND is_missing = 0
+      AND (
+        type = 'document'
+        OR (type = 'photo' AND (thumbnail_small IS NULL OR needs_date_review = 1 OR gps_scanned = 0))
+        OR (type = 'video' AND (thumbnail_small IS NULL OR needs_date_review = 1 OR latitude IS NULL))
+      )
+    ORDER BY id
+  `).all() as Entry[]
+}
+
 export function getEntriesWithFilePathPrefix(prefix: string): Entry[] {
   return getDb().prepare(
     `SELECT * FROM entries WHERE file_path LIKE ? AND import_mode = 'reference'`
@@ -189,6 +205,24 @@ export function findEntryByHash(hash: string): Entry | null {
 
 export function getAllEntriesWithFilePaths(): Entry[] {
   return getDb().prepare('SELECT * FROM entries WHERE file_path IS NOT NULL').all() as Entry[]
+}
+
+// Manually correcting the date is the user asserting it is right, so we also
+// clear the needs_date_review flag. Both variants share the id-placeholder shape.
+export function setEntriesTimestamp(ids: number[], timestamp: number): void {
+  if (ids.length === 0) return
+  const placeholders = ids.map(() => '?').join(', ')
+  getDb().prepare(
+    `UPDATE entries SET timestamp = ?, needs_date_review = 0 WHERE id IN (${placeholders})`
+  ).run(timestamp, ...ids)
+}
+
+export function shiftEntriesTimestamp(ids: number[], deltaMs: number): void {
+  if (ids.length === 0) return
+  const placeholders = ids.map(() => '?').join(', ')
+  getDb().prepare(
+    `UPDATE entries SET timestamp = timestamp + ?, needs_date_review = 0 WHERE id IN (${placeholders})`
+  ).run(deltaMs, ...ids)
 }
 
 export function markEntriesMissing(ids: number[]): void {

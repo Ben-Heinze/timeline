@@ -95268,6 +95268,233 @@ function AssignDropdown({ selectedIds, groups, onAssign }) {
     ) })
   ] });
 }
+const UNIT_MS = {
+  days: 864e5,
+  hours: 36e5,
+  minutes: 6e4
+};
+function toLocalInput(ms) {
+  const off = new Date(ms).getTimezoneOffset() * 6e4;
+  return new Date(ms - off).toISOString().slice(0, 16);
+}
+const inputStyle$2 = {
+  padding: "8px 10px",
+  fontSize: 13,
+  border: "1px solid var(--border-strong)",
+  borderRadius: 6,
+  background: "var(--bg-input)",
+  outline: "none",
+  color: "var(--text)",
+  boxSizing: "border-box"
+};
+function ChangeDateModal({ ids, onClose, onApplied }) {
+  const many = ids.length > 1;
+  const [mode, setMode] = reactExports.useState("set");
+  const [dateStr, setDateStr] = reactExports.useState(() => toLocalInput(Date.now()));
+  const [shiftAmount, setShiftAmount] = reactExports.useState(1);
+  const [shiftUnit, setShiftUnit] = reactExports.useState("hours");
+  const [shiftDir, setShiftDir] = reactExports.useState(1);
+  const [writeExif, setWriteExif] = reactExports.useState(false);
+  const [busy, setBusy] = reactExports.useState(false);
+  const [result, setResult] = reactExports.useState(null);
+  reactExports.useEffect(() => {
+    let alive = true;
+    if (ids.length > 0) {
+      window.api.entries.get(ids[0]).then((e) => {
+        if (alive && e) setDateStr(toLocalInput(e.timestamp));
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [ids]);
+  reactExports.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const setInvalid = mode === "set" && (dateStr === "" || Number.isNaN(new Date(dateStr).getTime()));
+  const apply2 = async () => {
+    if (busy || setInvalid) return;
+    const value = mode === "set" ? new Date(dateStr).getTime() : shiftDir * shiftAmount * UNIT_MS[shiftUnit];
+    if (mode === "shift" && value === 0) {
+      onClose();
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await window.api.entries.setDate({ ids, mode, value, writeExif });
+      onApplied();
+      if (!writeExif) {
+        onClose();
+        return;
+      }
+      setResult(res);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        zIndex: 1e3,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+      },
+      onClick: (e) => {
+        if (e.target === e.currentTarget) onClose();
+      },
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        background: "var(--bg-surface)",
+        borderRadius: 10,
+        padding: 24,
+        width: 400,
+        border: "1px solid var(--border)",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 16
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: { margin: 0, fontSize: 16, fontWeight: 700, color: "var(--text)" }, children: "Change date" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { style: { margin: "4px 0 0", fontSize: 12, color: "var(--text-3)" }, children: [
+            ids.length,
+            " ",
+            ids.length === 1 ? "item" : "items"
+          ] })
+        ] }),
+        result ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: result.updated }),
+              " ",
+              result.updated === 1 ? "date" : "dates",
+              " updated"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: result.exifWritten }),
+              " ",
+              result.exifWritten === 1 ? "file" : "files",
+              " written to disk"
+            ] }),
+            result.exifSkipped > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { color: "var(--text-4)" }, children: [
+              result.exifSkipped,
+              " skipped (referenced originals / non-photos / missing)"
+            ] }),
+            result.exifFailed > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { color: "#ef4444" }, children: [
+              result.exifFailed,
+              " failed to write"
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", justifyContent: "flex-end" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: onClose, style: primaryBtn, children: "Done" }) })
+        ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 0, border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }, children: ["set", "shift"].map((m2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              onClick: () => setMode(m2),
+              style: {
+                flex: 1,
+                padding: "7px 0",
+                fontSize: 13,
+                cursor: "pointer",
+                border: "none",
+                background: mode === m2 ? "var(--accent)" : "transparent",
+                color: mode === m2 ? "#fff" : "var(--text-2)"
+              },
+              children: m2 === "set" ? "Set to" : "Shift by"
+            },
+            m2
+          )) }),
+          mode === "set" ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              type: "datetime-local",
+              value: dateStr,
+              onChange: (e) => setDateStr(e.target.value),
+              style: { ...inputStyle$2, width: "100%" }
+            }
+          ) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8, alignItems: "center" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("select", { value: shiftDir, onChange: (e) => setShiftDir(Number(e.target.value)), style: inputStyle$2, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: 1, children: "Later (+)" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: -1, children: "Earlier (−)" })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "number",
+                min: 0,
+                value: shiftAmount,
+                onChange: (e) => setShiftAmount(Math.max(0, Number(e.target.value))),
+                style: { ...inputStyle$2, width: 80 }
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("select", { value: shiftUnit, onChange: (e) => setShiftUnit(e.target.value), style: { ...inputStyle$2, flex: 1 }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "days", children: "days" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "hours", children: "hours" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "minutes", children: "minutes" })
+            ] })
+          ] }),
+          mode === "set" && many && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { style: { margin: "-6px 0 0", fontSize: 11, color: "var(--text-4)" }, children: [
+            "All ",
+            ids.length,
+            " items will be set to this exact date & time."
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { style: { display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", fontSize: 12, color: "var(--text-2)" }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "checkbox", checked: writeExif, onChange: (e) => setWriteExif(e.target.checked), style: { marginTop: 2 } }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+              "Also write the date into the photo/video file",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { display: "block", color: "var(--text-4)", fontSize: 11, marginTop: 2 }, children: "Copied files only — your referenced originals are never modified." })
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: apply2,
+                disabled: busy || setInvalid,
+                style: { ...primaryBtn, flex: 1, opacity: busy || setInvalid ? 0.5 : 1 },
+                children: busy ? "Applying…" : "Apply"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: onClose,
+                style: {
+                  padding: "8px 16px",
+                  fontSize: 13,
+                  background: "none",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  color: "var(--text-2)",
+                  cursor: "pointer"
+                },
+                children: "Cancel"
+              }
+            )
+          ] })
+        ] })
+      ] })
+    }
+  );
+}
+const primaryBtn = {
+  padding: "8px 16px",
+  fontSize: 13,
+  fontWeight: 600,
+  background: "var(--accent)",
+  color: "#fff",
+  border: "none",
+  borderRadius: 6,
+  cursor: "pointer"
+};
 function useEntryContextMenu(entries) {
   const {
     selectedIds,
@@ -95280,6 +95507,7 @@ function useEntryContextMenu(entries) {
   const [menu, setMenu] = reactExports.useState(null);
   const [groupSubOpen, setGroupSubOpen] = reactExports.useState(false);
   const [tagModalIds, setTagModalIds] = reactExports.useState(null);
+  const [dateModalIds, setDateModalIds] = reactExports.useState(null);
   const [pendingTagNames, setPendingTagNames] = reactExports.useState([]);
   const [existingTags, setExistingTags] = reactExports.useState([]);
   reactExports.useEffect(() => {
@@ -95343,6 +95571,11 @@ function useEntryContextMenu(entries) {
     if (!menu) return;
     setPendingTagNames([]);
     setTagModalIds(menu.ids);
+    closeMenu();
+  }, [menu, closeMenu]);
+  const openDateModal = reactExports.useCallback(() => {
+    if (!menu) return;
+    setDateModalIds(menu.ids);
     closeMenu();
   }, [menu, closeMenu]);
   const applyTags = reactExports.useCallback(async () => {
@@ -95441,6 +95674,7 @@ function useEntryContextMenu(entries) {
             ]
           }
         ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Change date…", onClick: openDateModal }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "var(--border-light)", margin: "4px 0" } }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Delete…", danger: true, onClick: deleteSelected })
       ] })
@@ -95566,6 +95800,14 @@ function useEntryContextMenu(entries) {
             )
           ] })
         ] })
+      }
+    ),
+    dateModalIds !== null && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      ChangeDateModal,
+      {
+        ids: dateModalIds,
+        onClose: () => setDateModalIds(null),
+        onApplied: bumpRefreshKey
       }
     )
   ] });
@@ -115615,10 +115857,11 @@ function FileActions({ entry }) {
   ] });
 }
 function EntryModal() {
-  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal } = useStore();
+  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal, bumpRefreshKey } = useStore();
   const [entry, setEntry] = reactExports.useState(null);
   const [entryTags, setEntryTags] = reactExports.useState([]);
   const [periodEntries, setPeriodEntries] = reactExports.useState([]);
+  const [dateModalOpen, setDateModalOpen] = reactExports.useState(false);
   reactExports.useEffect(() => {
     if (!activeEntryId) {
       setEntry(null);
@@ -115656,15 +115899,16 @@ function EntryModal() {
   reactExports.useEffect(() => {
     const onKey = (e) => {
       if (!activeEntryId) return;
+      if (dateModalOpen) return;
       if (e.key === "Escape") setActiveEntryId(null);
       if (e.key === "ArrowLeft") navigatePrev();
       if (e.key === "ArrowRight") navigateNext();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId]);
+  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId, dateModalOpen]);
   if (!activeEntryId) return null;
-  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "div",
     {
       onClick: (e) => {
@@ -115679,110 +115923,132 @@ function EntryModal() {
         justifyContent: "center",
         zIndex: 100
       },
-      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-        width: 600,
-        maxWidth: "90vw",
-        maxHeight: "88vh",
-        background: "var(--bg-surface)",
-        borderRadius: 12,
-        border: "1px solid var(--border)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        boxShadow: "0 8px 40px rgba(0,0,0,0.14)"
-      }, children: [
+      children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          width: 600,
+          maxWidth: "90vw",
+          maxHeight: "88vh",
+          background: "var(--bg-surface)",
+          borderRadius: 12,
+          border: "1px solid var(--border)",
           display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "12px 16px",
-          borderBottom: "1px solid var(--border-light)",
-          flexShrink: 0
+          flexDirection: "column",
+          overflow: "hidden",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.14)"
         }, children: [
-          entry && /* @__PURE__ */ jsxRuntimeExports.jsx(TypeBadge, { type: entry.type }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: entry?.title ?? (entry?.type ?? "…") }),
-          entry?.type === "journal" && /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              onClick: () => {
-                openJournalModal(entry);
-                setActiveEntryId(null);
-              },
-              style: { background: "none", border: "1px solid var(--border)", color: "var(--text-2)", fontSize: 12, padding: "2px 8px", borderRadius: 4, cursor: "pointer" },
-              children: "Edit"
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              onClick: () => setActiveEntryId(null),
-              style: { background: "none", border: "none", color: "var(--text-4)", fontSize: 18, padding: "2px 6px", borderRadius: 4, lineHeight: 1 },
-              children: "✕"
-            }
-          )
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "24px 32px", minHeight: 220 }, children: entry ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(EntryContent, { entry }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(MetadataPanel, { entry })
-        ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: 160, color: "var(--text-3)" }, children: "Loading…" }) }),
-        entry?.file_path && /* @__PURE__ */ jsxRuntimeExports.jsx(FileActions, { entry }),
-        entry && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-          padding: "10px 16px",
-          borderTop: "1px solid var(--border-light)",
-          display: "flex",
-          alignItems: "center",
-          gap: 10
-        }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0 }, children: "Tags" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(TagEditor, { tags: entryTags, onChange: handleTagsChange }) })
-        ] }),
-        periodEntries.length > 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 16px",
-          borderTop: "1px solid var(--border-light)",
-          flexShrink: 0
-        }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              onClick: navigatePrev,
-              disabled: !hasPrev,
-              style: {
-                background: hasPrev ? "var(--bg-subtle)" : "transparent",
-                border: "1px solid var(--border)",
-                color: hasPrev ? "var(--text)" : "var(--text-4)",
-                borderRadius: 6,
-                padding: "5px 14px",
-                fontSize: 13
-              },
-              children: "← Prev"
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-3)" }, children: [
-            idx + 1,
-            " / ",
-            periodEntries.length
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "12px 16px",
+            borderBottom: "1px solid var(--border-light)",
+            flexShrink: 0
+          }, children: [
+            entry && /* @__PURE__ */ jsxRuntimeExports.jsx(TypeBadge, { type: entry.type }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: entry?.title ?? (entry?.type ?? "…") }),
+            entry?.type === "journal" && /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: () => {
+                  openJournalModal(entry);
+                  setActiveEntryId(null);
+                },
+                style: { background: "none", border: "1px solid var(--border)", color: "var(--text-2)", fontSize: 12, padding: "2px 8px", borderRadius: 4, cursor: "pointer" },
+                children: "Edit"
+              }
+            ),
+            entry && /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: () => setDateModalOpen(true),
+                title: "Change date",
+                style: { background: "none", border: "1px solid var(--border)", color: "var(--text-2)", fontSize: 12, padding: "2px 8px", borderRadius: 4, cursor: "pointer" },
+                children: "Edit date"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: () => setActiveEntryId(null),
+                style: { background: "none", border: "none", color: "var(--text-4)", fontSize: 18, padding: "2px 6px", borderRadius: 4, lineHeight: 1 },
+                children: "✕"
+              }
+            )
           ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              onClick: navigateNext,
-              disabled: !hasNext,
-              style: {
-                background: hasNext ? "var(--bg-subtle)" : "transparent",
-                border: "1px solid var(--border)",
-                color: hasNext ? "var(--text)" : "var(--text-4)",
-                borderRadius: 6,
-                padding: "5px 14px",
-                fontSize: 13
-              },
-              children: "Next →"
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "24px 32px", minHeight: 220 }, children: entry ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(EntryContent, { entry }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(MetadataPanel, { entry })
+          ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", height: 160, color: "var(--text-3)" }, children: "Loading…" }) }),
+          entry?.file_path && /* @__PURE__ */ jsxRuntimeExports.jsx(FileActions, { entry }),
+          entry && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            padding: "10px 16px",
+            borderTop: "1px solid var(--border-light)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0 }, children: "Tags" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(TagEditor, { tags: entryTags, onChange: handleTagsChange }) })
+          ] }),
+          periodEntries.length > 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "10px 16px",
+            borderTop: "1px solid var(--border-light)",
+            flexShrink: 0
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: navigatePrev,
+                disabled: !hasPrev,
+                style: {
+                  background: hasPrev ? "var(--bg-subtle)" : "transparent",
+                  border: "1px solid var(--border)",
+                  color: hasPrev ? "var(--text)" : "var(--text-4)",
+                  borderRadius: 6,
+                  padding: "5px 14px",
+                  fontSize: 13
+                },
+                children: "← Prev"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-3)" }, children: [
+              idx + 1,
+              " / ",
+              periodEntries.length
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: navigateNext,
+                disabled: !hasNext,
+                style: {
+                  background: hasNext ? "var(--bg-subtle)" : "transparent",
+                  border: "1px solid var(--border)",
+                  color: hasNext ? "var(--text)" : "var(--text-4)",
+                  borderRadius: 6,
+                  padding: "5px 14px",
+                  fontSize: 13
+                },
+                children: "Next →"
+              }
+            )
+          ] })
+        ] }),
+        dateModalOpen && entry && /* @__PURE__ */ jsxRuntimeExports.jsx(
+          ChangeDateModal,
+          {
+            ids: [entry.id],
+            onClose: () => setDateModalOpen(false),
+            onApplied: () => {
+              window.api.entries.get(entry.id).then(setEntry);
+              bumpRefreshKey();
             }
-          )
-        ] })
-      ] })
+          }
+        )
+      ]
     }
   );
 }

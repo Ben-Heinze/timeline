@@ -4,6 +4,7 @@ import StarterKit from '@tiptap/starter-kit'
 import { useStore } from '../store/useStore'
 import type { Entry, Tag, FileInfo } from '../../shared/types'
 import TagEditor from './TagEditor'
+import ChangeDateModal from './ChangeDateModal'
 import { useVolumeStatus, VolumeBadgeInline } from './VolumeBadge'
 
 const TYPE_COLORS: Record<string, string> = {
@@ -307,10 +308,11 @@ function FileActions({ entry }: { entry: Entry }) {
 }
 
 export default function EntryModal() {
-  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal } = useStore()
+  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal, bumpRefreshKey } = useStore()
   const [entry, setEntry] = useState<Entry | null>(null)
   const [entryTags, setEntryTags] = useState<Tag[]>([])
   const [periodEntries, setPeriodEntries] = useState<Entry[]>([])
+  const [dateModalOpen, setDateModalOpen] = useState(false)
 
   useEffect(() => {
     if (!activeEntryId) { setEntry(null); setEntryTags([]); return }
@@ -345,13 +347,15 @@ export default function EntryModal() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!activeEntryId) return
+      // While the change-date modal is open it owns the keyboard (Escape, typing).
+      if (dateModalOpen) return
       if (e.key === 'Escape') setActiveEntryId(null)
       if (e.key === 'ArrowLeft') navigatePrev()
       if (e.key === 'ArrowRight') navigateNext()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId])
+  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId, dateModalOpen])
 
   if (!activeEntryId) return null
 
@@ -390,6 +394,13 @@ export default function EntryModal() {
               onClick={() => { openJournalModal(entry); setActiveEntryId(null) }}
               style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 12, padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}
             >Edit</button>
+          )}
+          {entry && (
+            <button
+              onClick={() => setDateModalOpen(true)}
+              title="Change date"
+              style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 12, padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}
+            >Edit date</button>
           )}
           <button
             onClick={() => setActiveEntryId(null)}
@@ -461,6 +472,17 @@ export default function EntryModal() {
           </div>
         )}
       </div>
+
+      {dateModalOpen && entry && (
+        <ChangeDateModal
+          ids={[entry.id]}
+          onClose={() => setDateModalOpen(false)}
+          onApplied={() => {
+            window.api.entries.get(entry.id).then(setEntry)
+            bumpRefreshKey()
+          }}
+        />
+      )}
     </div>
   )
 }
