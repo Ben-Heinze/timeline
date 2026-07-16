@@ -404,7 +404,7 @@ function deleteEntries(ids) {
 function listAllEntries(opts) {
   const dir = opts.sortDir === "asc" ? "ASC" : "DESC";
   const where = opts.groupId != null ? `WHERE e.${groupFilterSql(opts.groupId)}` : "";
-  const params = {};
+  const params = { limit: opts.limit, offset: opts.offset };
   if (opts.sortBy === "tag") {
     return getDb().prepare(`
       SELECT e.*
@@ -417,6 +417,7 @@ function listAllEntries(opts) {
         CASE WHEN MIN(t.name) IS NULL THEN 1 ELSE 0 END ASC,
         MIN(t.name) ${dir},
         e.timestamp DESC
+      LIMIT @limit OFFSET @offset
     `).all(params);
   }
   const col = opts.sortBy === "date" ? "timestamp" : opts.sortBy === "title" ? "title" : "type";
@@ -426,9 +427,28 @@ function listAllEntries(opts) {
     SELECT * FROM entries
     ${simpleWhere}
     ORDER BY ${col} ${dir}${tie}
+    LIMIT @limit OFFSET @offset
   `).all(params);
 }
-function searchEntries(filters) {
+function countAllEntries(opts) {
+  const where = opts.groupId != null ? `WHERE ${groupFilterSql(opts.groupId)}` : "";
+  const row = getDb().prepare(`SELECT COUNT(*) AS count FROM entries ${where}`).get();
+  return row.count;
+}
+function getMonthBuckets(opts) {
+  const dir = opts.sortDir === "asc" ? "ASC" : "DESC";
+  const where = opts.groupId != null ? `WHERE ${groupFilterSql(opts.groupId)}` : "";
+  const bucketExpr = bucketExprSql("month");
+  const rows = getDb().prepare(`
+    SELECT ${bucketExpr} AS bucket_start, COUNT(*) AS count
+    FROM entries
+    ${where}
+    GROUP BY bucket_start
+    ORDER BY bucket_start ${dir}
+  `).all();
+  return rows.map((r) => ({ bucketStart: r.bucket_start, count: r.count }));
+}
+function buildSearchFilterSql(filters) {
   const where = [];
   const params = {};
   if (filters.text && filters.text.trim()) {
@@ -466,16 +486,32 @@ function searchEntries(filters) {
     `;
     where.push("(et.tag_id IS NOT NULL OR gt.tag_id IS NOT NULL)");
   }
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  return { whereSql: where.length ? `WHERE ${where.join(" AND ")}` : "", tagJoin, params };
+}
+function searchEntries(filters, page) {
+  const { whereSql, tagJoin, params } = buildSearchFilterSql(filters);
   const sql = `
     SELECT DISTINCT e.* FROM entries e
     LEFT JOIN groups g ON g.id = e.group_id
     ${tagJoin}
     ${whereSql}
     ORDER BY e.timestamp DESC
-    LIMIT 500
+    LIMIT @limit OFFSET @offset
   `;
-  return getDb().prepare(sql).all(params);
+  return getDb().prepare(sql).all({ ...params, limit: page.limit, offset: page.offset });
+}
+function countSearchResults(filters) {
+  const { whereSql, tagJoin, params } = buildSearchFilterSql(filters);
+  const sql = `
+    SELECT COUNT(*) AS count FROM (
+      SELECT DISTINCT e.id FROM entries e
+      LEFT JOIN groups g ON g.id = e.group_id
+      ${tagJoin}
+      ${whereSql}
+    )
+  `;
+  const row = getDb().prepare(sql).get(params);
+  return row.count;
 }
 function insertEntry(entry) {
   const result = getDb().prepare(`
@@ -1166,9 +1202,21 @@ async function rescanLibrary(onProgress) {
   onProgress({ processed: total, total, current: "" });
   return result;
 }
+const JUNK_NAMES = /* @__PURE__ */ new Set([
+  "system volume information",
+  "$recycle.bin",
+  "lost+found",
+  "thumbs.db",
+  "desktop.ini"
+]);
+function isJunkEntry(name) {
+  if (name.startsWith(".")) return true;
+  return JUNK_NAMES.has(name.toLowerCase());
+}
 async function walkDir(root, rootName, dir, out) {
   const entries = await fs$1.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
+    if (isJunkEntry(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       await walkDir(root, rootName, full, out);
@@ -1669,8 +1717,11 @@ function registerEntryHandlers() {
   electron.ipcMain.handle("entries:forPeriod", (_, from, to, groupId) => getEntriesForPeriod(from, to, groupId ?? void 0));
   electron.ipcMain.handle("entries:extent", () => getDataExtent());
   electron.ipcMain.handle("entries:locations", () => getEntriesWithLocation());
-  electron.ipcMain.handle("entries:search", (_, filters) => searchEntries(filters ?? {}));
+  electron.ipcMain.handle("entries:search", (_, filters, page) => searchEntries(filters ?? {}, page));
+  electron.ipcMain.handle("entries:searchCount", (_, filters) => countSearchResults(filters ?? {}));
   electron.ipcMain.handle("entries:listAll", (_, opts) => listAllEntries(opts));
+  electron.ipcMain.handle("entries:listAllCount", (_, opts) => countAllEntries(opts ?? {}));
+  electron.ipcMain.handle("entries:monthBuckets", (_, opts) => getMonthBuckets(opts));
   electron.ipcMain.handle("entries:get", (_, id) => getEntry(id));
   electron.ipcMain.handle("entries:update", (_, id, patch) => updateEntry(id, patch));
   electron.ipcMain.handle("entries:setDate", async (_, params) => {
@@ -1886,7 +1937,12 @@ function registerIngestHandlers() {
   });
   electron.ipcMain.handle("ingest:countFiles", async (_, paths) => {
     const files = await expandPaths(paths);
-    return files.length;
+    const byType = { photo: 0, video: 0, audio: 0, document: 0, journal: 0 };
+    for (const f of files) {
+      const type = detectType(path.extname(f.filePath));
+      byType[type]++;
+    }
+    return { total: files.length, byType };
   });
   electron.ipcMain.handle("ingest:start", async (event, filePaths, tagNames = []) => {
     const sender = event.sender;

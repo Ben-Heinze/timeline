@@ -145,6 +145,158 @@
   --scrollbar-thumb:   #b0cce2;
 }
 
+[data-theme="forest"] {
+  --bg-app:            #0c1410;
+  --bg-surface:        #131f18;
+  --bg-muted:          #0f1712;
+  --bg-subtle:         #17241c;
+  --bg-sidebar:        #0f1712;
+  --bg-hover:          #1c2b22;
+  --bg-selected:       #24392c;
+  --bg-input:          #17241c;
+  --bg-entry-sel:      #14261c;
+  --bg-thumb:          #17241c;
+  --border:            #24362b;
+  --border-light:      #1c2b22;
+  --border-strong:     #304a3c;
+  --text:              #e6f2ea;
+  --text-2:            #9db8a8;
+  --text-3:            #6f8a78;
+  --text-4:            #47594c;
+  --accent:            #10b981;
+  --accent-fg:         #06281a;
+  --canvas-bg:         #131f18;
+  --canvas-grid:       #16241b;
+  --canvas-axis:       #24362b;
+  --canvas-tick:       #304a3c;
+  --canvas-label:      #5c7d68;
+  --scrollbar-track:   #17241c;
+  --scrollbar-thumb:   #304a3c;
+}
+
+/* ─── Catppuccin (catppuccin.com) ─────────────────────────────────────────────
+   Four official flavors. Each maps the same way onto our variables:
+   crust (recessed/outer bg) -> mantle (sidebar/muted) -> base (main surface)
+   -> surface0/1/2 (increasingly prominent interactive layers)
+   -> overlay0/1/2, subtext0/1, text (increasingly prominent foreground)
+   with "Blue" as the accent, matching most third-party Catppuccin UI ports. */
+
+[data-theme="latte"] {
+  --bg-app:            #e6e9ef;
+  --bg-surface:        #eff1f5;
+  --bg-muted:          #e6e9ef;
+  --bg-subtle:         #ccd0da;
+  --bg-sidebar:        #e6e9ef;
+  --bg-hover:          #bcc0cc;
+  --bg-selected:       #acb0be;
+  --bg-input:          #eff1f5;
+  --bg-entry-sel:      #dce6fb;
+  --bg-thumb:          #ccd0da;
+  --border:            #bcc0cc;
+  --border-light:      #ccd0da;
+  --border-strong:     #acb0be;
+  --text:              #4c4f69;
+  --text-2:            #5c5f77;
+  --text-3:            #6c6f85;
+  --text-4:            #9ca0b0;
+  --accent:            #1e66f5;
+  --accent-fg:         #ffffff;
+  --canvas-bg:         #eff1f5;
+  --canvas-grid:       #e6e9ef;
+  --canvas-axis:       #bcc0cc;
+  --canvas-tick:       #acb0be;
+  --canvas-label:      #8c8fa1;
+  --scrollbar-track:   #e6e9ef;
+  --scrollbar-thumb:   #acb0be;
+}
+
+[data-theme="frappe"] {
+  --bg-app:            #232634;
+  --bg-surface:        #303446;
+  --bg-muted:          #292c3c;
+  --bg-subtle:         #414559;
+  --bg-sidebar:        #292c3c;
+  --bg-hover:          #51576d;
+  --bg-selected:       #626880;
+  --bg-input:          #414559;
+  --bg-entry-sel:      #3a4160;
+  --bg-thumb:          #414559;
+  --border:            #51576d;
+  --border-light:      #414559;
+  --border-strong:     #626880;
+  --text:              #c6d0f5;
+  --text-2:            #b5bfe2;
+  --text-3:            #a5adce;
+  --text-4:            #737994;
+  --accent:            #8caaee;
+  --accent-fg:         #232634;
+  --canvas-bg:         #303446;
+  --canvas-grid:       #292c3c;
+  --canvas-axis:       #51576d;
+  --canvas-tick:       #626880;
+  --canvas-label:      #838ba7;
+  --scrollbar-track:   #292c3c;
+  --scrollbar-thumb:   #626880;
+}
+
+[data-theme="macchiato"] {
+  --bg-app:            #181926;
+  --bg-surface:        #24273a;
+  --bg-muted:          #1e2030;
+  --bg-subtle:         #363a4f;
+  --bg-sidebar:        #1e2030;
+  --bg-hover:          #494d64;
+  --bg-selected:       #5b6078;
+  --bg-input:          #363a4f;
+  --bg-entry-sel:      #313a58;
+  --bg-thumb:          #363a4f;
+  --border:            #494d64;
+  --border-light:      #363a4f;
+  --border-strong:     #5b6078;
+  --text:              #cad3f5;
+  --text-2:            #b8c0e0;
+  --text-3:            #a5adcb;
+  --text-4:            #6e738d;
+  --accent:            #8aadf4;
+  --accent-fg:         #181926;
+  --canvas-bg:         #24273a;
+  --canvas-grid:       #1e2030;
+  --canvas-axis:       #494d64;
+  --canvas-tick:       #5b6078;
+  --canvas-label:      #8087a2;
+  --scrollbar-track:   #1e2030;
+  --scrollbar-thumb:   #5b6078;
+}
+
+[data-theme="mocha"] {
+  --bg-app:            #11111b;
+  --bg-surface:        #1e1e2e;
+  --bg-muted:          #181825;
+  --bg-subtle:         #313244;
+  --bg-sidebar:        #181825;
+  --bg-hover:          #45475a;
+  --bg-selected:       #585b70;
+  --bg-input:          #313244;
+  --bg-entry-sel:      #2b3350;
+  --bg-thumb:          #313244;
+  --border:            #45475a;
+  --border-light:      #313244;
+  --border-strong:     #585b70;
+  --text:              #cdd6f4;
+  --text-2:            #bac2de;
+  --text-3:            #a6adc8;
+  --text-4:            #6c7086;
+  --accent:            #89b4fa;
+  --accent-fg:         #11111b;
+  --canvas-bg:         #1e1e2e;
+  --canvas-grid:       #181825;
+  --canvas-axis:       #45475a;
+  --canvas-tick:       #585b70;
+  --canvas-label:      #7f849c;
+  --scrollbar-track:   #181825;
+  --scrollbar-thumb:   #585b70;
+}
+
 /* ─── Base ─────────────────────────────────────────────────────────────────── */
 
 *, *::before, *::after {

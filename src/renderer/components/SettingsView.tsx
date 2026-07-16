@@ -408,7 +408,7 @@ export default function SettingsView() {
       {/* Appearance / theme */}
       <div style={section}>
         <div style={sectionLabel}>Appearance</div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {THEMES.map(t => {
             const active = activeTheme === t.name
             return (
@@ -417,7 +417,7 @@ export default function SettingsView() {
                 onClick={() => setTheme(t.name)}
                 style={{
                   display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-                  padding: '12px 10px', borderRadius: 8, cursor: 'pointer', flex: 1,
+                  padding: '12px 10px', borderRadius: 8, cursor: 'pointer', flex: '0 0 76px',
                   border: active ? '2px solid var(--accent)' : '2px solid var(--border)',
                   background: active ? 'var(--bg-subtle)' : 'transparent',
                   transition: 'border-color 0.1s',

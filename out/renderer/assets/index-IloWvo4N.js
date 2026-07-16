@@ -7184,13 +7184,13 @@ const useStore = create((set) => ({
   refreshKey: 0,
   tags: [],
   volumes: [],
-  searchResults: null,
+  searchFilters: null,
   rangeSelectMode: false,
   dateRangeSelection: null,
   pendingDateRange: null,
   setTags: (tags) => set({ tags }),
   setVolumes: (volumes) => set({ volumes }),
-  setSearchResults: (results) => set({ searchResults: results }),
+  setSearchFilters: (filters) => set({ searchFilters: filters }),
   setVisibleRange: (range) => set({ visibleRange: range }),
   setZoomLevel: (level) => set({ zoomLevel: level }),
   setActiveView: (view) => set({ activeView: view }),
@@ -7437,7 +7437,7 @@ const bucketEndMs = (bs, level) => {
   }
   return bs + MS_DAY$4;
 };
-const TYPE_LABELS$2 = {
+const TYPE_LABELS$3 = {
   photo: ["photo", "photos"],
   video: ["video", "videos"],
   audio: ["audio file", "audio files"],
@@ -8489,7 +8489,7 @@ function TimelineCanvas() {
         hoverInfo?.types.map(([type2, count]) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { color: "var(--text-2)" }, children: [
           count,
           " ",
-          (TYPE_LABELS$2[type2] ?? [type2, type2])[count === 1 ? 0 : 1]
+          (TYPE_LABELS$3[type2] ?? [type2, type2])[count === 1 ? 0 : 1]
         ] }, type2)),
         hoverInfo?.group && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { borderTop: "1px solid var(--border-light)", marginTop: 5, paddingTop: 5 }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 6, fontWeight: 600, color: "var(--text)" }, children: [
@@ -95969,7 +95969,7 @@ const TYPE_COLORS$2 = {
   document: "#f59e0b",
   journal: "#ec4899"
 };
-const TYPE_LABELS$1 = {
+const TYPE_LABELS$2 = {
   photo: "PHO",
   video: "VID",
   audio: "AUD",
@@ -96015,7 +96015,7 @@ const Thumb = React$2.memo(function Thumb2({ entry, size }) {
       fontWeight: 700,
       color: "#fff",
       letterSpacing: 0.5
-    }, children: TYPE_LABELS$1[entry.type] ?? "?" }),
+    }, children: TYPE_LABELS$2[entry.type] ?? "?" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(VolumeBadgeDot, { volumeId: entry.volume_id })
   ] });
 });
@@ -96140,12 +96140,51 @@ const toolBtn = (active) => ({
   height: 24,
   minWidth: 26
 });
-function monthYearKey(ms) {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${d.getMonth()}`;
-}
 function monthYearLabel(ms) {
   return new Date(ms).toLocaleString("en-US", { month: "long", year: "numeric" });
+}
+const ROW_GAP = 8;
+const H_PADDING$1 = 12;
+const LIST_ROW_HEIGHT = 38;
+const HEADER_ROW_HEIGHT = 34;
+const OVERSCAN_PX$1 = 600;
+const PAGE_SIZE$1 = 300;
+const FETCH_OVERSCAN_ITEMS = PAGE_SIZE$1;
+function gridRowHeight(viewMode) {
+  return THUMB_SIZE[viewMode] + 58;
+}
+function findRowAt(offsets, y2) {
+  let lo = 0;
+  let hi2 = offsets.length - 2;
+  if (hi2 < 0) return 0;
+  while (lo < hi2) {
+    const mid = lo + hi2 + 1 >> 1;
+    if (offsets[mid] <= y2) lo = mid;
+    else hi2 = mid - 1;
+  }
+  return lo;
+}
+function useElementSize() {
+  const ref = reactExports.useRef(null);
+  const [w2, setW] = reactExports.useState(0);
+  const [h, setH] = reactExports.useState(0);
+  reactExports.useEffect(() => {
+    const el2 = ref.current;
+    if (!el2) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setW(entry.contentRect.width);
+      setH(entry.contentRect.height);
+    });
+    ro.observe(el2);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w2, h];
+}
+function GridSkeleton({ size }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: size + 20, padding: 8, display: "flex", justifyContent: "center" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: size, height: size, borderRadius: 6, background: "var(--bg-thumb)", opacity: 0.5 } }) });
+}
+function ListSkeleton() {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "5px 14px", height: "100%", display: "flex", alignItems: "center" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { width: "60%", height: 12, borderRadius: 4, background: "var(--bg-thumb)", opacity: 0.5 } }) });
 }
 function FilesView() {
   const {
@@ -96158,39 +96197,71 @@ function FilesView() {
     lastSelectedId,
     groups
   } = useStore();
-  const [entries, setEntries] = reactExports.useState([]);
   const [viewMode, setViewMode] = reactExports.useState("medium");
   const [sortBy, setSortBy] = reactExports.useState("date");
   const [sortDir, setSortDir] = reactExports.useState("desc");
-  const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(entries);
+  const [total, setTotal] = reactExports.useState(0);
+  const [monthBuckets, setMonthBuckets] = reactExports.useState([]);
+  const pageCacheRef = reactExports.useRef(/* @__PURE__ */ new Map());
+  const idToIndexRef = reactExports.useRef(/* @__PURE__ */ new Map());
+  const inFlightRef = reactExports.useRef(/* @__PURE__ */ new Set());
+  const epochRef = reactExports.useRef(0);
+  const [cacheVersion, bumpCacheVersion] = reactExports.useReducer((n2) => n2 + 1, 0);
+  const [scrollRef, viewportWidth, viewportHeight] = useElementSize();
+  const [scrollTop, setScrollTop] = reactExports.useState(0);
+  const onScroll = reactExports.useCallback((e) => setScrollTop(e.currentTarget.scrollTop), []);
   reactExports.useEffect(() => {
-    window.api.entries.listAll({
-      groupId: selectedGroupId ?? void 0,
-      sortBy,
-      sortDir
-    }).then(setEntries);
+    epochRef.current++;
+    const epoch = epochRef.current;
+    pageCacheRef.current = /* @__PURE__ */ new Map();
+    idToIndexRef.current = /* @__PURE__ */ new Map();
+    inFlightRef.current = /* @__PURE__ */ new Set();
+    setTotal(0);
+    setMonthBuckets([]);
+    setScrollTop(0);
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    bumpCacheVersion();
+    const groupId = selectedGroupId ?? void 0;
+    window.api.entries.listAllCount({ groupId }).then((count) => {
+      if (epochRef.current === epoch) setTotal(count);
+    });
+    if (sortBy === "date") {
+      window.api.entries.monthBuckets({ groupId, sortDir }).then((buckets) => {
+        if (epochRef.current === epoch) setMonthBuckets(buckets);
+      });
+    }
   }, [selectedGroupId, sortBy, sortDir, refreshKey]);
+  const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(
+    reactExports.useMemo(() => {
+      const out = [];
+      for (const page of pageCacheRef.current.values()) out.push(...page);
+      return out;
+    }, [cacheVersion])
+  );
   const selectedIdsRef = reactExports.useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
   const lastSelectedIdRef = reactExports.useRef(lastSelectedId);
   lastSelectedIdRef.current = lastSelectedId;
-  const entriesRef = reactExports.useRef(entries);
-  entriesRef.current = entries;
   const onSelect = reactExports.useCallback((e, entry) => {
     const selectedIds2 = selectedIdsRef.current;
     const lastSelectedId2 = lastSelectedIdRef.current;
-    const entries2 = entriesRef.current;
     if (e.metaKey || e.ctrlKey) {
       const next = new Set(selectedIds2);
       if (next.has(entry.id)) next.delete(entry.id);
       else next.add(entry.id);
       setSelection(next, entry.id);
     } else if (e.shiftKey && lastSelectedId2 !== null) {
-      const from2 = entries2.findIndex((x2) => x2.id === lastSelectedId2);
-      const to = entries2.findIndex((x2) => x2.id === entry.id);
-      if (from2 >= 0 && to >= 0) {
-        const [a, b] = from2 < to ? [from2, to] : [to, from2];
-        const range = new Set(entries2.slice(a, b + 1).map((x2) => x2.id));
+      const fromIdx = idToIndexRef.current.get(lastSelectedId2);
+      const toIdx = idToIndexRef.current.get(entry.id);
+      if (fromIdx != null && toIdx != null) {
+        const [a, b] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+        const range = /* @__PURE__ */ new Set();
+        for (const page of pageCacheRef.current.values()) {
+          for (const e2 of page) {
+            const idx = idToIndexRef.current.get(e2.id);
+            if (idx != null && idx >= a && idx <= b) range.add(e2.id);
+          }
+        }
         setSelection(range, entry.id);
       } else {
         setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
@@ -96205,37 +96276,80 @@ function FilesView() {
     setSelection(/* @__PURE__ */ new Set(), null);
     bumpRefreshKey();
   }, [selectedIds, setSelection, bumpRefreshKey]);
-  const groupedByMonth = reactExports.useMemo(() => {
-    if (sortBy !== "date") return null;
+  const columns = viewMode === "list" ? 1 : Math.max(1, Math.floor((viewportWidth - H_PADDING$1 * 2 + ROW_GAP) / (THUMB_SIZE[viewMode] + 20 + ROW_GAP)));
+  const rows = reactExports.useMemo(() => {
+    const itemHeight = viewMode === "list" ? LIST_ROW_HEIGHT : gridRowHeight(viewMode);
     const out = [];
-    let currentKey = null;
-    for (const e of entries) {
-      const key = monthYearKey(e.timestamp);
-      if (key !== currentKey) {
-        out.push({ key, label: monthYearLabel(e.timestamp), items: [] });
-        currentKey = key;
+    const pushItemRows = (startIndex, count) => {
+      if (viewMode === "list") {
+        for (let i = 0; i < count; i++) out.push({ kind: "items", startIndex: startIndex + i, count: 1, height: itemHeight });
+      } else {
+        for (let i = 0; i < count; i += columns) {
+          out.push({ kind: "items", startIndex: startIndex + i, count: Math.min(columns, count - i), height: itemHeight });
+        }
       }
-      out[out.length - 1].items.push(e);
+    };
+    if (sortBy === "date" && monthBuckets.length > 0) {
+      let cursor = 0;
+      for (const bucket of monthBuckets) {
+        out.push({ kind: "header", label: monthYearLabel(bucket.bucketStart), count: bucket.count, height: HEADER_ROW_HEIGHT });
+        pushItemRows(cursor, bucket.count);
+        cursor += bucket.count;
+      }
+    } else if (sortBy !== "date") {
+      pushItemRows(0, total);
     }
     return out;
-  }, [entries, sortBy]);
-  const renderItem = (entry) => {
+  }, [total, monthBuckets, sortBy, viewMode, columns]);
+  const offsets = reactExports.useMemo(() => {
+    const out = new Array(rows.length + 1);
+    out[0] = 0;
+    for (let i = 0; i < rows.length; i++) out[i + 1] = out[i] + rows[i].height;
+    return out;
+  }, [rows]);
+  const totalHeight = offsets[offsets.length - 1] ?? 0;
+  const startIdx = rows.length ? findRowAt(offsets, Math.max(0, scrollTop - OVERSCAN_PX$1)) : 0;
+  const endIdx = rows.length ? findRowAt(offsets, scrollTop + viewportHeight + OVERSCAN_PX$1) : -1;
+  let minVisibleIndex = Infinity;
+  let maxVisibleIndex = -Infinity;
+  for (let i = startIdx; i <= endIdx; i++) {
+    const row = rows[i];
+    if (row?.kind === "items") {
+      minVisibleIndex = Math.min(minVisibleIndex, row.startIndex);
+      maxVisibleIndex = Math.max(maxVisibleIndex, row.startIndex + row.count - 1);
+    }
+  }
+  reactExports.useEffect(() => {
+    if (total === 0 || minVisibleIndex > maxVisibleIndex) return;
+    const epoch = epochRef.current;
+    const groupId = selectedGroupId ?? void 0;
+    const from2 = Math.max(0, minVisibleIndex - FETCH_OVERSCAN_ITEMS);
+    const to = Math.min(total - 1, maxVisibleIndex + FETCH_OVERSCAN_ITEMS);
+    const firstPage = Math.floor(from2 / PAGE_SIZE$1);
+    const lastPage = Math.floor(to / PAGE_SIZE$1);
+    for (let p2 = firstPage; p2 <= lastPage; p2++) {
+      if (pageCacheRef.current.has(p2) || inFlightRef.current.has(p2)) continue;
+      inFlightRef.current.add(p2);
+      window.api.entries.listAll({ groupId, sortBy, sortDir, limit: PAGE_SIZE$1, offset: p2 * PAGE_SIZE$1 }).then((page) => {
+        inFlightRef.current.delete(p2);
+        if (epochRef.current !== epoch) return;
+        pageCacheRef.current.set(p2, page);
+        for (let i = 0; i < page.length; i++) idToIndexRef.current.set(page[i].id, p2 * PAGE_SIZE$1 + i);
+        bumpCacheVersion();
+      });
+    }
+  }, [total, minVisibleIndex, maxVisibleIndex, selectedGroupId, sortBy, sortDir]);
+  const renderEntry = (entry) => {
     const selected = selectedIds.has(entry.id);
-    const common = {
-      entry,
-      selected,
-      onSelect,
-      onActivate,
-      onContextMenu: onEntryContextMenu
-    };
+    const common = { entry, selected, onSelect, onActivate, onContextMenu: onEntryContextMenu };
     if (viewMode === "list") return /* @__PURE__ */ jsxRuntimeExports.jsx(ListRow, { ...common }, entry.id);
     return /* @__PURE__ */ jsxRuntimeExports.jsx(GridCell, { ...common, size: THUMB_SIZE[viewMode] }, entry.id);
   };
-  const renderItems = (items) => {
-    if (viewMode === "list") {
-      return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { children: items.map(renderItem) });
-    }
-    return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 12px" }, children: items.map(renderItem) });
+  const renderSlot = (globalIndex) => {
+    const page = pageCacheRef.current.get(Math.floor(globalIndex / PAGE_SIZE$1));
+    const entry = page?.[globalIndex % PAGE_SIZE$1];
+    if (entry) return renderEntry(entry);
+    return viewMode === "list" ? /* @__PURE__ */ jsxRuntimeExports.jsx(ListSkeleton, {}, `sk-${globalIndex}`) : /* @__PURE__ */ jsxRuntimeExports.jsx(GridSkeleton, { size: THUMB_SIZE[viewMode] }, `sk-${globalIndex}`);
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-surface)" }, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
@@ -96288,36 +96402,54 @@ function FilesView() {
         /* @__PURE__ */ jsxRuntimeExports.jsx(AssignDropdown, { selectedIds, groups, onAssign: handleAssign })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { marginLeft: "auto", fontSize: 12, color: "var(--text-3)" }, children: [
-        entries.length,
+        total,
         " ",
-        entries.length === 1 ? "item" : "items"
+        total === 1 ? "item" : "items"
       ] })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", minHeight: 0 }, children: entries.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: scrollRef, onScroll, style: { flex: 1, overflowY: "auto", minHeight: 0, position: "relative" }, children: total === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
       height: "100%",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       color: "var(--text-4)",
       fontSize: 13
-    }, children: "No entries" }) : groupedByMonth ? groupedByMonth.map((section) => /* @__PURE__ */ jsxRuntimeExports.jsxs("section", { children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
-        position: "sticky",
-        top: 0,
-        zIndex: 1,
-        background: "var(--bg-surface)",
-        padding: "10px 14px 6px",
-        fontSize: 12,
-        fontWeight: 700,
-        color: "var(--text-2)",
-        letterSpacing: 0.4,
-        borderBottom: "1px solid var(--border-light)"
-      }, children: [
-        section.label,
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "var(--text-4)", fontWeight: 400 }, children: section.items.length })
-      ] }),
-      renderItems(section.items)
-    ] }, section.key)) : renderItems(entries) }),
+    }, children: "No entries" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { position: "relative", height: totalHeight }, children: rows.slice(startIdx, endIdx + 1).map((row, i) => {
+      const index = startIdx + i;
+      const top = offsets[index];
+      if (row.kind === "header") {
+        return /* @__PURE__ */ jsxRuntimeExports.jsxs("header", { style: {
+          position: "absolute",
+          top,
+          left: 0,
+          right: 0,
+          height: row.height,
+          background: "var(--bg-surface)",
+          padding: "10px 14px 6px",
+          fontSize: 12,
+          fontWeight: 700,
+          color: "var(--text-2)",
+          letterSpacing: 0.4,
+          borderBottom: "1px solid var(--border-light)"
+        }, children: [
+          row.label,
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { marginLeft: 8, color: "var(--text-4)", fontWeight: 400 }, children: row.count })
+        ] }, `h-${index}`);
+      }
+      if (viewMode === "list") {
+        return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { position: "absolute", top, left: 0, right: 0, height: row.height }, children: renderSlot(row.startIndex) }, `r-${index}`);
+      }
+      return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+        position: "absolute",
+        top,
+        left: 0,
+        right: 0,
+        height: row.height,
+        display: "flex",
+        gap: ROW_GAP,
+        padding: `0 ${H_PADDING$1}px`
+      }, children: Array.from({ length: row.count }, (_, j) => renderSlot(row.startIndex + j)) }, `r-${index}`);
+    }) }) }),
     contextMenuUI
   ] });
 }
@@ -117612,6 +117744,11 @@ function JournalModal() {
     }
   );
 }
+const CARD_WIDTH = 140;
+const CARD_GAP = 10;
+const H_PADDING = 14;
+const OVERSCAN_PX = 400;
+const PAGE_SIZE = 200;
 const TYPE_COLORS = {
   photo: "#3b82f6",
   video: "#8b5cf6",
@@ -117619,7 +117756,7 @@ const TYPE_COLORS = {
   document: "#f59e0b",
   journal: "#ec4899"
 };
-const TYPE_LABELS = {
+const TYPE_LABELS$1 = {
   photo: "PHO",
   video: "VID",
   audio: "AUD",
@@ -117675,7 +117812,7 @@ function ResultCard({ entry, onOpen }) {
             fontWeight: 700,
             color: "#fff",
             letterSpacing: 0.5
-          }, children: TYPE_LABELS[entry.type] ?? "?" }) }),
+          }, children: TYPE_LABELS$1[entry.type] ?? "?" }) }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(VolumeBadgeDot, { volumeId: entry.volume_id })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "7px 8px 8px" }, children: [
@@ -117694,8 +117831,62 @@ function ResultCard({ entry, onOpen }) {
   );
 }
 function SearchResults() {
-  const { searchResults, setSearchResults, setActiveEntryId } = useStore();
-  if (searchResults === null) return null;
+  const { searchFilters, setSearchFilters, setActiveEntryId } = useStore();
+  const scrollRef = reactExports.useRef(null);
+  const [scrollLeft, setScrollLeft] = reactExports.useState(0);
+  const [viewportWidth, setViewportWidth] = reactExports.useState(0);
+  const [total, setTotal] = reactExports.useState(0);
+  const [, bumpCacheVersion] = reactExports.useReducer((n2) => n2 + 1, 0);
+  const pageCacheRef = reactExports.useRef(/* @__PURE__ */ new Map());
+  const inFlightRef = reactExports.useRef(/* @__PURE__ */ new Set());
+  const epochRef = reactExports.useRef(0);
+  reactExports.useEffect(() => {
+    const el2 = scrollRef.current;
+    if (!el2) return;
+    const ro = new ResizeObserver(([entry]) => setViewportWidth(entry.contentRect.width));
+    ro.observe(el2);
+    return () => ro.disconnect();
+  }, []);
+  reactExports.useEffect(() => {
+    epochRef.current++;
+    const epoch = epochRef.current;
+    pageCacheRef.current = /* @__PURE__ */ new Map();
+    inFlightRef.current = /* @__PURE__ */ new Set();
+    setTotal(0);
+    setScrollLeft(0);
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+    bumpCacheVersion();
+    if (!searchFilters) return;
+    window.api.entries.searchCount(searchFilters).then((count) => {
+      if (epochRef.current === epoch) setTotal(count);
+    });
+  }, [searchFilters]);
+  const step = CARD_WIDTH + CARD_GAP;
+  const startIdx = total ? Math.max(0, Math.floor((scrollLeft - OVERSCAN_PX) / step)) : 0;
+  const endIdx = total ? Math.min(total - 1, Math.ceil((scrollLeft + viewportWidth + OVERSCAN_PX) / step)) : -1;
+  reactExports.useEffect(() => {
+    if (!searchFilters || total === 0 || endIdx < startIdx) return;
+    const epoch = epochRef.current;
+    const firstPage = Math.floor(startIdx / PAGE_SIZE);
+    const lastPage = Math.floor(endIdx / PAGE_SIZE);
+    for (let p2 = firstPage; p2 <= lastPage; p2++) {
+      if (pageCacheRef.current.has(p2) || inFlightRef.current.has(p2)) continue;
+      inFlightRef.current.add(p2);
+      window.api.entries.search(searchFilters, { limit: PAGE_SIZE, offset: p2 * PAGE_SIZE }).then((rows) => {
+        inFlightRef.current.delete(p2);
+        if (epochRef.current !== epoch) return;
+        pageCacheRef.current.set(p2, rows);
+        bumpCacheVersion();
+      });
+    }
+  }, [searchFilters, startIdx, endIdx, total]);
+  if (searchFilters === null) return null;
+  const totalWidth = total > 0 ? total * step - CARD_GAP + H_PADDING * 2 : 0;
+  const visible = [];
+  for (let i = startIdx; i <= endIdx; i++) {
+    const entry = pageCacheRef.current.get(Math.floor(i / PAGE_SIZE))?.[i % PAGE_SIZE];
+    if (entry) visible.push({ index: i, entry });
+  }
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
     height: 240,
     borderTop: "1px solid var(--border)",
@@ -117714,14 +117905,14 @@ function SearchResults() {
     }, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 13, fontWeight: 600, color: "var(--text)" }, children: "Search results" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-3)" }, children: [
-        searchResults.length,
+        total,
         " ",
-        searchResults.length === 1 ? "match" : "matches"
+        total === 1 ? "match" : "matches"
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
-          onClick: () => setSearchResults(null),
+          onClick: () => setSearchFilters(null),
           style: {
             marginLeft: "auto",
             background: "none",
@@ -117737,23 +117928,27 @@ function SearchResults() {
         }
       )
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      flex: 1,
-      overflowX: "auto",
-      overflowY: "hidden",
-      display: "flex",
-      alignItems: "flex-start",
-      gap: 10,
-      padding: "12px 14px"
-    }, children: searchResults.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
-      width: "100%",
-      height: "100%",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      color: "var(--text-4)",
-      fontSize: 13
-    }, children: "No matches" }) : searchResults.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(ResultCard, { entry: e, onOpen: setActiveEntryId }, e.id)) })
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        ref: scrollRef,
+        onScroll: (e) => setScrollLeft(e.currentTarget.scrollLeft),
+        style: { flex: 1, overflowX: "auto", overflowY: "hidden", position: "relative" },
+        children: total === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--text-4)",
+          fontSize: 13
+        }, children: "No matches" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { position: "relative", width: totalWidth, height: "100%" }, children: visible.map(({ index, entry }) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+          position: "absolute",
+          top: 12,
+          left: H_PADDING + index * step
+        }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(ResultCard, { entry, onOpen: setActiveEntryId }) }, entry.id)) })
+      }
+    )
   ] });
 }
 const ALL_TYPES = ["photo", "video", "audio", "document", "journal"];
@@ -117770,7 +117965,7 @@ function fromDateInput(v2) {
   return Number.isFinite(t2) ? t2 : null;
 }
 function SearchBar() {
-  const { tags, setTags, setSearchResults } = useStore();
+  const { tags, setTags, setSearchFilters } = useStore();
   const [text, setText] = reactExports.useState("");
   const [open, setOpen] = reactExports.useState(false);
   const [types, setTypes] = reactExports.useState(/* @__PURE__ */ new Set());
@@ -117792,11 +117987,11 @@ function SearchBar() {
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
   const activeFilterCount = (types.size > 0 ? 1 : 0) + (fromDate || toDate ? 1 : 0) + (fileName.trim() ? 1 : 0) + (selectedTagIds.size > 0 ? 1 : 0);
-  const runSearch = reactExports.useCallback(async () => {
+  const runSearch = reactExports.useCallback(() => {
     const hasText = text.trim().length > 0;
     const hasFilters = activeFilterCount > 0;
     if (!hasText && !hasFilters) {
-      setSearchResults(null);
+      setSearchFilters(null);
       return;
     }
     const filters = {
@@ -117807,9 +118002,8 @@ function SearchBar() {
       fileName: fileName.trim() || void 0,
       tagIds: selectedTagIds.size ? [...selectedTagIds] : void 0
     };
-    const results = await window.api.entries.search(filters);
-    setSearchResults(results);
-  }, [text, types, fromDate, toDate, fileName, selectedTagIds, activeFilterCount, setSearchResults]);
+    setSearchFilters(filters);
+  }, [text, types, fromDate, toDate, fileName, selectedTagIds, activeFilterCount, setSearchFilters]);
   const clearAll = () => {
     setText("");
     setTypes(/* @__PURE__ */ new Set());
@@ -117817,7 +118011,7 @@ function SearchBar() {
     setToDate("");
     setFileName("");
     setSelectedTagIds(/* @__PURE__ */ new Set());
-    setSearchResults(null);
+    setSearchFilters(null);
   };
   const toggleType = (t2) => {
     setTypes((prev) => {
@@ -118083,7 +118277,13 @@ const THEMES = [
   { name: "dark", label: "Dark", preview: { bg: "#111110", surface: "#1c1c1a", accent: "#f59e0b" } },
   { name: "sepia", label: "Sepia", preview: { bg: "#f2ede3", surface: "#fdf8f0", accent: "#b87333" } },
   { name: "midnight", label: "Midnight", preview: { bg: "#0d0f1a", surface: "#141620", accent: "#7c6bff" } },
-  { name: "sky", label: "Sky", preview: { bg: "#eef4fb", surface: "#f8fbff", accent: "#0284c7" } }
+  { name: "sky", label: "Sky", preview: { bg: "#eef4fb", surface: "#f8fbff", accent: "#0284c7" } },
+  { name: "forest", label: "Forest", preview: { bg: "#0c1410", surface: "#131f18", accent: "#10b981" } },
+  // Catppuccin (catppuccin.com) — four official flavors, palettes reproduced as published.
+  { name: "latte", label: "Latte", preview: { bg: "#e6e9ef", surface: "#eff1f5", accent: "#1e66f5" } },
+  { name: "frappe", label: "Frappé", preview: { bg: "#232634", surface: "#303446", accent: "#8caaee" } },
+  { name: "macchiato", label: "Macchiato", preview: { bg: "#181926", surface: "#24273a", accent: "#8aadf4" } },
+  { name: "mocha", label: "Mocha", preview: { bg: "#11111b", surface: "#1e1e2e", accent: "#89b4fa" } }
 ];
 function ipcErrorMessage(e) {
   const msg = e?.message ?? String(e);
@@ -118462,7 +118662,7 @@ function SettingsView() {
     /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { style: { fontSize: 18, fontWeight: 700, color: "var(--text)", marginBottom: 28, marginTop: 0 }, children: "Settings" }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Appearance" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 8 }, children: THEMES.map((t2) => {
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: THEMES.map((t2) => {
         const active = activeTheme === t2.name;
         return /* @__PURE__ */ jsxRuntimeExports.jsxs(
           "button",
@@ -118476,7 +118676,7 @@ function SettingsView() {
               padding: "12px 10px",
               borderRadius: 8,
               cursor: "pointer",
-              flex: 1,
+              flex: "0 0 76px",
               border: active ? "2px solid var(--accent)" : "2px solid var(--border)",
               background: active ? "var(--bg-subtle)" : "transparent",
               transition: "border-color 0.1s"
@@ -119198,7 +119398,17 @@ function SettingsView() {
     ] })
   ] });
 }
-function ImportTagModal({ fileCount, onConfirm, onCancel }) {
+const TYPE_LABELS = {
+  photo: "photo",
+  video: "video",
+  audio: "audio",
+  document: "document",
+  journal: "journal"
+};
+function ImportTagModal({ preview, onConfirm, onCancel }) {
+  const { total: fileCount, byType } = preview;
+  const breakdown = Object.entries(byType).filter(([, n2]) => n2 > 0).sort(([, a], [, b]) => b - a);
+  const suspicious = fileCount > 1e3 && byType.document / fileCount > 0.25;
   const [allTags, setAllTags] = reactExports.useState([]);
   const [selected, setSelected] = reactExports.useState(/* @__PURE__ */ new Set());
   const [input, setInput] = reactExports.useState("");
@@ -119273,10 +119483,24 @@ function ImportTagModal({ fileCount, onConfirm, onCancel }) {
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 15, fontWeight: 700, color: "var(--text)", marginBottom: 4 }, children: "Tag this import" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-3)" }, children: [
-        fileCount,
+        fileCount.toLocaleString(),
         " file",
         fileCount !== 1 ? "s" : "",
         " selected — tags are optional"
+      ] }),
+      breakdown.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-4)", marginTop: 2 }, children: breakdown.map(([type2, n2]) => `${n2.toLocaleString()} ${TYPE_LABELS[type2] ?? type2}${n2 !== 1 ? "s" : ""}`).join(" · ") }),
+      suspicious && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        marginTop: 10,
+        padding: "8px 10px",
+        borderRadius: 6,
+        fontSize: 12,
+        background: "var(--bg-subtle)",
+        border: "1px solid #d97706",
+        color: "var(--text-2)"
+      }, children: [
+        `⚠ That's a lot of files for what looks like a media import, and most of them are "document" type. This can happen when a folder (especially on an external drive) contains hidden OS files (Recycle Bin, Spotlight index, lost+found, etc.) alongside your media. Consider canceling and double-checking the source folder before importing `,
+        fileCount.toLocaleString(),
+        " files."
       ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
@@ -120193,9 +120417,9 @@ function IngestProgressBar() {
   ] });
 }
 function Main() {
-  const { ingestProgress, syncProgress, selectedPeriod, selectedLocation, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore();
+  const { ingestProgress, syncProgress, selectedPeriod, selectedLocation, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchFilters, settings, setSettings } = useStore();
   const browserOpen = fileBrowserOpen || selectedPeriod !== null || selectedLocation !== null;
-  const bottomOpen = browserOpen || searchResults !== null;
+  const bottomOpen = browserOpen || searchFilters !== null;
   const isSyncing = syncProgress !== null && syncProgress.phase !== "done";
   const isImporting = ingestProgress !== null && !ingestProgress.done;
   const [importPending, setImportPending] = reactExports.useState(null);
@@ -120226,8 +120450,8 @@ function Main() {
   }, [settings, setSettings]);
   async function startImportFlow(paths) {
     if (!paths.length) return;
-    const count = await window.api.ingest.countFiles(paths);
-    setImportPending({ paths, count });
+    const preview = await window.api.ingest.countFiles(paths);
+    setImportPending({ paths, preview });
   }
   async function handleImport(mode) {
     const paths = await window.api.ingest.pickFiles(mode);
@@ -120419,7 +120643,7 @@ function Main() {
         importPending && /* @__PURE__ */ jsxRuntimeExports.jsx(
           ImportTagModal,
           {
-            fileCount: importPending.count,
+            preview: importPending.preview,
             onConfirm: confirmImport,
             onCancel: () => setImportPending(null)
           }
