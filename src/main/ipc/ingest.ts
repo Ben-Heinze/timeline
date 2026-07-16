@@ -1,10 +1,10 @@
 import { ipcMain, dialog, BrowserWindow, app } from 'electron'
 import fs from 'fs/promises'
 import path from 'path'
-import { ingestFiles, expandPaths } from '../ingest'
+import { ingestFiles, expandPaths, detectType } from '../ingest'
 import { runSync, scanDuplicates, isCurrentlySyncing } from '../sync'
 import { bulkSetEntryTags } from '../db/queries/tags'
-import type { IngestProgressEvent, IngestDoneEvent, IngestFailure } from '../../shared/types'
+import type { IngestProgressEvent, IngestDoneEvent, IngestFailure, ImportPreview, EntryType } from '../../shared/types'
 
 async function writeImportErrorLog(failures: IngestFailure[]): Promise<string | null> {
   try {
@@ -43,9 +43,14 @@ export function registerIngestHandlers(): void {
     return result.filePaths
   })
 
-  ipcMain.handle('ingest:countFiles', async (_, paths: string[]) => {
+  ipcMain.handle('ingest:countFiles', async (_, paths: string[]): Promise<ImportPreview> => {
     const files = await expandPaths(paths)
-    return files.length
+    const byType: Record<EntryType, number> = { photo: 0, video: 0, audio: 0, document: 0, journal: 0 }
+    for (const f of files) {
+      const type = detectType(path.extname(f.filePath))
+      byType[type]++
+    }
+    return { total: files.length, byType }
   })
 
   ipcMain.handle('ingest:start', async (event, filePaths: string[], tagNames: string[] = []) => {

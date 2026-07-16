@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useStore } from './store/useStore'
-import type { IngestFailure } from '../shared/types'
+import type { IngestFailure, ImportPreview } from '../shared/types'
 import TimelineCanvas, { yearViewRange } from './components/TimelineCanvas'
 import CalendarHeatmap from './components/CalendarHeatmap'
 import MapView from './components/MapView'
@@ -251,12 +251,12 @@ function IngestProgressBar() {
 }
 
 function Main() {
-  const { ingestProgress, syncProgress, selectedPeriod, selectedLocation, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchResults, settings, setSettings } = useStore()
+  const { ingestProgress, syncProgress, selectedPeriod, selectedLocation, fileBrowserOpen, openJournalModal, activeView, setActiveView, searchFilters, settings, setSettings } = useStore()
   const browserOpen = fileBrowserOpen || selectedPeriod !== null || selectedLocation !== null
-  const bottomOpen = browserOpen || searchResults !== null
+  const bottomOpen = browserOpen || searchFilters !== null
   const isSyncing = syncProgress !== null && syncProgress.phase !== 'done'
   const isImporting = ingestProgress !== null && !ingestProgress.done
-  const [importPending, setImportPending] = useState<{ paths: string[]; count: number } | null>(null)
+  const [importPending, setImportPending] = useState<{ paths: string[]; preview: ImportPreview } | null>(null)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const dragCounterRef = React.useRef(0)
   const importBusy = isImporting || isSyncing
@@ -288,8 +288,8 @@ function Main() {
 
   async function startImportFlow(paths: string[]) {
     if (!paths.length) return
-    const count = await window.api.ingest.countFiles(paths)
-    setImportPending({ paths, count })
+    const preview = await window.api.ingest.countFiles(paths)
+    setImportPending({ paths, preview })
   }
 
   async function handleImport(mode: 'files' | 'folder') {
@@ -482,7 +482,7 @@ function Main() {
       <LifeEventModal />
       {importPending && (
         <ImportTagModal
-          fileCount={importPending.count}
+          preview={importPending.preview}
           onConfirm={confirmImport}
           onCancel={() => setImportPending(null)}
         />

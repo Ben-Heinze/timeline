@@ -1,7 +1,7 @@
 import { getDb } from '../index'
 import { getGroupSubtreeIds } from './groups'
 import { bucketExprSql } from './bucketing'
-import type { Entry, Bucket, SearchFilters, DuplicateGroup } from '../../../shared/types'
+import type { Entry, Bucket, SearchFilters, DuplicateGroup, PageParams, MonthBucket } from '../../../shared/types'
 
 // Selecting a group includes its whole subtree. Ids come from our own table,
 // so inlining them keeps the queries on named parameters only.
@@ -71,10 +71,10 @@ export function listAllEntries(opts: {
   groupId?: number
   sortBy: 'date' | 'title' | 'type' | 'tag'
   sortDir: 'asc' | 'desc'
-}): Entry[] {
+} & PageParams): Entry[] {
   const dir = opts.sortDir === 'asc' ? 'ASC' : 'DESC'
   const where = opts.groupId != null ? `WHERE e.${groupFilterSql(opts.groupId)}` : ''
-  const params: Record<string, unknown> = {}
+  const params: Record<string, unknown> = { limit: opts.limit, offset: opts.offset }
 
   if (opts.sortBy === 'tag') {
     // Sort by the alphabetically-first tag on each entry; entries with no tags always go last
@@ -89,6 +89,7 @@ export function listAllEntries(opts: {
         CASE WHEN MIN(t.name) IS NULL THEN 1 ELSE 0 END ASC,
         MIN(t.name) ${dir},
         e.timestamp DESC
+      LIMIT @limit OFFSET @offset
     `).all(params) as Entry[]
   }
 
@@ -99,10 +100,34 @@ export function listAllEntries(opts: {
     SELECT * FROM entries
     ${simpleWhere}
     ORDER BY ${col} ${dir}${tie}
+    LIMIT @limit OFFSET @offset
   `).all(params) as Entry[]
 }
 
-export function searchEntries(filters: SearchFilters): Entry[] {
+export function countAllEntries(opts: { groupId?: number }): number {
+  const where = opts.groupId != null ? `WHERE ${groupFilterSql(opts.groupId)}` : ''
+  const row = getDb().prepare(`SELECT COUNT(*) AS count FROM entries ${where}`).get() as { count: number }
+  return row.count
+}
+
+// Header/row skeleton for the Files view's date sort: how many entries fall in each
+// calendar month, without fetching the entries themselves. Same bucket convention as
+// the timeline histogram, so "July 2026" here means the same span it means there.
+export function getMonthBuckets(opts: { groupId?: number; sortDir: 'asc' | 'desc' }): MonthBucket[] {
+  const dir = opts.sortDir === 'asc' ? 'ASC' : 'DESC'
+  const where = opts.groupId != null ? `WHERE ${groupFilterSql(opts.groupId)}` : ''
+  const bucketExpr = bucketExprSql('month')
+  const rows = getDb().prepare(`
+    SELECT ${bucketExpr} AS bucket_start, COUNT(*) AS count
+    FROM entries
+    ${where}
+    GROUP BY bucket_start
+    ORDER BY bucket_start ${dir}
+  `).all() as { bucket_start: number; count: number }[]
+  return rows.map(r => ({ bucketStart: r.bucket_start, count: r.count }))
+}
+
+function buildSearchFilterSql(filters: SearchFilters): { whereSql: string; tagJoin: string; params: Record<string, unknown> } {
   const where: string[] = []
   const params: Record<string, unknown> = {}
 
@@ -139,16 +164,35 @@ export function searchEntries(filters: SearchFilters): Entry[] {
     where.push('(et.tag_id IS NOT NULL OR gt.tag_id IS NOT NULL)')
   }
 
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+  return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', tagJoin, params }
+}
+
+export function searchEntries(filters: SearchFilters, page: PageParams): Entry[] {
+  const { whereSql, tagJoin, params } = buildSearchFilterSql(filters)
   const sql = `
     SELECT DISTINCT e.* FROM entries e
     LEFT JOIN groups g ON g.id = e.group_id
     ${tagJoin}
     ${whereSql}
     ORDER BY e.timestamp DESC
-    LIMIT 500
+    LIMIT @limit OFFSET @offset
   `
-  return getDb().prepare(sql).all(params) as Entry[]
+  return getDb().prepare(sql).all({ ...params, limit: page.limit, offset: page.offset }) as Entry[]
+}
+
+export function countSearchResults(filters: SearchFilters): number {
+  const { whereSql, tagJoin, params } = buildSearchFilterSql(filters)
+  // DISTINCT count needs a subquery since the tag join can multiply rows per entry
+  const sql = `
+    SELECT COUNT(*) AS count FROM (
+      SELECT DISTINCT e.id FROM entries e
+      LEFT JOIN groups g ON g.id = e.group_id
+      ${tagJoin}
+      ${whereSql}
+    )
+  `
+  const row = getDb().prepare(sql).get(params) as { count: number }
+  return row.count
 }
 
 export function insertEntry(entry: Omit<Entry, 'id'>): number {

@@ -1,13 +1,16 @@
 import { create } from 'zustand'
-import type { AppSettings, Bucket, Group, IngestProgress, Entry, ZoomLevel, Tag, SyncProgressEvent, LifeEvent, VolumeStatus, YearlySpotifySummary } from '../../shared/types'
+import type { AppSettings, Bucket, Group, IngestProgress, Entry, ZoomLevel, Tag, SyncProgressEvent, LifeEvent, VolumeStatus, YearlySpotifySummary, SearchFilters } from '../../shared/types'
 
 interface TimelineStore {
   tags: Tag[]
   setTags: (tags: Tag[]) => void
   volumes: VolumeStatus[]
   setVolumes: (volumes: VolumeStatus[]) => void
-  searchResults: Entry[] | null
-  setSearchResults: (results: Entry[] | null) => void
+  // The active search's filters, not its results — SearchResults fetches its own
+  // paged results so a search matching huge numbers of entries doesn't hold them
+  // all in the store at once.
+  searchFilters: SearchFilters | null
+  setSearchFilters: (filters: SearchFilters | null) => void
   visibleRange: [number, number]
   zoomLevel: ZoomLevel
   activeView: 'timeline' | 'calendar' | 'map' | 'files' | 'spotify' | 'settings'
@@ -102,13 +105,13 @@ export const useStore = create<TimelineStore>((set) => ({
   refreshKey: 0,
   tags: [],
   volumes: [],
-  searchResults: null,
+  searchFilters: null,
   rangeSelectMode: false,
   dateRangeSelection: null,
   pendingDateRange: null,
   setTags: (tags) => set({ tags }),
   setVolumes: (volumes) => set({ volumes }),
-  setSearchResults: (results) => set({ searchResults: results }),
+  setSearchFilters: (filters) => set({ searchFilters: filters }),
 
   setVisibleRange: (range) => set({ visibleRange: range }),
   setZoomLevel: (level) => set({ zoomLevel: level }),

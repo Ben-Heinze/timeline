@@ -1,19 +1,82 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
 import { useEntryContextMenu } from './EntryContextMenu'
-import type { Entry, FileViewMode as ViewMode } from '../../shared/types'
+import type { Entry, FileViewMode as ViewMode, MonthBucket } from '../../shared/types'
 import { GridCell, ListRow, THUMB_SIZE, iconFor, toolBtn } from './entryDisplay'
 import { AssignDropdown } from './GroupPicker'
 
 type SortBy = 'date' | 'title' | 'type' | 'tag'
 type SortDir = 'asc' | 'desc'
 
-function monthYearKey(ms: number): string {
-  const d = new Date(ms)
-  return `${d.getFullYear()}-${d.getMonth()}`
-}
 function monthYearLabel(ms: number): string {
   return new Date(ms).toLocaleString('en-US', { month: 'long', year: 'numeric' })
+}
+
+// Cells/rows are a fixed height per view mode, so rather than mount every entry
+// (tens of thousands is a realistic library size for a lifelong archive, and
+// used to hang/crash the renderer), only the rows intersecting the viewport are
+// ever put in the DOM. Likewise the row *skeleton* (below) is built from counts
+// only — the actual Entry data for a row is fetched in PAGE_SIZE-sized pages as
+// the visible range demands, not fetched or held in full up front.
+const ROW_GAP = 8
+const H_PADDING = 12
+const LIST_ROW_HEIGHT = 38
+const HEADER_ROW_HEIGHT = 34
+const OVERSCAN_PX = 600
+const PAGE_SIZE = 300
+const FETCH_OVERSCAN_ITEMS = PAGE_SIZE
+function gridRowHeight(viewMode: Exclude<ViewMode, 'list'>): number {
+  return THUMB_SIZE[viewMode] + 58 // thumb + label lines + cell padding, with a little headroom
+}
+
+type Row =
+  | { kind: 'header'; label: string; count: number; height: number }
+  | { kind: 'items'; startIndex: number; count: number; height: number }
+
+/** Largest index i such that offsets[i] <= y (offsets is non-decreasing, length = rows.length + 1). */
+function findRowAt(offsets: number[], y: number): number {
+  let lo = 0
+  let hi = offsets.length - 2
+  if (hi < 0) return 0
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (offsets[mid] <= y) lo = mid
+    else hi = mid - 1
+  }
+  return lo
+}
+
+function useElementSize<T extends HTMLElement>(): [React.RefObject<T>, number, number] {
+  const ref = useRef<T>(null)
+  const [w, setW] = useState(0)
+  const [h, setH] = useState(0)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => {
+      setW(entry.contentRect.width)
+      setH(entry.contentRect.height)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return [ref, w, h]
+}
+
+function GridSkeleton({ size }: { size: number }) {
+  return (
+    <div style={{ width: size + 20, padding: 8, display: 'flex', justifyContent: 'center' }}>
+      <div style={{ width: size, height: size, borderRadius: 6, background: 'var(--bg-thumb)', opacity: 0.5 }} />
+    </div>
+  )
+}
+
+function ListSkeleton() {
+  return (
+    <div style={{ padding: '5px 14px', height: '100%', display: 'flex', alignItems: 'center' }}>
+      <div style={{ width: '60%', height: 12, borderRadius: 4, background: 'var(--bg-thumb)', opacity: 0.5 }} />
+    </div>
+  )
 }
 
 export default function FilesView() {
@@ -24,19 +87,58 @@ export default function FilesView() {
     groups,
   } = useStore()
 
-  const [entries, setEntries] = useState<Entry[]>([])
   const [viewMode, setViewMode] = useState<ViewMode>('medium')
   const [sortBy, setSortBy] = useState<SortBy>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
-  const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(entries)
+  const [total, setTotal] = useState(0)
+  const [monthBuckets, setMonthBuckets] = useState<MonthBucket[]>([])
+  // Loaded pages of entries, keyed by page index, plus a reverse id -> global-index
+  // lookup (used for shift-range selection) — populated on demand, never all at once.
+  const pageCacheRef = useRef<Map<number, Entry[]>>(new Map())
+  const idToIndexRef = useRef<Map<number, number>>(new Map())
+  const inFlightRef = useRef<Set<number>>(new Set())
+  const epochRef = useRef(0)
+  const [cacheVersion, bumpCacheVersion] = useReducer((n: number) => n + 1, 0)
 
+  const [scrollRef, viewportWidth, viewportHeight] = useElementSize<HTMLDivElement>()
+  const [scrollTop, setScrollTop] = useState(0)
+  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => setScrollTop(e.currentTarget.scrollTop), [])
+
+  // Filter/sort identity changed: everything already loaded is invalid.
   useEffect(() => {
-    window.api.entries.listAll({
-      groupId: selectedGroupId ?? undefined,
-      sortBy, sortDir,
-    }).then(setEntries)
+    epochRef.current++
+    const epoch = epochRef.current
+    pageCacheRef.current = new Map()
+    idToIndexRef.current = new Map()
+    inFlightRef.current = new Set()
+    setTotal(0)
+    setMonthBuckets([])
+    setScrollTop(0)
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+    bumpCacheVersion()
+
+    const groupId = selectedGroupId ?? undefined
+    window.api.entries.listAllCount({ groupId }).then(count => {
+      if (epochRef.current === epoch) setTotal(count)
+    })
+    if (sortBy === 'date') {
+      window.api.entries.monthBuckets({ groupId, sortDir }).then(buckets => {
+        if (epochRef.current === epoch) setMonthBuckets(buckets)
+      })
+    }
+    // scrollRef is a stable ref object; not a dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedGroupId, sortBy, sortDir, refreshKey])
+
+  const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(
+    useMemo(() => {
+      const out: Entry[] = []
+      for (const page of pageCacheRef.current.values()) out.push(...page)
+      return out
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cacheVersion])
+  )
 
   // Stable handlers (live state read via refs) so the memoized rows below only
   // re-render when their own selection state changes, not on every click.
@@ -44,23 +146,28 @@ export default function FilesView() {
   selectedIdsRef.current = selectedIds
   const lastSelectedIdRef = useRef(lastSelectedId)
   lastSelectedIdRef.current = lastSelectedId
-  const entriesRef = useRef(entries)
-  entriesRef.current = entries
 
   const onSelect = useCallback((e: React.MouseEvent, entry: Entry) => {
     const selectedIds = selectedIdsRef.current
     const lastSelectedId = lastSelectedIdRef.current
-    const entries = entriesRef.current
     if (e.metaKey || e.ctrlKey) {
       const next = new Set(selectedIds)
       if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id)
       setSelection(next, entry.id)
     } else if (e.shiftKey && lastSelectedId !== null) {
-      const from = entries.findIndex(x => x.id === lastSelectedId)
-      const to = entries.findIndex(x => x.id === entry.id)
-      if (from >= 0 && to >= 0) {
-        const [a, b] = from < to ? [from, to] : [to, from]
-        const range = new Set(entries.slice(a, b + 1).map(x => x.id))
+      // Range selection only spans entries whose page has already been loaded —
+      // in practice both shift-click endpoints are ones the user has scrolled to.
+      const fromIdx = idToIndexRef.current.get(lastSelectedId)
+      const toIdx = idToIndexRef.current.get(entry.id)
+      if (fromIdx != null && toIdx != null) {
+        const [a, b] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx]
+        const range = new Set<number>()
+        for (const page of pageCacheRef.current.values()) {
+          for (const e2 of page) {
+            const idx = idToIndexRef.current.get(e2.id)
+            if (idx != null && idx >= a && idx <= b) range.add(e2.id)
+          }
+        }
         setSelection(range, entry.id)
       } else {
         setSelection(new Set([entry.id]), entry.id)
@@ -78,42 +185,95 @@ export default function FilesView() {
     bumpRefreshKey()
   }, [selectedIds, setSelection, bumpRefreshKey])
 
-  const groupedByMonth = useMemo(() => {
-    if (sortBy !== 'date') return null
-    const out: { key: string; label: string; items: Entry[] }[] = []
-    let currentKey: string | null = null
-    for (const e of entries) {
-      const key = monthYearKey(e.timestamp)
-      if (key !== currentKey) {
-        out.push({ key, label: monthYearLabel(e.timestamp), items: [] })
-        currentKey = key
+  const columns = viewMode === 'list'
+    ? 1
+    : Math.max(1, Math.floor((viewportWidth - H_PADDING * 2 + ROW_GAP) / (THUMB_SIZE[viewMode] + 20 + ROW_GAP)))
+
+  // Row skeleton: built from total/monthBuckets counts only, never from fetched
+  // entries, so it's available (and cheap) before a single page has loaded.
+  const rows = useMemo<Row[]>(() => {
+    const itemHeight = viewMode === 'list' ? LIST_ROW_HEIGHT : gridRowHeight(viewMode)
+    const out: Row[] = []
+    const pushItemRows = (startIndex: number, count: number) => {
+      if (viewMode === 'list') {
+        for (let i = 0; i < count; i++) out.push({ kind: 'items', startIndex: startIndex + i, count: 1, height: itemHeight })
+      } else {
+        for (let i = 0; i < count; i += columns) {
+          out.push({ kind: 'items', startIndex: startIndex + i, count: Math.min(columns, count - i), height: itemHeight })
+        }
       }
-      out[out.length - 1].items.push(e)
+    }
+    if (sortBy === 'date' && monthBuckets.length > 0) {
+      let cursor = 0
+      for (const bucket of monthBuckets) {
+        out.push({ kind: 'header', label: monthYearLabel(bucket.bucketStart), count: bucket.count, height: HEADER_ROW_HEIGHT })
+        pushItemRows(cursor, bucket.count)
+        cursor += bucket.count
+      }
+    } else if (sortBy !== 'date') {
+      pushItemRows(0, total)
     }
     return out
-  }, [entries, sortBy])
+  }, [total, monthBuckets, sortBy, viewMode, columns])
 
-  const renderItem = (entry: Entry) => {
-    const selected = selectedIds.has(entry.id)
-    const common = {
-      entry, selected,
-      onSelect,
-      onActivate,
-      onContextMenu: onEntryContextMenu,
+  const offsets = useMemo(() => {
+    const out = new Array<number>(rows.length + 1)
+    out[0] = 0
+    for (let i = 0; i < rows.length; i++) out[i + 1] = out[i] + rows[i].height
+    return out
+  }, [rows])
+  const totalHeight = offsets[offsets.length - 1] ?? 0
+
+  const startIdx = rows.length ? findRowAt(offsets, Math.max(0, scrollTop - OVERSCAN_PX)) : 0
+  const endIdx = rows.length ? findRowAt(offsets, scrollTop + viewportHeight + OVERSCAN_PX) : -1
+
+  // Range of global entry indices covered by the currently-visible rows.
+  let minVisibleIndex = Infinity
+  let maxVisibleIndex = -Infinity
+  for (let i = startIdx; i <= endIdx; i++) {
+    const row = rows[i]
+    if (row?.kind === 'items') {
+      minVisibleIndex = Math.min(minVisibleIndex, row.startIndex)
+      maxVisibleIndex = Math.max(maxVisibleIndex, row.startIndex + row.count - 1)
     }
+  }
+
+  // Fetch whichever pages the visible range (plus overscan) needs.
+  useEffect(() => {
+    if (total === 0 || minVisibleIndex > maxVisibleIndex) return
+    const epoch = epochRef.current
+    const groupId = selectedGroupId ?? undefined
+    const from = Math.max(0, minVisibleIndex - FETCH_OVERSCAN_ITEMS)
+    const to = Math.min(total - 1, maxVisibleIndex + FETCH_OVERSCAN_ITEMS)
+    const firstPage = Math.floor(from / PAGE_SIZE)
+    const lastPage = Math.floor(to / PAGE_SIZE)
+    for (let p = firstPage; p <= lastPage; p++) {
+      if (pageCacheRef.current.has(p) || inFlightRef.current.has(p)) continue
+      inFlightRef.current.add(p)
+      window.api.entries.listAll({ groupId, sortBy, sortDir, limit: PAGE_SIZE, offset: p * PAGE_SIZE }).then(page => {
+        inFlightRef.current.delete(p)
+        if (epochRef.current !== epoch) return
+        pageCacheRef.current.set(p, page)
+        for (let i = 0; i < page.length; i++) idToIndexRef.current.set(page[i].id, p * PAGE_SIZE + i)
+        bumpCacheVersion()
+      })
+    }
+  }, [total, minVisibleIndex, maxVisibleIndex, selectedGroupId, sortBy, sortDir])
+
+  const renderEntry = (entry: Entry) => {
+    const selected = selectedIds.has(entry.id)
+    const common = { entry, selected, onSelect, onActivate, onContextMenu: onEntryContextMenu }
     if (viewMode === 'list') return <ListRow key={entry.id} {...common} />
     return <GridCell key={entry.id} {...common} size={THUMB_SIZE[viewMode]} />
   }
 
-  const renderItems = (items: Entry[]) => {
-    if (viewMode === 'list') {
-      return <div>{items.map(renderItem)}</div>
-    }
-    return (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '10px 12px' }}>
-        {items.map(renderItem)}
-      </div>
-    )
+  const renderSlot = (globalIndex: number) => {
+    const page = pageCacheRef.current.get(Math.floor(globalIndex / PAGE_SIZE))
+    const entry = page?.[globalIndex % PAGE_SIZE]
+    if (entry) return renderEntry(entry)
+    return viewMode === 'list'
+      ? <ListSkeleton key={`sk-${globalIndex}`} />
+      : <GridSkeleton key={`sk-${globalIndex}`} size={THUMB_SIZE[viewMode]} />
   }
 
   return (
@@ -169,39 +329,57 @@ export default function FilesView() {
         )}
 
         <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-3)' }}>
-          {entries.length} {entries.length === 1 ? 'item' : 'items'}
+          {total} {total === 1 ? 'item' : 'items'}
         </span>
       </div>
 
       {/* Body */}
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-        {entries.length === 0 ? (
+      <div ref={scrollRef} onScroll={onScroll} style={{ flex: 1, overflowY: 'auto', minHeight: 0, position: 'relative' }}>
+        {total === 0 ? (
           <div style={{
             height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: 'var(--text-4)', fontSize: 13,
           }}>
             No entries
           </div>
-        ) : groupedByMonth ? (
-          groupedByMonth.map(section => (
-            <section key={section.key}>
-              <header style={{
-                position: 'sticky', top: 0, zIndex: 1,
-                background: 'var(--bg-surface)',
-                padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
-                color: 'var(--text-2)', letterSpacing: 0.4,
-                borderBottom: '1px solid var(--border-light)',
-              }}>
-                {section.label}
-                <span style={{ marginLeft: 8, color: 'var(--text-4)', fontWeight: 400 }}>
-                  {section.items.length}
-                </span>
-              </header>
-              {renderItems(section.items)}
-            </section>
-          ))
         ) : (
-          renderItems(entries)
+          <div style={{ position: 'relative', height: totalHeight }}>
+            {rows.slice(startIdx, endIdx + 1).map((row, i) => {
+              const index = startIdx + i
+              const top = offsets[index]
+              if (row.kind === 'header') {
+                return (
+                  <header key={`h-${index}`} style={{
+                    position: 'absolute', top, left: 0, right: 0, height: row.height,
+                    background: 'var(--bg-surface)',
+                    padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
+                    color: 'var(--text-2)', letterSpacing: 0.4,
+                    borderBottom: '1px solid var(--border-light)',
+                  }}>
+                    {row.label}
+                    <span style={{ marginLeft: 8, color: 'var(--text-4)', fontWeight: 400 }}>
+                      {row.count}
+                    </span>
+                  </header>
+                )
+              }
+              if (viewMode === 'list') {
+                return (
+                  <div key={`r-${index}`} style={{ position: 'absolute', top, left: 0, right: 0, height: row.height }}>
+                    {renderSlot(row.startIndex)}
+                  </div>
+                )
+              }
+              return (
+                <div key={`r-${index}`} style={{
+                  position: 'absolute', top, left: 0, right: 0, height: row.height,
+                  display: 'flex', gap: ROW_GAP, padding: `0 ${H_PADDING}px`,
+                }}>
+                  {Array.from({ length: row.count }, (_, j) => renderSlot(row.startIndex + j))}
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
 

@@ -24,7 +24,7 @@ function fromDateInput(v: string): number | null {
 }
 
 export default function SearchBar() {
-  const { tags, setTags, setSearchResults } = useStore()
+  const { tags, setTags, setSearchFilters } = useStore()
   const [text, setText] = useState('')
   const [open, setOpen] = useState(false)
   const [types, setTypes] = useState<Set<EntryType>>(new Set())
@@ -52,11 +52,11 @@ export default function SearchBar() {
     (fileName.trim() ? 1 : 0) +
     (selectedTagIds.size > 0 ? 1 : 0)
 
-  const runSearch = useCallback(async () => {
+  const runSearch = useCallback(() => {
     const hasText = text.trim().length > 0
     const hasFilters = activeFilterCount > 0
     if (!hasText && !hasFilters) {
-      setSearchResults(null)
+      setSearchFilters(null)
       return
     }
     const filters: SearchFilters = {
@@ -67,13 +67,12 @@ export default function SearchBar() {
       fileName: fileName.trim() || undefined,
       tagIds: selectedTagIds.size ? [...selectedTagIds] : undefined,
     }
-    const results = await window.api.entries.search(filters)
-    setSearchResults(results)
-  }, [text, types, fromDate, toDate, fileName, selectedTagIds, activeFilterCount, setSearchResults])
+    setSearchFilters(filters)
+  }, [text, types, fromDate, toDate, fileName, selectedTagIds, activeFilterCount, setSearchFilters])
 
   const clearAll = () => {
     setText(''); setTypes(new Set()); setFromDate(''); setToDate(''); setFileName(''); setSelectedTagIds(new Set())
-    setSearchResults(null)
+    setSearchFilters(null)
   }
 
   const toggleType = (t: EntryType) => {

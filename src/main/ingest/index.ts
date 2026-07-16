@@ -492,9 +492,30 @@ interface PendingFile {
   groupPath: string[]  // folder names from the imported root down; [] = don't group
 }
 
+// OS/filesystem junk that shows up when walking a directory tree, especially on
+// external drives that have touched multiple operating systems: AppleDouble
+// sidecar files and Spotlight/Trash folders (macOS + exFAT/FAT32), System
+// Volume Information / Recycle Bin (Windows), and fsck orphans (any OS). None
+// of this is user content, but nothing stops fs.readdir from returning it, so
+// a big external drive can silently balloon a "few hundred videos" import into
+// tens of thousands of ingested entries.
+const JUNK_NAMES = new Set([
+  'system volume information',
+  '$recycle.bin',
+  'lost+found',
+  'thumbs.db',
+  'desktop.ini',
+])
+function isJunkEntry(name: string): boolean {
+  // Covers .DS_Store, ._AppleDouble sidecars, .Spotlight-V100, .Trashes, .fseventsd, etc.
+  if (name.startsWith('.')) return true
+  return JUNK_NAMES.has(name.toLowerCase())
+}
+
 async function walkDir(root: string, rootName: string, dir: string, out: PendingFile[]): Promise<void> {
   const entries = await fs.readdir(dir, { withFileTypes: true })
   for (const entry of entries) {
+    if (isJunkEntry(entry.name)) continue
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
       await walkDir(root, rootName, full, out)

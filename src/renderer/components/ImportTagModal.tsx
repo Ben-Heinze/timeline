@@ -1,13 +1,26 @@
 import React, { useEffect, useRef, useState } from 'react'
-import type { Tag } from '../../shared/types'
+import type { ImportPreview, Tag } from '../../shared/types'
 
 interface Props {
-  fileCount: number
+  preview: ImportPreview
   onConfirm: (tagNames: string[]) => void
   onCancel: () => void
 }
 
-export default function ImportTagModal({ fileCount, onConfirm, onCancel }: Props) {
+const TYPE_LABELS: Record<string, string> = {
+  photo: 'photo', video: 'video', audio: 'audio', document: 'document', journal: 'journal',
+}
+
+export default function ImportTagModal({ preview, onConfirm, onCancel }: Props) {
+  const { total: fileCount, byType } = preview
+  const breakdown = (Object.entries(byType) as [string, number][])
+    .filter(([, n]) => n > 0)
+    .sort(([, a], [, b]) => b - a)
+  // Junk swept in from OS/filesystem clutter (Spotlight indexes, Recycle Bin,
+  // fsck orphans, …) almost always lands in the catch-all "document" bucket,
+  // so a large, disproportionate document count is the tell that something
+  // other than real media got picked up.
+  const suspicious = fileCount > 1000 && byType.document / fileCount > 0.25
   const [allTags, setAllTags] = useState<Tag[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
@@ -80,8 +93,25 @@ export default function ImportTagModal({ fileCount, onConfirm, onCancel }: Props
             Tag this import
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-            {fileCount} file{fileCount !== 1 ? 's' : ''} selected — tags are optional
+            {fileCount.toLocaleString()} file{fileCount !== 1 ? 's' : ''} selected — tags are optional
           </div>
+          {breakdown.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 2 }}>
+              {breakdown.map(([type, n]) => `${n.toLocaleString()} ${TYPE_LABELS[type] ?? type}${n !== 1 ? 's' : ''}`).join(' · ')}
+            </div>
+          )}
+          {suspicious && (
+            <div style={{
+              marginTop: 10, padding: '8px 10px', borderRadius: 6, fontSize: 12,
+              background: 'var(--bg-subtle)', border: '1px solid #d97706', color: 'var(--text-2)',
+            }}>
+              ⚠ That's a lot of files for what looks like a media import, and most of them
+              are "document" type. This can happen when a folder (especially on an external
+              drive) contains hidden OS files (Recycle Bin, Spotlight index, lost+found, etc.)
+              alongside your media. Consider canceling and double-checking the source folder
+              before importing {fileCount.toLocaleString()} files.
+            </div>
+          )}
         </div>
 
         {/* Existing + newly added tags */}

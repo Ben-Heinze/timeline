@@ -7,14 +7,14 @@ import type {
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
-  SetDateParams, RescanProgressEvent, RescanResult,
+  SetDateParams, RescanProgressEvent, RescanResult, ImportPreview, PageParams, MonthBucket, Entry,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
   ingest: {
     pickFiles: (mode?: 'files' | 'folder'): Promise<string[]> =>
       ipcRenderer.invoke('ingest:pickFiles', mode),
-    countFiles: (paths: string[]): Promise<number> =>
+    countFiles: (paths: string[]): Promise<ImportPreview> =>
       ipcRenderer.invoke('ingest:countFiles', paths),
     start: (filePaths: string[], tagNames?: string[]) =>
       ipcRenderer.invoke('ingest:start', filePaths, tagNames ?? []),
@@ -60,10 +60,16 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('entries:extent'),
     locations: () =>
       ipcRenderer.invoke('entries:locations'),
-    search: (filters: SearchFilters) =>
-      ipcRenderer.invoke('entries:search', filters),
-    listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type' | 'tag'; sortDir: 'asc' | 'desc' }) =>
+    search: (filters: SearchFilters, page: PageParams): Promise<Entry[]> =>
+      ipcRenderer.invoke('entries:search', filters, page),
+    searchCount: (filters: SearchFilters): Promise<number> =>
+      ipcRenderer.invoke('entries:searchCount', filters),
+    listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type' | 'tag'; sortDir: 'asc' | 'desc' } & PageParams): Promise<Entry[]> =>
       ipcRenderer.invoke('entries:listAll', opts),
+    listAllCount: (opts: { groupId?: number }): Promise<number> =>
+      ipcRenderer.invoke('entries:listAllCount', opts),
+    monthBuckets: (opts: { groupId?: number; sortDir: 'asc' | 'desc' }): Promise<MonthBucket[]> =>
+      ipcRenderer.invoke('entries:monthBuckets', opts),
     get: (id: number) =>
       ipcRenderer.invoke('entries:get', id),
     update: (id: number, patch: Record<string, unknown>) =>

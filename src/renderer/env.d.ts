@@ -8,13 +8,14 @@ import type {
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
-  SetDateParams, SetDateResult, RescanProgressEvent, RescanResult,
+  SetDateParams, SetDateResult, RescanProgressEvent, RescanResult, ImportPreview,
+  PageParams, MonthBucket,
 } from '../shared/types'
 
 interface Api {
   ingest: {
     pickFiles: (mode?: 'files' | 'folder') => Promise<string[]>
-    countFiles: (paths: string[]) => Promise<number>
+    countFiles: (paths: string[]) => Promise<ImportPreview>
     start: (filePaths: string[], tagNames?: string[]) => Promise<void>
     getPathForFile: (file: File) => string
     onProgress: (cb: (event: IngestProgressEvent) => void) => () => void
@@ -33,8 +34,11 @@ interface Api {
     forPeriod: (from: number, to: number, groupId?: number) => Promise<Entry[]>
     extent: () => Promise<{ min: number; max: number } | null>
     locations: () => Promise<Entry[]>
-    search: (filters: SearchFilters) => Promise<Entry[]>
-    listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type' | 'tag'; sortDir: 'asc' | 'desc' }) => Promise<Entry[]>
+    search: (filters: SearchFilters, page: PageParams) => Promise<Entry[]>
+    searchCount: (filters: SearchFilters) => Promise<number>
+    listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type' | 'tag'; sortDir: 'asc' | 'desc' } & PageParams) => Promise<Entry[]>
+    listAllCount: (opts: { groupId?: number }) => Promise<number>
+    monthBuckets: (opts: { groupId?: number; sortDir: 'asc' | 'desc' }) => Promise<MonthBucket[]>
     get: (id: number) => Promise<Entry | null>
     update: (id: number, patch: Record<string, unknown>) => Promise<void>
     setDate: (params: SetDateParams) => Promise<SetDateResult>

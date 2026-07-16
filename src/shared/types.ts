@@ -147,6 +147,18 @@ export interface SearchFilters {
   tagIds?: number[]
 }
 
+export interface PageParams {
+  limit: number
+  offset: number
+}
+
+// One calendar-month's worth of entries under some filter, used to build the
+// Files view's header/row skeleton without fetching the entries themselves.
+export interface MonthBucket {
+  bucketStart: number   // Unix ms, local midnight of the 1st — same convention as Bucket
+  count: number
+}
+
 export type FileViewMode = 'list' | 'small' | 'medium' | 'large'
 
 // offline = bundled low-res world map (no network); online = OpenStreetMap tiles;
@@ -212,6 +224,11 @@ export interface IngestDoneEvent {
   imported: number
   failures: IngestFailure[]
   logPath: string | null
+}
+
+export interface ImportPreview {
+  total: number
+  byType: Record<EntryType, number>
 }
 
 export interface SyncProgressEvent {

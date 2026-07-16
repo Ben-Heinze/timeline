@@ -19,10 +19,16 @@ export function registerEntryHandlers(): void {
     q.getDataExtent())
   ipcMain.handle('entries:locations', () =>
     q.getEntriesWithLocation())
-  ipcMain.handle('entries:search', (_, filters) =>
-    q.searchEntries(filters ?? {}))
+  ipcMain.handle('entries:search', (_, filters, page) =>
+    q.searchEntries(filters ?? {}, page))
+  ipcMain.handle('entries:searchCount', (_, filters) =>
+    q.countSearchResults(filters ?? {}))
   ipcMain.handle('entries:listAll', (_, opts) =>
     q.listAllEntries(opts))
+  ipcMain.handle('entries:listAllCount', (_, opts) =>
+    q.countAllEntries(opts ?? {}))
+  ipcMain.handle('entries:monthBuckets', (_, opts) =>
+    q.getMonthBuckets(opts))
   ipcMain.handle('entries:get', (_, id) =>
     q.getEntry(id))
   ipcMain.handle('entries:update', (_, id, patch) =>
