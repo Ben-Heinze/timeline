@@ -849,9 +849,9 @@ export default function SettingsView() {
         </div>
       </div>
 
-      {/* Calendar heatmap */}
+      {/* Chart scale */}
       <div style={section}>
-        <div style={sectionLabel}>Calendar heatmap</div>
+        <div style={sectionLabel}>Chart scale</div>
         <div style={card}>
           <div
             style={row}
@@ -867,7 +867,7 @@ export default function SettingsView() {
             <div>
               <div style={{ fontWeight: 600, marginBottom: 2 }}>Logarithmic scale</div>
               <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
-                Spreads color more evenly when some days have far more entries than others. Best for most libraries.
+                Compresses tall timeline bars and spreads heatmap color more evenly when some periods have far more entries than others. Best for most libraries.
               </div>
             </div>
           </div>
@@ -885,7 +885,7 @@ export default function SettingsView() {
             <div>
               <div style={{ fontWeight: 600, marginBottom: 2 }}>Linear scale</div>
               <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
-                Each additional file adds the same amount of color. 1 file = coolest heat.
+                Bar height and heat rise in direct proportion to the entry count.
               </div>
             </div>
           </div>
@@ -893,7 +893,7 @@ export default function SettingsView() {
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Max count threshold</div>
               <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
-                Days with this many or more entries show the warmest color. Leave blank to use each year's actual maximum.
+                Calendar heatmap only: days with this many or more entries show the warmest color. Leave blank to use each year's actual maximum.
               </div>
             </div>
             <input

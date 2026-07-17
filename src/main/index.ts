@@ -1,5 +1,6 @@
 import { app, BrowserWindow, shell, protocol, net } from 'electron'
 import { join, normalize } from 'path'
+import { pathToFileURL } from 'url'
 import { ensureLibraryDirs, getLibraryPath } from './library'
 import { closeDb } from './db'
 import { registerAllHandlers } from './ipc'
@@ -44,10 +45,21 @@ app.whenReady().then(async () => {
   registerAllHandlers()
 
   // Serve library files (thumbnails, originals) via timeline:// protocol
-  protocol.handle('timeline', (request) => {
+  protocol.handle('timeline', async (request) => {
     const rel = decodeURIComponent(request.url.slice('timeline:///'.length))
     const filePath = normalize(join(getLibraryPath(), rel))
-    return net.fetch(`file://${filePath}`)
+    // pathToFileURL percent-encodes spaces and other characters — the library
+    // path may contain them (e.g. an external drive at "/run/media/.../Hard Drive").
+    try {
+      return await net.fetch(pathToFileURL(filePath).toString())
+    } catch {
+      // The library often lives on an external/removable drive. When it's
+      // unmounted (or a thumbnail is missing) net.fetch rejects; without this
+      // catch every failed request becomes an unhandled net::ERR_FAILED in the
+      // main log — a whole map/grid of thumbnails at once floods it. Fail soft
+      // with a 404 so the <img> just doesn't render.
+      return new Response(null, { status: 404 })
+    }
   })
 
   await refreshVolumes()

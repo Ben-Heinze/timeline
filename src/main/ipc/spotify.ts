@@ -1,6 +1,6 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import path from 'path'
-import { expandSpotifyPaths, parseSpotifyFile } from '../spotify'
+import { expandSpotifyPaths, parseSpotifyFile, saveExportToLibrary } from '../spotify'
 import { insertPlays, getPlaysForPeriod, getTopArtists, getListeningHistogram, getYearlySummaries, getYearDetail, getArtistMonthlyForYear } from '../db/queries/listeningHistory'
 import type { SpotifyImportProgressEvent, SpotifyImportResult } from '../../shared/types'
 
@@ -33,6 +33,8 @@ export function registerSpotifyHandlers(): void {
       const file = files[i]
       const plays = await parseSpotifyFile(file)
       imported += insertPlays(plays)
+      // Preserve the raw export in the library alongside the parsed plays.
+      await saveExportToLibrary(file)
       if (!sender.isDestroyed()) {
         const evt: SpotifyImportProgressEvent = {
           processedFiles: i + 1,

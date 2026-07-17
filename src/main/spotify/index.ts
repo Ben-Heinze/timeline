@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { getSpotifyPath, isPathUnder } from '../library'
 import type { SpotifyPlayInsert } from '../db/queries/listeningHistory'
 
 // Matches the file names inside a Spotify "Extended streaming history" export,
@@ -20,6 +21,20 @@ export async function expandSpotifyPaths(inputPaths: string[]): Promise<string[]
     }
   }
   return files
+}
+
+/**
+ * Copy a raw Spotify export into the library's spotify/ folder so the source
+ * data is preserved alongside everything else. A same-named file is overwritten,
+ * since Spotify export file names are stable per date range — re-importing an
+ * updated export refreshes the stored copy rather than piling up duplicates.
+ * Files already inside the library (e.g. re-imported from spotify/) are left alone.
+ */
+export async function saveExportToLibrary(sourcePath: string): Promise<void> {
+  const spotifyDir = getSpotifyPath()
+  if (isPathUnder(spotifyDir, sourcePath)) return
+  await fs.mkdir(spotifyDir, { recursive: true })
+  await fs.copyFile(sourcePath, path.join(spotifyDir, path.basename(sourcePath)))
 }
 
 interface RawSpotifyEntry {

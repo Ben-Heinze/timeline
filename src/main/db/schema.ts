@@ -25,6 +25,7 @@ export function initSchema(db: Database.Database): void {
       needs_date_review INTEGER NOT NULL DEFAULT 0,
       is_missing        INTEGER NOT NULL DEFAULT 0,
       content_hash      TEXT,
+      original_file_name TEXT,
       import_mode       TEXT    NOT NULL DEFAULT 'copy',
       latitude          REAL,
       longitude         REAL,
@@ -35,6 +36,33 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_entries_group_id  ON entries(group_id);
     CREATE INDEX IF NOT EXISTS idx_entries_group_timestamp ON entries(group_id, timestamp);
+
+    -- People (and animals) you can tag in photos/videos, each with an info sheet.
+    CREATE TABLE IF NOT EXISTS people (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind            TEXT    NOT NULL DEFAULT 'person' CHECK(kind IN ('person','animal')),
+      name            TEXT    NOT NULL,
+      color           TEXT    NOT NULL,
+      relationship    TEXT,
+      birthday        TEXT,             -- ISO 'YYYY-MM-DD' (a calendar date, not an instant)
+      notes           TEXT,
+      email           TEXT,
+      phone           TEXT,
+      address         TEXT,
+      species         TEXT,             -- animals only
+      breed           TEXT,             -- animals only
+      avatar_entry_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
+      created_at      INTEGER NOT NULL
+    );
+
+    -- Which people appear in which entries (mirrors entry_tags).
+    CREATE TABLE IF NOT EXISTS entry_people (
+      entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+      person_id INTEGER NOT NULL REFERENCES people(id)  ON DELETE CASCADE,
+      PRIMARY KEY (entry_id, person_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_entry_people_person ON entry_people(person_id);
 
     CREATE TABLE IF NOT EXISTS volumes (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +154,7 @@ function applyMigrations(db: Database.Database): void {
   )
   if (!entryCols.has('is_missing'))   db.exec(`ALTER TABLE entries ADD COLUMN is_missing  INTEGER NOT NULL DEFAULT 0`)
   if (!entryCols.has('content_hash')) db.exec(`ALTER TABLE entries ADD COLUMN content_hash TEXT`)
+  if (!entryCols.has('original_file_name')) db.exec(`ALTER TABLE entries ADD COLUMN original_file_name TEXT`)
   if (!entryCols.has('import_mode'))  db.exec(`ALTER TABLE entries ADD COLUMN import_mode  TEXT NOT NULL DEFAULT 'copy'`)
   if (!entryCols.has('latitude'))     db.exec(`ALTER TABLE entries ADD COLUMN latitude  REAL`)
   if (!entryCols.has('longitude'))    db.exec(`ALTER TABLE entries ADD COLUMN longitude REAL`)

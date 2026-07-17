@@ -18,6 +18,10 @@ export interface Entry {
   needs_date_review: number    // 0 | 1
   is_missing: number           // 0 | 1
   content_hash: string | null
+  // The file's name at import time, preserved for safety even if the on-disk
+  // file is later renamed (so the original is always recoverable). Null for
+  // entries without a backing file (e.g. journals).
+  original_file_name: string | null
   import_mode: 'copy' | 'reference'
   volume_id: number | null          // set for reference-mode files tracked on a removable/external drive
   latitude: number | null           // decimal degrees, from photo EXIF GPS
@@ -41,6 +45,17 @@ export interface SetDateResult {
   exifWritten: number          // files successfully rewritten on disk
   exifSkipped: number          // not eligible (referenced original, non-photo, missing…)
   exifFailed: number           // eligible but the write errored
+}
+
+// Outcome of renaming a single entry. The display title is always updated;
+// `fileRenamed` reports whether the on-disk file was also renamed (only when the
+// user opted in and the file was reachable). `note` carries a non-fatal reason
+// the file was left untouched even though the user asked to rename it.
+export interface RenameEntryResult {
+  ok: boolean
+  fileRenamed: boolean
+  error?: string
+  note?: string
 }
 
 export interface RescanProgressEvent {
@@ -136,6 +151,47 @@ export interface NewLifeEvent {
 export interface Tag {
   id: number
   name: string
+}
+
+export type PersonKind = 'person' | 'animal'
+
+// A person or animal you can tag in photos/videos, with an info sheet.
+export interface Person {
+  id: number
+  kind: PersonKind
+  name: string
+  color: string                 // hex, for the avatar fallback / chips
+  relationship: string | null   // e.g. 'Brother', 'Friend', 'Dog'
+  birthday: string | null       // ISO 'YYYY-MM-DD'
+  notes: string | null
+  email: string | null          // people
+  phone: string | null          // people
+  address: string | null        // people
+  species: string | null        // animals
+  breed: string | null          // animals
+  avatar_entry_id: number | null // an entry they're tagged in, used as their photo
+  created_at: number
+}
+
+export interface NewPerson {
+  kind: PersonKind
+  name: string
+  color: string
+  relationship?: string | null
+  birthday?: string | null
+  notes?: string | null
+  email?: string | null
+  phone?: string | null
+  address?: string | null
+  species?: string | null
+  breed?: string | null
+  avatar_entry_id?: number | null
+}
+
+// A person plus derived display data for the People list.
+export interface PersonListItem extends Person {
+  count: number                 // number of entries they're tagged in
+  avatar_thumb: string | null   // thumbnail path of the avatar entry, if any
 }
 
 export interface SearchFilters {

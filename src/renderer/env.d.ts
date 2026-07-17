@@ -9,7 +9,7 @@ import type {
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
   SetDateParams, SetDateResult, RescanProgressEvent, RescanResult, ImportPreview,
-  PageParams, MonthBucket,
+  PageParams, MonthBucket, RenameEntryResult, Person, PersonListItem, NewPerson,
 } from '../shared/types'
 
 interface Api {
@@ -41,6 +41,7 @@ interface Api {
     monthBuckets: (opts: { groupId?: number; sortDir: 'asc' | 'desc' }) => Promise<MonthBucket[]>
     get: (id: number) => Promise<Entry | null>
     update: (id: number, patch: Record<string, unknown>) => Promise<void>
+    rename: (id: number, title: string, renameFile: boolean) => Promise<RenameEntryResult>
     setDate: (params: SetDateParams) => Promise<SetDateResult>
     delete: (ids: number[]) => Promise<void>
     create: (data: { type: EntryType; timestamp: number; title: string | null; rich_text_json: string | null; group_id: number | null }) => Promise<number>
@@ -76,6 +77,17 @@ interface Api {
     addToEntries: (entryIds: number[], names: string[]) => Promise<void>
     forGroup: (groupId: number) => Promise<Tag[]>
     setForGroup: (groupId: number, names: string[]) => Promise<Tag[]>
+  }
+  people: {
+    list: () => Promise<PersonListItem[]>
+    get: (id: number) => Promise<Person | null>
+    create: (data: NewPerson) => Promise<Person>
+    update: (id: number, patch: Partial<Omit<Person, 'id'>>) => Promise<Person>
+    delete: (id: number) => Promise<void>
+    forEntry: (entryId: number) => Promise<Person[]>
+    setForEntry: (entryId: number, personIds: number[]) => Promise<Person[]>
+    addToEntries: (entryIds: number[], personIds: number[]) => Promise<void>
+    entries: (personId: number) => Promise<Entry[]>
   }
   files: {
     getMediaUrl: (entryId: number) => Promise<string | null>

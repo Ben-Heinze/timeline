@@ -80,6 +80,7 @@ interface GroupNodeProps {
   onSelect: (id: number | null) => void
   onEdit: (g: Group) => void
   onDelete: (id: number) => void
+  onStartRename: (g: Group) => void
   onContextMenu: (g: Group, e: React.MouseEvent) => void
   rename: RenameState | null
   onRenameChange: (value: string) => void
@@ -91,7 +92,7 @@ interface GroupNodeProps {
 function GroupNode(props: GroupNodeProps) {
   const {
     node, depth, expanded, onToggle, selectedGroupId, onSelect, onEdit, onDelete,
-    onContextMenu, rename, onRenameChange, onRenameCommit, onRenameCancel, stats,
+    onStartRename, onContextMenu, rename, onRenameChange, onRenameCommit, onRenameCancel, stats,
   } = props
   const [hovered, setHovered] = useState(false)
   const { group, children } = node
@@ -106,6 +107,7 @@ function GroupNode(props: GroupNodeProps) {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onClick={() => { if (!isRenaming) onSelect(isSelected ? null : group.id) }}
+        onDoubleClick={e => { if (!isRenaming) { e.stopPropagation(); onStartRename(group) } }}
         onContextMenu={e => onContextMenu(group, e)}
         style={{
           display: 'flex', alignItems: 'center', gap: 5,
@@ -146,10 +148,13 @@ function GroupNode(props: GroupNodeProps) {
             }}
           />
         ) : (
-          <span style={{
-            fontSize: 13, color: 'var(--text)', flex: 1,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
+          <span
+            title="Double-click to rename"
+            style={{
+              fontSize: 13, color: 'var(--text)', flex: 1,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >
             {group.name}
           </span>
         )}
@@ -630,6 +635,7 @@ export default function GroupSidebar() {
               onSelect={setSelectedGroupId}
               onEdit={openEdit}
               onDelete={handleDelete}
+              onStartRename={startRename}
               onContextMenu={openMenu}
               rename={rename}
               onRenameChange={value => setRename(r => r && { ...r, value })}

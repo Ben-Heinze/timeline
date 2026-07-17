@@ -2,8 +2,9 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { useStore } from '../store/useStore'
-import type { Entry, Tag, FileInfo } from '../../shared/types'
+import type { Entry, Tag, FileInfo, Person } from '../../shared/types'
 import TagEditor from './TagEditor'
+import PeopleEditor from './PeopleEditor'
 import ChangeDateModal from './ChangeDateModal'
 import { useVolumeStatus, VolumeBadgeInline } from './VolumeBadge'
 import LocationMiniMap from './LocationMiniMap'
@@ -314,16 +315,18 @@ function FileActions({ entry }: { entry: Entry }) {
 }
 
 export default function EntryModal() {
-  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal, bumpRefreshKey } = useStore()
+  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal, bumpRefreshKey, setPeople } = useStore()
   const [entry, setEntry] = useState<Entry | null>(null)
   const [entryTags, setEntryTags] = useState<Tag[]>([])
+  const [entryPeople, setEntryPeople] = useState<Person[]>([])
   const [periodEntries, setPeriodEntries] = useState<Entry[]>([])
   const [dateModalOpen, setDateModalOpen] = useState(false)
 
   useEffect(() => {
-    if (!activeEntryId) { setEntry(null); setEntryTags([]); return }
+    if (!activeEntryId) { setEntry(null); setEntryTags([]); setEntryPeople([]); return }
     window.api.entries.get(activeEntryId).then(setEntry)
     window.api.tags.forEntry(activeEntryId).then(setEntryTags)
+    window.api.people.forEntry(activeEntryId).then(setEntryPeople)
   }, [activeEntryId])
 
   const handleTagsChange = useCallback(async (names: string[]) => {
@@ -331,6 +334,14 @@ export default function EntryModal() {
     const updated = await window.api.tags.setForEntry(activeEntryId, names)
     setEntryTags(updated)
   }, [activeEntryId])
+
+  const handlePeopleChange = useCallback(async (personIds: number[]) => {
+    if (!activeEntryId) return
+    const updated = await window.api.people.setForEntry(activeEntryId, personIds)
+    setEntryPeople(updated)
+    // Keep the People tab's tagged-counts in sync.
+    setPeople(await window.api.people.list())
+  }, [activeEntryId, setPeople])
 
   useEffect(() => {
     if (selectedLocation) { setPeriodEntries(selectedLocation); return }
@@ -440,6 +451,20 @@ export default function EntryModal() {
             </span>
             <div style={{ flex: 1 }}>
               <TagEditor tags={entryTags} onChange={handleTagsChange} />
+            </div>
+          </div>
+        )}
+
+        {entry && (
+          <div style={{
+            padding: '10px 16px', borderTop: '1px solid var(--border-light)',
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--text-4)', flexShrink: 0 }}>
+              People
+            </span>
+            <div style={{ flex: 1 }}>
+              <PeopleEditor people={entryPeople} onChange={handlePeopleChange} />
             </div>
           </div>
         )}

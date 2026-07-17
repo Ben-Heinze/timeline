@@ -7183,12 +7183,14 @@ const useStore = create((set) => ({
   syncProgress: null,
   refreshKey: 0,
   tags: [],
+  people: [],
   volumes: [],
   searchFilters: null,
   rangeSelectMode: false,
   dateRangeSelection: null,
   pendingDateRange: null,
   setTags: (tags) => set({ tags }),
+  setPeople: (people) => set({ people }),
   setVolumes: (volumes) => set({ volumes }),
   setSearchFilters: (filters) => set({ searchFilters: filters }),
   setVisibleRange: (range) => set({ visibleRange: range }),
@@ -7401,6 +7403,35 @@ const niceStep = (n2) => {
   const norm = rough / p2;
   return (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * p2;
 };
+const barTransform = (scale) => scale === "log" ? (v2) => Math.log1p(v2) : (v2) => v2;
+const logTicks = (maxCount) => {
+  const ticks = [];
+  const top = Math.max(1, maxCount);
+  for (let p2 = 0; p2 < 12; p2++) {
+    for (const m2 of [1, 2, 5]) {
+      const v2 = m2 * Math.pow(10, p2);
+      ticks.push(v2);
+      if (v2 >= top) return ticks;
+    }
+  }
+  return ticks;
+};
+function barAxis(maxCount, scale, barsH) {
+  const tf2 = barTransform(scale);
+  let niceMax;
+  let ticks;
+  if (scale === "log") {
+    ticks = logTicks(maxCount);
+    niceMax = ticks[ticks.length - 1];
+  } else {
+    const yStep = niceStep(maxCount);
+    niceMax = Math.ceil(maxCount / yStep) * yStep;
+    ticks = [];
+    for (let v2 = yStep; v2 <= niceMax; v2 += yStep) ticks.push(v2);
+  }
+  const barScale = barsH * 0.92 / tf2(niceMax);
+  return { tf: tf2, ticks, barScale };
+}
 const MIN_YEAR_VIEW_YEARS = 5;
 const yearViewRange = (extent) => {
   const startYear = new Date(extent[0]).getFullYear();
@@ -7561,6 +7592,7 @@ function TimelineCanvas() {
   } = useStore();
   const theme = settings?.theme ?? "light";
   const curveTension = settings?.curveTension ?? 1;
+  const barScaleMode = settings?.heatmapScale ?? "log";
   const themeVars = reactExports.useMemo(() => ({
     canvasBg: cv("--canvas-bg"),
     canvasGrid: cv("--canvas-grid"),
@@ -7729,13 +7761,12 @@ function TimelineCanvas() {
       const total = segs.reduce((s, sg2) => s + sg2.count, 0);
       if (total > maxCount) maxCount = total;
     }
-    const yStep = niceStep(maxCount);
-    const niceMax = Math.ceil(maxCount / yStep) * yStep;
-    const barScale = barsH * 0.92 / niceMax;
+    const { tf: tf2, ticks: yTicks, barScale } = barAxis(maxCount, barScaleMode, barsH);
     ctx.strokeStyle = themeVars.canvasGrid;
     ctx.lineWidth = 1;
-    for (let v2 = yStep; v2 <= niceMax; v2 += yStep) {
-      const y2 = Math.round(barsH - v2 * barScale) + 0.5;
+    for (const v2 of yTicks) {
+      const y2 = Math.round(barsH - tf2(v2) * barScale) + 0.5;
+      if (y2 < 4) continue;
       ctx.beginPath();
       ctx.moveTo(YAXIS_W, y2);
       ctx.lineTo(w2, y2);
@@ -7752,7 +7783,7 @@ function TimelineCanvas() {
         if (slotX + effectiveSlotW < YAXIS_W || slotX > w2) continue;
         const x2 = slotX + barOX;
         const total = segs.reduce((s, sg2) => s + sg2.count, 0);
-        const totalBarH = Math.max(2, total * barScale);
+        const totalBarH = Math.max(2, tf2(total) * barScale);
         if (selectedPeriod && bucketStart >= selectedPeriod[0] && bucketStart < selectedPeriod[1]) {
           ctx.fillStyle = "rgba(245,158,11,0.10)";
           ctx.fillRect(Math.floor(slotX), 0, Math.ceil(effectiveSlotW), chartH);
@@ -7771,7 +7802,7 @@ function TimelineCanvas() {
       const pts = sorted.map(([bs, segs]) => {
         const total = segs.reduce((s, sg2) => s + sg2.count, 0);
         const cx = tsToX((bs + bucketEndMs(bs, zoomLevel)) / 2);
-        return { x: cx, y: barsH - Math.max(2, total * barScale) };
+        return { x: cx, y: barsH - Math.max(2, tf2(total) * barScale) };
       });
       if (pts.length > 0) {
         const color = defaultBarColor;
@@ -7933,9 +7964,9 @@ function TimelineCanvas() {
     ctx.font = "10px system-ui, sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
-    for (let v2 = yStep; v2 <= niceMax; v2 += yStep) {
-      const y2 = barsH - v2 * barScale;
-      if (y2 < 4) break;
+    for (const v2 of yTicks) {
+      const y2 = barsH - tf2(v2) * barScale;
+      if (y2 < 4) continue;
       ctx.fillText(String(v2), YAXIS_W - 5, y2);
     }
     ctx.strokeStyle = themeVars.canvasAxis;
@@ -7944,7 +7975,7 @@ function TimelineCanvas() {
     ctx.moveTo(YAXIS_W - 0.5, 0);
     ctx.lineTo(YAXIS_W - 0.5, chartH);
     ctx.stroke();
-  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, themeVars, curveMode, curveTension, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets]);
+  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, themeVars, curveMode, curveTension, barScaleMode, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets]);
   const handleWheel = reactExports.useCallback((e) => {
     e.preventDefault();
     if (zoomRef.current === "month") {
@@ -8096,16 +8127,14 @@ function TimelineCanvas() {
         const t2 = segs.reduce((s, sg2) => s + sg2.count, 0);
         if (t2 > maxCount) maxCount = t2;
       }
-      const yStep = niceStep(maxCount);
-      const niceMax = Math.ceil(maxCount / yStep) * yStep;
-      const barScale = barsBottom * 0.92 / niceMax;
+      const { tf: tf2, barScale } = barAxis(maxCount, barScaleMode, barsBottom);
       for (const [bucketStart, segs] of bucketSegments) {
         const total = segs.reduce((s, sg2) => s + sg2.count, 0);
         const slotX = tsToX(bucketStart);
         const slotW = tsToX(bucketEndMs(bucketStart, zoomLevel)) - slotX;
         const barW = curveMode ? slotW : Math.max(2, slotW * BAR_FILL);
         const barX = curveMode ? slotX : slotX + (slotW - barW) / 2;
-        const barH = Math.max(2, total * barScale);
+        const barH = Math.max(2, tf2(total) * barScale);
         if (cx >= barX && cx < barX + barW && cy >= barsBottom - barH) {
           found2 = { bucketStart };
           if (!curveMode) {
@@ -8124,7 +8153,7 @@ function TimelineCanvas() {
       }
     }
     setHover(found2 !== null ? { x: cx, y: cy, ...found2 } : null);
-  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, bucketSegments, zoomLevel, curveMode, eventAt, eventBandH]);
+  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, bucketSegments, zoomLevel, curveMode, barScaleMode, eventAt, eventBandH]);
   const onMouseUp = reactExports.useCallback((e) => {
     if (rangeSelectMode) return;
     const d = drag.current;
@@ -8841,9 +8870,10 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
         const eventForDay = events.find((ev) => dayTs >= ev.date_from && dayTs < (ev.date_to ?? Infinity));
         const groupForDay = dateRangeGroups.find((gr) => dayTs >= gr.date_from && dayTs < gr.date_to);
         const rangeForDay = eventForDay ?? (groupForDay ? { color: groupForDay.color, title: groupForDay.name } : null);
-        const bg2 = inSel ? "#c7d2fe" : rangeForDay ? `${rangeForDay.color}55` : heatColor(count, effectiveMax, scale);
+        const bg2 = inSel ? "#c7d2fe" : heatColor(count, effectiveMax, scale);
         const fg2 = inSel ? "#3730a3" : textColor(count, effectiveMax, scale);
-        return /* @__PURE__ */ jsxRuntimeExports.jsx(
+        const barH = isExpanded ? Math.max(4, Math.round(cellSize * 0.08)) : 3;
+        return /* @__PURE__ */ jsxRuntimeExports.jsxs(
           "div",
           {
             onClick: () => onDayClick(dayTs),
@@ -8851,6 +8881,8 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
             onMouseEnter: () => onDayMouseEnter(dayTs),
             title: rangeForDay ? `${key}: ${count} entr${count === 1 ? "y" : "ies"} · ${rangeForDay.title}` : count > 0 ? `${key}: ${count} entr${count === 1 ? "y" : "ies"}` : key,
             style: {
+              position: "relative",
+              overflow: "hidden",
               height: cellSize,
               borderRadius: radius,
               background: bg2,
@@ -8864,7 +8896,22 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
               transition: inSel ? "none" : "background 0.1s",
               userSelect: "none"
             },
-            children: day
+            children: [
+              day,
+              rangeForDay && !inSel && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "div",
+                {
+                  style: {
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: barH,
+                    background: rangeForDay.color
+                  }
+                }
+              )
+            ]
           },
           i
         );
@@ -95218,6 +95265,169 @@ function TagEditor({ tags, onChange, compact }) {
     )) })
   ] });
 }
+const PERSON_COLORS = [
+  "#ef4444",
+  "#f97316",
+  "#f59e0b",
+  "#84cc16",
+  "#22c55e",
+  "#10b981",
+  "#06b6d4",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ec4899",
+  "#6b7280",
+  "#78716c"
+];
+function randomPersonColor() {
+  return PERSON_COLORS[Math.floor(Math.random() * PERSON_COLORS.length)];
+}
+function PeopleEditor({ people, onChange, compact }) {
+  const { people: allPeople, setPeople } = useStore();
+  const [current, setCurrent] = reactExports.useState(people);
+  const [input, setInput] = reactExports.useState("");
+  const [suggestOpen, setSuggestOpen] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    setCurrent(people);
+  }, [people]);
+  const commit = reactExports.useCallback((next) => {
+    setCurrent(next);
+    onChange(next.map((p2) => p2.id));
+  }, [onChange]);
+  const addExisting = reactExports.useCallback((p2) => {
+    if (current.some((c) => c.id === p2.id)) {
+      setInput("");
+      return;
+    }
+    commit([...current, p2]);
+    setInput("");
+  }, [current, commit]);
+  const createByName = reactExports.useCallback(async (rawName) => {
+    const name2 = rawName.trim();
+    if (!name2) return;
+    const created = await window.api.people.create({ kind: "person", name: name2, color: randomPersonColor() });
+    setPeople(await window.api.people.list());
+    commit([...current, created]);
+    setInput("");
+  }, [current, commit, setPeople]);
+  const remove = (id2) => commit(current.filter((p2) => p2.id !== id2));
+  const currentIds = new Set(current.map((p2) => p2.id));
+  const inputLower = input.trim().toLowerCase();
+  const suggestions = (inputLower ? allPeople.filter((p2) => !currentIds.has(p2.id) && p2.name.toLowerCase().includes(inputLower)) : allPeople.filter((p2) => !currentIds.has(p2.id))).slice(0, 6);
+  const exactExists = allPeople.some((p2) => p2.name.toLowerCase() === inputLower);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { position: "relative" }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }, children: [
+      current.map((p2) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: {
+        fontSize: compact ? 10 : 11,
+        padding: "2px 6px 2px 6px",
+        borderRadius: 10,
+        background: "var(--bg-subtle)",
+        color: "var(--text)",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 8, height: 8, borderRadius: "50%", background: p2.color, flexShrink: 0 } }),
+        p2.kind === "animal" ? "🐾 " : "",
+        p2.name,
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            onClick: () => remove(p2.id),
+            style: {
+              background: "none",
+              border: "none",
+              color: "var(--text-4)",
+              fontSize: 11,
+              padding: "0 2px",
+              cursor: "pointer",
+              lineHeight: 1
+            },
+            children: "×"
+          }
+        )
+      ] }, p2.id)),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          value: input,
+          onChange: (e) => setInput(e.target.value),
+          onFocus: () => setSuggestOpen(true),
+          onBlur: () => setTimeout(() => setSuggestOpen(false), 150),
+          onKeyDown: (e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              const match = allPeople.find((p2) => p2.name.toLowerCase() === inputLower && !currentIds.has(p2.id));
+              if (match) addExisting(match);
+              else createByName(input);
+            }
+            if (e.key === "Backspace" && !input && current.length) remove(current[current.length - 1].id);
+          },
+          placeholder: current.length ? "" : "Add person…",
+          style: {
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            fontSize: compact ? 11 : 12,
+            color: "var(--text)",
+            minWidth: 90,
+            flex: 1,
+            padding: "2px 0"
+          }
+        }
+      )
+    ] }),
+    suggestOpen && (suggestions.length > 0 || inputLower && !exactExists) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+      position: "absolute",
+      top: "calc(100% + 2px)",
+      left: 0,
+      right: 0,
+      background: "var(--bg-surface)",
+      border: "1px solid var(--border)",
+      borderRadius: 6,
+      boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+      zIndex: 20,
+      maxHeight: 160,
+      overflowY: "auto"
+    }, children: [
+      suggestions.map((p2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "div",
+        {
+          onMouseDown: (e) => {
+            e.preventDefault();
+            addExisting(p2);
+          },
+          style: { fontSize: 12, padding: "5px 8px", cursor: "pointer", color: "var(--text)", display: "flex", alignItems: "center", gap: 6 },
+          onMouseEnter: (e) => e.currentTarget.style.background = "var(--bg-hover)",
+          onMouseLeave: (e) => e.currentTarget.style.background = "",
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 8, height: 8, borderRadius: "50%", background: p2.color, flexShrink: 0 } }),
+            p2.kind === "animal" ? "🐾 " : "",
+            p2.name
+          ]
+        },
+        p2.id
+      )),
+      inputLower && !exactExists && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "div",
+        {
+          onMouseDown: (e) => {
+            e.preventDefault();
+            createByName(input);
+          },
+          style: { fontSize: 12, padding: "5px 8px", cursor: "pointer", color: "var(--accent)", borderTop: suggestions.length ? "1px solid var(--border-light)" : "none" },
+          onMouseEnter: (e) => e.currentTarget.style.background = "var(--bg-hover)",
+          onMouseLeave: (e) => e.currentTarget.style.background = "",
+          children: [
+            "+ Create “",
+            input.trim(),
+            "”"
+          ]
+        }
+      )
+    ] })
+  ] });
+}
 function GroupPickerList({ groups, onPick, onRemove }) {
   const [query, setQuery] = reactExports.useState("");
   const filtered = reactExports.useMemo(() => {
@@ -95595,12 +95805,19 @@ function useEntryContextMenu(entries) {
     groups,
     tags: allTags,
     setTags: setAllTags,
+    people: allPeople,
+    setPeople,
     bumpRefreshKey
   } = useStore();
   const [menu, setMenu] = reactExports.useState(null);
   const [groupSubOpen, setGroupSubOpen] = reactExports.useState(false);
   const [tagModalIds, setTagModalIds] = reactExports.useState(null);
+  const [peopleModalIds, setPeopleModalIds] = reactExports.useState(null);
+  const [pendingPersonIds, setPendingPersonIds] = reactExports.useState([]);
   const [dateModalIds, setDateModalIds] = reactExports.useState(null);
+  const [renameId, setRenameId] = reactExports.useState(null);
+  const [renameValue, setRenameValue] = reactExports.useState("");
+  const [renameFile, setRenameFile] = reactExports.useState(false);
   const [pendingTagNames, setPendingTagNames] = reactExports.useState([]);
   const [existingTags, setExistingTags] = reactExports.useState([]);
   reactExports.useEffect(() => {
@@ -95649,28 +95866,65 @@ function useEntryContextMenu(entries) {
     setGroupSubOpen(false);
   }, []);
   reactExports.useEffect(() => {
-    if (!menu && tagModalIds === null) return;
+    if (!menu && tagModalIds === null && peopleModalIds === null && renameId === null) return;
     const onKey = (e) => {
       if (e.key === "Escape") {
         setMenu(null);
         setGroupSubOpen(false);
         setTagModalIds(null);
+        setPeopleModalIds(null);
+        setRenameId(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [menu, tagModalIds]);
+  }, [menu, tagModalIds, peopleModalIds, renameId]);
   const openTagModal = reactExports.useCallback(() => {
     if (!menu) return;
     setPendingTagNames([]);
     setTagModalIds(menu.ids);
     closeMenu();
   }, [menu, closeMenu]);
+  const openPeopleModal = reactExports.useCallback(() => {
+    if (!menu) return;
+    setPendingPersonIds([]);
+    setPeopleModalIds(menu.ids);
+    closeMenu();
+  }, [menu, closeMenu]);
+  const applyPeople = reactExports.useCallback(async () => {
+    if (!peopleModalIds || pendingPersonIds.length === 0) {
+      setPeopleModalIds(null);
+      return;
+    }
+    await window.api.people.addToEntries(peopleModalIds, pendingPersonIds);
+    setPeople(await window.api.people.list());
+    setPeopleModalIds(null);
+    bumpRefreshKey();
+  }, [peopleModalIds, pendingPersonIds, setPeople, bumpRefreshKey]);
   const openDateModal = reactExports.useCallback(() => {
     if (!menu) return;
     setDateModalIds(menu.ids);
     closeMenu();
   }, [menu, closeMenu]);
+  const openRenameModal = reactExports.useCallback(() => {
+    if (!menu || menu.ids.length !== 1) return;
+    const entry = entries.find((e) => e.id === menu.ids[0]);
+    setRenameValue(entry?.title ?? "");
+    setRenameFile(false);
+    setRenameId(menu.ids[0]);
+    closeMenu();
+  }, [menu, entries, closeMenu]);
+  const applyRename = reactExports.useCallback(async () => {
+    if (renameId === null) return;
+    const res = await window.api.entries.rename(renameId, renameValue, renameFile);
+    if (!res.ok) {
+      window.alert(res.error ?? "Rename failed.");
+      return;
+    }
+    if (res.note) window.alert(res.note);
+    setRenameId(null);
+    bumpRefreshKey();
+  }, [renameId, renameValue, renameFile, bumpRefreshKey]);
   const applyTags = reactExports.useCallback(async () => {
     if (!tagModalIds || pendingTagNames.length === 0) {
       setTagModalIds(null);
@@ -95736,7 +95990,9 @@ function useEntryContextMenu(entries) {
           " ",
           menu.ids.length === 1 ? "item" : "items"
         ] }),
+        menu.ids.length === 1 && /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Rename…", onClick: openRenameModal }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Add tags…", onClick: openTagModal }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Tag people…", onClick: openPeopleModal }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs(
           "div",
           {
@@ -95891,6 +96147,153 @@ function useEntryContextMenu(entries) {
                 children: "Add tags"
               }
             )
+          ] })
+        ] })
+      }
+    ),
+    peopleModalIds !== null && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        style: {
+          position: "fixed",
+          inset: 0,
+          zIndex: 110,
+          background: "rgba(0,0,0,0.35)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        },
+        onMouseDown: (e) => {
+          if (e.target === e.currentTarget) setPeopleModalIds(null);
+        },
+        children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          width: 400,
+          maxWidth: "90vw",
+          background: "var(--bg-surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+          padding: 16
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 14, fontWeight: 700, color: "var(--text)", marginBottom: 4 }, children: "Tag people" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "var(--text-3)", marginBottom: 12 }, children: [
+            "Added to ",
+            peopleModalIds.length,
+            " ",
+            peopleModalIds.length === 1 ? "item" : "items",
+            ". Existing people are kept."
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            padding: "6px 8px",
+            background: "var(--bg-input)",
+            marginBottom: 12,
+            minHeight: 34
+          }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+            PeopleEditor,
+            {
+              people: pendingPersonIds.map((id2) => allPeople.find((p2) => p2.id === id2)).filter((p2) => p2 != null),
+              onChange: setPendingPersonIds
+            }
+          ) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setPeopleModalIds(null), style: modalBtn(false), children: "Cancel" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: applyPeople,
+                disabled: pendingPersonIds.length === 0,
+                style: { ...modalBtn(true), opacity: pendingPersonIds.length === 0 ? 0.5 : 1 },
+                children: "Tag people"
+              }
+            )
+          ] })
+        ] })
+      }
+    ),
+    renameId !== null && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        style: {
+          position: "fixed",
+          inset: 0,
+          zIndex: 110,
+          background: "rgba(0,0,0,0.35)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        },
+        onMouseDown: (e) => {
+          if (e.target === e.currentTarget) setRenameId(null);
+        },
+        children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          width: 380,
+          maxWidth: "90vw",
+          background: "var(--bg-surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+          padding: 16
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 14, fontWeight: 700, color: "var(--text)", marginBottom: 12 }, children: "Rename" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              autoFocus: true,
+              value: renameValue,
+              onChange: (e) => setRenameValue(e.target.value),
+              onKeyDown: (e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  applyRename();
+                }
+              },
+              placeholder: "Name",
+              style: {
+                width: "100%",
+                boxSizing: "border-box",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontSize: 13,
+                marginBottom: 12,
+                background: "var(--bg-input)",
+                color: "var(--text)"
+              }
+            }
+          ),
+          (() => {
+            const target = entries.find((e) => e.id === renameId);
+            const hasFile = !!target?.file_path && !target.is_missing;
+            if (!hasFile) return null;
+            return /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { style: {
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 8,
+              fontSize: 12.5,
+              color: "var(--text-2)",
+              marginBottom: 14,
+              cursor: "pointer"
+            }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "checkbox",
+                  checked: renameFile,
+                  onChange: (e) => setRenameFile(e.target.checked),
+                  style: { marginTop: 2, flexShrink: 0 }
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+                "Also rename the file on disk",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { display: "block", fontSize: 11, color: "var(--text-4)", marginTop: 2 }, children: target.import_mode === "reference" ? "This renames your original linked file outside the library. The original name is kept in the database." : "The original name is kept in the database for safety." })
+              ] })
+            ] });
+          })(),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setRenameId(null), style: modalBtn(false), children: "Cancel" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: applyRename, style: modalBtn(true), children: "Save" })
           ] })
         ] })
       }
@@ -96479,6 +96882,467 @@ const selectStyle = {
   background: "var(--bg-input)",
   color: "var(--text)"
 };
+function initials(name2) {
+  const parts = name2.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+function parseBirthday(iso) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!match) return null;
+  return { y: +match[1], m: +match[2], d: +match[3] };
+}
+function birthdaySummary(iso) {
+  if (!iso) return null;
+  const b = parseBirthday(iso);
+  if (!b) return null;
+  const dateLabel = new Date(b.y, b.m - 1, b.d).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  const today = /* @__PURE__ */ new Date();
+  let age = today.getFullYear() - b.y;
+  const hadBirthday = today.getMonth() + 1 > b.m || today.getMonth() + 1 === b.m && today.getDate() >= b.d;
+  if (!hadBirthday) age -= 1;
+  let next = new Date(today.getFullYear(), b.m - 1, b.d);
+  if (next < new Date(today.getFullYear(), today.getMonth(), today.getDate())) {
+    next = new Date(today.getFullYear() + 1, b.m - 1, b.d);
+  }
+  const daysUntil = Math.round((next.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 864e5);
+  const soon = daysUntil === 0 ? " · 🎂 today!" : daysUntil <= 30 ? ` · in ${daysUntil}d` : "";
+  return `${dateLabel} · turns ${age + 1} next${soon}`;
+}
+function Avatar({ person, thumb, size }) {
+  if (thumb) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "img",
+      {
+        src: `timeline:///${thumb}`,
+        style: { width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0, background: "var(--bg-thumb)" },
+        draggable: false
+      }
+    );
+  }
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+    width: size,
+    height: size,
+    borderRadius: "50%",
+    background: person.color,
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "#fff",
+    fontWeight: 700,
+    fontSize: size * 0.36,
+    userSelect: "none"
+  }, children: person.kind === "animal" ? "🐾" : initials(person.name) });
+}
+function PeopleView() {
+  const { people, setPeople, setActiveEntryId, refreshKey, bumpRefreshKey } = useStore();
+  const [filter, setFilter] = reactExports.useState("all");
+  const [search, setSearch] = reactExports.useState("");
+  const [selectedId, setSelectedId] = reactExports.useState(null);
+  const [draft, setDraft] = reactExports.useState(null);
+  const [entries, setEntries] = reactExports.useState([]);
+  const refreshPeople = reactExports.useCallback(() => window.api.people.list().then(setPeople), [setPeople]);
+  reactExports.useEffect(() => {
+    refreshPeople();
+  }, [refreshPeople, refreshKey]);
+  reactExports.useEffect(() => {
+    if (selectedId === null) {
+      setDraft(null);
+      setEntries([]);
+      return;
+    }
+    let cancelled = false;
+    window.api.people.get(selectedId).then((p2) => {
+      if (!cancelled) setDraft(p2);
+    });
+    window.api.people.entries(selectedId).then((es) => {
+      if (!cancelled) setEntries(es);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+  const filtered = reactExports.useMemo(() => {
+    const q2 = search.trim().toLowerCase();
+    return people.filter(
+      (p2) => (filter === "all" || p2.kind === filter) && (!q2 || p2.name.toLowerCase().includes(q2) || (p2.relationship?.toLowerCase().includes(q2) ?? false))
+    );
+  }, [people, filter, search]);
+  const selectedListItem = people.find((p2) => p2.id === selectedId) ?? null;
+  const addPerson = reactExports.useCallback(async (kind) => {
+    const created = await window.api.people.create({ kind, name: kind === "animal" ? "New Animal" : "New Person", color: randomPersonColor() });
+    await refreshPeople();
+    setSelectedId(created.id);
+  }, [refreshPeople]);
+  const saveField = reactExports.useCallback(async (patch) => {
+    if (!draft) return;
+    const updated = await window.api.people.update(draft.id, patch);
+    setDraft(updated);
+    await refreshPeople();
+  }, [draft, refreshPeople]);
+  const onDraftChange = (patch) => setDraft((d) => d ? { ...d, ...patch } : d);
+  const deletePerson = reactExports.useCallback(async () => {
+    if (!draft) return;
+    if (!window.confirm(`Delete ${draft.name}? This removes them and untags them from all photos. The photos themselves are kept.`)) return;
+    await window.api.people.delete(draft.id);
+    setSelectedId(null);
+    await refreshPeople();
+    bumpRefreshKey();
+  }, [draft, refreshPeople, bumpRefreshKey]);
+  const setAvatar = reactExports.useCallback(async (entryId) => {
+    await saveField({ avatar_entry_id: entryId });
+  }, [saveField]);
+  const avatarThumb = reactExports.useMemo(() => {
+    if (!draft?.avatar_entry_id) return null;
+    return entries.find((e) => e.id === draft.avatar_entry_id)?.thumbnail_small ?? selectedListItem?.avatar_thumb ?? null;
+  }, [draft, entries, selectedListItem]);
+  const peopleCount = people.filter((p2) => p2.kind === "person").length;
+  const animalCount = people.filter((p2) => p2.kind === "animal").length;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+      width: 280,
+      flexShrink: 0,
+      borderRight: "1px solid var(--border)",
+      display: "flex",
+      flexDirection: "column",
+      background: "var(--bg-sidebar)"
+    }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "12px 12px 8px", display: "flex", flexDirection: "column", gap: 8 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", alignItems: "center", gap: 6 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", background: "var(--bg-subtle)", borderRadius: 6, padding: 2, gap: 1, flex: 1 }, children: ["all", "person", "animal"].map((f2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            onClick: () => setFilter(f2),
+            style: {
+              flex: 1,
+              padding: "4px 0",
+              fontSize: 12,
+              borderRadius: 4,
+              border: "none",
+              cursor: "pointer",
+              background: filter === f2 ? "var(--bg-app)" : "transparent",
+              color: filter === f2 ? "var(--text)" : "var(--text-3)",
+              fontWeight: filter === f2 ? 600 : 400
+            },
+            children: f2 === "all" ? `All ${people.length}` : f2 === "person" ? `People ${peopleCount}` : `Animals ${animalCount}`
+          },
+          f2
+        )) }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            value: search,
+            onChange: (e) => setSearch(e.target.value),
+            placeholder: "Search people…",
+            style: {
+              padding: "5px 8px",
+              fontSize: 12,
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              background: "var(--bg-input)",
+              outline: "none",
+              color: "var(--text)"
+            }
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 6 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => addPerson("person"), style: addBtnStyle, children: "+ Person" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => addPerson("animal"), style: addBtnStyle, children: "+ Animal" })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: "4px 8px 12px" }, children: filtered.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { style: { fontSize: 12, color: "var(--text-4)", textAlign: "center", marginTop: 20 }, children: people.length === 0 ? "No people yet. Add one, or tag someone in a photo." : "No matches" }) : filtered.map((p2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "div",
+        {
+          onClick: () => setSelectedId(p2.id),
+          style: {
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "6px 8px",
+            borderRadius: 8,
+            cursor: "pointer",
+            userSelect: "none",
+            background: selectedId === p2.id ? "var(--bg-selected)" : "transparent"
+          },
+          onMouseEnter: (e) => {
+            if (selectedId !== p2.id) e.currentTarget.style.background = "var(--bg-hover)";
+          },
+          onMouseLeave: (e) => {
+            if (selectedId !== p2.id) e.currentTarget.style.background = "";
+          },
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Avatar, { person: p2, thumb: p2.avatar_thumb, size: 34 }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 0 }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: p2.name }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-4)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: p2.relationship || (p2.kind === "animal" ? "Animal" : "Person") })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 11, color: "var(--text-4)", flexShrink: 0 }, children: p2.count })
+          ]
+        },
+        p2.id
+      )) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", minHeight: 0 }, children: !draft ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-4)", fontSize: 14 }, children: "Select someone to see their info sheet" }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { maxWidth: 720, margin: "0 auto", padding: "28px 32px" }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "center", gap: 18, marginBottom: 24 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Avatar, { person: draft, thumb: avatarThumb, size: 88 }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, minWidth: 0 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              value: draft.name,
+              onChange: (e) => onDraftChange({ name: e.target.value }),
+              onBlur: () => saveField({ name: draft.name.trim() || "Unnamed" }),
+              onKeyDown: (e) => {
+                if (e.key === "Enter") e.target.blur();
+              },
+              style: {
+                fontSize: 24,
+                fontWeight: 700,
+                color: "var(--text)",
+                width: "100%",
+                border: "1px solid transparent",
+                borderRadius: 6,
+                padding: "2px 6px",
+                marginLeft: -6,
+                background: "transparent",
+                outline: "none"
+              },
+              onFocus: (e) => {
+                e.currentTarget.style.border = "1px solid var(--border)";
+                e.currentTarget.style.background = "var(--bg-input)";
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 6, marginTop: 8, alignItems: "center" }, children: [
+            ["person", "animal"].map((k2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: () => saveField({ kind: k2 }),
+                style: {
+                  fontSize: 11,
+                  padding: "3px 10px",
+                  borderRadius: 12,
+                  cursor: "pointer",
+                  border: "1px solid var(--border)",
+                  background: draft.kind === k2 ? "var(--text)" : "transparent",
+                  color: draft.kind === k2 ? "var(--bg-app)" : "var(--text-3)"
+                },
+                children: k2 === "person" ? "Person" : "Animal"
+              },
+              k2
+            )),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: 4, marginLeft: 6 }, children: PERSON_COLORS.slice(0, 8).map((c) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "div",
+              {
+                onClick: () => saveField({ color: c }),
+                title: "Set color",
+                style: {
+                  width: 16,
+                  height: 16,
+                  borderRadius: "50%",
+                  background: c,
+                  cursor: "pointer",
+                  outline: draft.color === c ? "2px solid var(--text)" : "2px solid transparent",
+                  outlineOffset: 1
+                }
+              },
+              c
+            )) })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: deletePerson, title: "Delete", style: {
+          background: "none",
+          border: "1px solid var(--border)",
+          color: "var(--danger, #e5484d)",
+          fontSize: 12,
+          padding: "4px 10px",
+          borderRadius: 6,
+          cursor: "pointer",
+          flexShrink: 0,
+          alignSelf: "flex-start"
+        }, children: "Delete" })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 20px", marginBottom: 28 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          Field,
+          {
+            label: "Relationship",
+            value: draft.relationship,
+            placeholder: draft.kind === "animal" ? "e.g. Dog, Cat" : "e.g. Brother, Friend",
+            onChange: (v2) => onDraftChange({ relationship: v2 }),
+            onCommit: (v2) => saveField({ relationship: v2 })
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          Field,
+          {
+            label: "Birthday",
+            type: "date",
+            value: draft.birthday,
+            placeholder: "",
+            onChange: (v2) => onDraftChange({ birthday: v2 }),
+            onCommit: (v2) => saveField({ birthday: v2 }),
+            hint: birthdaySummary(draft.birthday) ?? void 0
+          }
+        ),
+        draft.kind === "animal" ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            Field,
+            {
+              label: "Species",
+              value: draft.species,
+              placeholder: "e.g. Dog",
+              onChange: (v2) => onDraftChange({ species: v2 }),
+              onCommit: (v2) => saveField({ species: v2 })
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            Field,
+            {
+              label: "Breed",
+              value: draft.breed,
+              placeholder: "e.g. Golden Retriever",
+              onChange: (v2) => onDraftChange({ breed: v2 }),
+              onCommit: (v2) => saveField({ breed: v2 })
+            }
+          )
+        ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            Field,
+            {
+              label: "Phone",
+              value: draft.phone,
+              placeholder: "",
+              onChange: (v2) => onDraftChange({ phone: v2 }),
+              onCommit: (v2) => saveField({ phone: v2 })
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            Field,
+            {
+              label: "Email",
+              value: draft.email,
+              placeholder: "",
+              onChange: (v2) => onDraftChange({ email: v2 }),
+              onCommit: (v2) => saveField({ email: v2 })
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { gridColumn: "1 / -1" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+            Field,
+            {
+              label: "Address",
+              value: draft.address,
+              placeholder: "",
+              onChange: (v2) => onDraftChange({ address: v2 }),
+              onCommit: (v2) => saveField({ address: v2 })
+            }
+          ) })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { gridColumn: "1 / -1" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(FieldLabel, { children: "Notes" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "textarea",
+            {
+              value: draft.notes ?? "",
+              onChange: (e) => onDraftChange({ notes: e.target.value }),
+              onBlur: (e) => saveField({ notes: e.target.value.trim() || null }),
+              placeholder: "Anything you'd like to remember…",
+              rows: 3,
+              style: {
+                width: "100%",
+                boxSizing: "border-box",
+                resize: "vertical",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontSize: 13,
+                fontFamily: "inherit",
+                background: "var(--bg-input)",
+                color: "var(--text)",
+                outline: "none"
+              }
+            }
+          )
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { borderTop: "1px solid var(--border-light)", paddingTop: 16 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--text-4)", marginBottom: 10 }, children: [
+          "Photos & Videos · ",
+          entries.length
+        ] }),
+        entries.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { style: { fontSize: 12, color: "var(--text-4)" }, children: "Not tagged in anything yet. Open a photo or video and add them under “People”." }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 10 }, children: entries.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { position: "relative", width: 110 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { onClick: () => setActiveEntryId(e.id), style: { cursor: "pointer" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Thumb, { entry: e, size: 110 }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              onClick: () => setAvatar(draft.avatar_entry_id === e.id ? null : e.id),
+              title: draft.avatar_entry_id === e.id ? "Remove as profile photo" : "Set as profile photo",
+              style: {
+                position: "absolute",
+                top: 4,
+                right: 4,
+                background: draft.avatar_entry_id === e.id ? "var(--accent)" : "rgba(0,0,0,0.55)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "50%",
+                width: 22,
+                height: 22,
+                fontSize: 12,
+                cursor: "pointer",
+                lineHeight: 1
+              },
+              children: draft.avatar_entry_id === e.id ? "★" : "☆"
+            }
+          )
+        ] }, e.id)) })
+      ] })
+    ] }) })
+  ] });
+}
+const addBtnStyle = {
+  flex: 1,
+  padding: "5px 0",
+  fontSize: 12,
+  cursor: "pointer",
+  background: "var(--bg-subtle)",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  color: "var(--text-2)"
+};
+function FieldLabel({ children }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: "var(--text-4)", marginBottom: 4 }, children });
+}
+function Field({ label, value, placeholder, type: type2, onChange, onCommit, hint }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(FieldLabel, { children: label }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "input",
+      {
+        type: type2 ?? "text",
+        value: value ?? "",
+        placeholder,
+        onChange: (e) => onChange(e.target.value),
+        onBlur: (e) => onCommit(e.target.value.trim() || null),
+        onKeyDown: (e) => {
+          if (e.key === "Enter") e.target.blur();
+        },
+        style: {
+          width: "100%",
+          boxSizing: "border-box",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          padding: "7px 10px",
+          fontSize: 13,
+          background: "var(--bg-input)",
+          color: "var(--text)",
+          outline: "none"
+        }
+      }
+    ),
+    hint && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-4)", marginTop: 4 }, children: hint })
+  ] });
+}
 const MONTH_LABELS$1 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => `${h}:00`);
@@ -116481,25 +117345,34 @@ function FileActions({ entry }) {
   ] });
 }
 function EntryModal() {
-  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal, bumpRefreshKey } = useStore();
+  const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal, bumpRefreshKey, setPeople } = useStore();
   const [entry, setEntry] = reactExports.useState(null);
   const [entryTags, setEntryTags] = reactExports.useState([]);
+  const [entryPeople, setEntryPeople] = reactExports.useState([]);
   const [periodEntries, setPeriodEntries] = reactExports.useState([]);
   const [dateModalOpen, setDateModalOpen] = reactExports.useState(false);
   reactExports.useEffect(() => {
     if (!activeEntryId) {
       setEntry(null);
       setEntryTags([]);
+      setEntryPeople([]);
       return;
     }
     window.api.entries.get(activeEntryId).then(setEntry);
     window.api.tags.forEntry(activeEntryId).then(setEntryTags);
+    window.api.people.forEntry(activeEntryId).then(setEntryPeople);
   }, [activeEntryId]);
   const handleTagsChange = reactExports.useCallback(async (names) => {
     if (!activeEntryId) return;
     const updated = await window.api.tags.setForEntry(activeEntryId, names);
     setEntryTags(updated);
   }, [activeEntryId]);
+  const handlePeopleChange = reactExports.useCallback(async (personIds) => {
+    if (!activeEntryId) return;
+    const updated = await window.api.people.setForEntry(activeEntryId, personIds);
+    setEntryPeople(updated);
+    setPeople(await window.api.people.list());
+  }, [activeEntryId, setPeople]);
   reactExports.useEffect(() => {
     if (selectedLocation) {
       setPeriodEntries(selectedLocation);
@@ -116613,6 +117486,16 @@ function EntryModal() {
           }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0 }, children: "Tags" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(TagEditor, { tags: entryTags, onChange: handleTagsChange }) })
+          ] }),
+          entry && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            padding: "10px 16px",
+            borderTop: "1px solid var(--border-light)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0 }, children: "People" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(PeopleEditor, { people: entryPeople, onChange: handlePeopleChange }) })
           ] }),
           periodEntries.length > 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
             display: "flex",
@@ -116750,6 +117633,7 @@ function GroupNode(props) {
     onSelect,
     onEdit,
     onDelete,
+    onStartRename,
     onContextMenu,
     rename,
     onRenameChange,
@@ -116771,6 +117655,12 @@ function GroupNode(props) {
         onMouseLeave: () => setHovered(false),
         onClick: () => {
           if (!isRenaming) onSelect(isSelected ? null : group.id);
+        },
+        onDoubleClick: (e) => {
+          if (!isRenaming) {
+            e.stopPropagation();
+            onStartRename(group);
+          }
         },
         onContextMenu: (e) => onContextMenu(group, e),
         style: {
@@ -116834,14 +117724,21 @@ function GroupNode(props) {
                 color: "var(--text)"
               }
             }
-          ) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
-            fontSize: 13,
-            color: "var(--text)",
-            flex: 1,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap"
-          }, children: group.name }),
+          ) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "span",
+            {
+              title: "Double-click to rename",
+              style: {
+                fontSize: 13,
+                color: "var(--text)",
+                flex: 1,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+              },
+              children: group.name
+            }
+          ),
           hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 1, flexShrink: 0 }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "button",
@@ -117386,6 +118283,7 @@ function GroupSidebar() {
           onSelect: setSelectedGroupId,
           onEdit: openEdit,
           onDelete: handleDelete,
+          onStartRename: startRename,
           onContextMenu: openMenu,
           rename,
           onRenameChange: (value) => setRename((r2) => r2 && { ...r2, value }),
@@ -119094,7 +119992,7 @@ function SettingsView() {
       ] }) })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: section, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Calendar heatmap" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: sectionLabel, children: "Chart scale" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: card, children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs(
           "div",
@@ -119111,7 +120009,7 @@ function SettingsView() {
               /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: radioBtn((settings.heatmapScale ?? "log") === "log") }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Logarithmic scale" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Spreads color more evenly when some days have far more entries than others. Best for most libraries." })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Compresses tall timeline bars and spreads heatmap color more evenly when some periods have far more entries than others. Best for most libraries." })
               ] })
             ]
           }
@@ -119131,7 +120029,7 @@ function SettingsView() {
               /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: radioBtn(settings.heatmapScale === "linear") }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Linear scale" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Each additional file adds the same amount of color. 1 file = coolest heat." })
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Bar height and heat rise in direct proportion to the entry count." })
               ] })
             ]
           }
@@ -119139,7 +120037,7 @@ function SettingsView() {
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: rowLast, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 4 }, children: "Max count threshold" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Days with this many or more entries show the warmest color. Leave blank to use each year's actual maximum." })
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Calendar heatmap only: days with this many or more entries show the warmest color. Leave blank to use each year's actual maximum." })
           ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(
             "input",
@@ -120246,13 +121144,14 @@ function ResizeDivider({ onMouseDown }) {
   );
 }
 function App() {
-  const { setGroups, setEvents, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings, setVolumes } = useStore();
+  const { setGroups, setEvents, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings, setVolumes, setPeople, activeView } = useStore();
   reactExports.useEffect(() => {
     window.api.groups.list().then(setGroups);
     window.api.events.list().then(setEvents);
     window.api.settings.get().then(setSettings);
     window.api.volumes.list().then(setVolumes);
-  }, [setGroups, setEvents, setSettings, setVolumes]);
+    window.api.people.list().then(setPeople);
+  }, [setGroups, setEvents, setSettings, setVolumes, setPeople]);
   reactExports.useEffect(() => {
     document.documentElement.setAttribute("data-theme", settings?.theme ?? "light");
   }, [settings?.theme]);
@@ -120320,7 +121219,7 @@ function App() {
     };
   }, [setSyncProgress, refreshExtent, bumpRefreshKey, setVolumes]);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", height: "100vh" }, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx(GroupSidebar, {}),
+    activeView !== "people" && /* @__PURE__ */ jsxRuntimeExports.jsx(GroupSidebar, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(Main, {})
   ] });
 }
@@ -120568,6 +121467,7 @@ function Main() {
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "calendar"), onClick: () => setActiveView("calendar"), children: "Calendar" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "map"), onClick: () => setActiveView("map"), children: "Map" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "files"), onClick: () => setActiveView("files"), children: "Files" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "people"), onClick: () => setActiveView("people"), children: "People" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "spotify"), onClick: () => setActiveView("spotify"), children: "Spotify" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "settings"), onClick: () => setActiveView("settings"), children: "Settings" })
           ] }),
@@ -120647,7 +121547,7 @@ function Main() {
           flexDirection: "column",
           overflow: "hidden"
         }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "map" ? /* @__PURE__ */ jsxRuntimeExports.jsx(MapView, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : activeView === "spotify" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "map" ? /* @__PURE__ */ jsxRuntimeExports.jsx(MapView, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : activeView === "spotify" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyView, {}) : activeView === "people" ? /* @__PURE__ */ jsxRuntimeExports.jsx(PeopleView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
           activeView === "timeline" && /* @__PURE__ */ jsxRuntimeExports.jsx(EventsPanel, {}),
           activeView === "timeline" && /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyPanel, {})
         ] }) }),

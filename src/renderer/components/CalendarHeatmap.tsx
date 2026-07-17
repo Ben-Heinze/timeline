@@ -94,13 +94,13 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
           const groupForDay = dateRangeGroups.find(gr => dayTs >= gr.date_from! && dayTs < gr.date_to!)
           const rangeForDay = eventForDay ?? (groupForDay ? { color: groupForDay.color, title: groupForDay.name } : null)
 
-          const bg = inSel
-            ? '#c7d2fe'
-            : rangeForDay
-              ? `${rangeForDay.color}55`
-              : heatColor(count, effectiveMax, scale)
-
+          // Heatmap coloring is always preserved; selection is a transient drag overlay.
+          const bg = inSel ? '#c7d2fe' : heatColor(count, effectiveMax, scale)
           const fg = inSel ? '#3730a3' : textColor(count, effectiveMax, scale)
+
+          // Events/date-range groups are shown as a colored bar along the bottom
+          // of the cell rather than replacing the heat tint.
+          const barH = isExpanded ? Math.max(4, Math.round(cellSize * 0.08)) : 3
 
           return (
             <div
@@ -112,6 +112,7 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
                 ? `${key}: ${count} entr${count === 1 ? 'y' : 'ies'} · ${rangeForDay.title}`
                 : count > 0 ? `${key}: ${count} entr${count === 1 ? 'y' : 'ies'}` : key}
               style={{
+                position: 'relative', overflow: 'hidden',
                 height: cellSize, borderRadius: radius, background: bg,
                 cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -121,6 +122,14 @@ function MonthGrid({ year, month, countMap, effectiveMax, scale, selRange, dateR
               }}
             >
               {day}
+              {rangeForDay && !inSel && (
+                <div
+                  style={{
+                    position: 'absolute', left: 0, right: 0, bottom: 0,
+                    height: barH, background: rangeForDay.color,
+                  }}
+                />
+              )}
             </div>
           )
         })}

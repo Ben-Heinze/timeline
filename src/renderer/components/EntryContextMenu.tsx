@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
 import TagEditor from './TagEditor'
+import PeopleEditor from './PeopleEditor'
 import { GroupPickerList } from './GroupPicker'
 import ChangeDateModal from './ChangeDateModal'
 import type { Entry, Tag } from '../../shared/types'
@@ -17,13 +18,19 @@ export function useEntryContextMenu(entries: Entry[]) {
   const {
     selectedIds, setSelection,
     groups, tags: allTags, setTags: setAllTags,
+    people: allPeople, setPeople,
     bumpRefreshKey,
   } = useStore()
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   const [groupSubOpen, setGroupSubOpen] = useState(false)
   const [tagModalIds, setTagModalIds] = useState<number[] | null>(null)
+  const [peopleModalIds, setPeopleModalIds] = useState<number[] | null>(null)
+  const [pendingPersonIds, setPendingPersonIds] = useState<number[]>([])
   const [dateModalIds, setDateModalIds] = useState<number[] | null>(null)
+  const [renameId, setRenameId] = useState<number | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renameFile, setRenameFile] = useState(false)
   const [pendingTagNames, setPendingTagNames] = useState<string[]>([])
   const [existingTags, setExistingTags] = useState<{ tag: Tag; count: number }[]>([])
 
@@ -80,17 +87,19 @@ export function useEntryContextMenu(entries: Entry[]) {
   }, [])
 
   useEffect(() => {
-    if (!menu && tagModalIds === null) return
+    if (!menu && tagModalIds === null && peopleModalIds === null && renameId === null) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setMenu(null)
         setGroupSubOpen(false)
         setTagModalIds(null)
+        setPeopleModalIds(null)
+        setRenameId(null)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [menu, tagModalIds])
+  }, [menu, tagModalIds, peopleModalIds, renameId])
 
   const openTagModal = useCallback(() => {
     if (!menu) return
@@ -99,11 +108,44 @@ export function useEntryContextMenu(entries: Entry[]) {
     closeMenu()
   }, [menu, closeMenu])
 
+  const openPeopleModal = useCallback(() => {
+    if (!menu) return
+    setPendingPersonIds([])
+    setPeopleModalIds(menu.ids)
+    closeMenu()
+  }, [menu, closeMenu])
+
+  const applyPeople = useCallback(async () => {
+    if (!peopleModalIds || pendingPersonIds.length === 0) { setPeopleModalIds(null); return }
+    await window.api.people.addToEntries(peopleModalIds, pendingPersonIds)
+    setPeople(await window.api.people.list())
+    setPeopleModalIds(null)
+    bumpRefreshKey()
+  }, [peopleModalIds, pendingPersonIds, setPeople, bumpRefreshKey])
+
   const openDateModal = useCallback(() => {
     if (!menu) return
     setDateModalIds(menu.ids)
     closeMenu()
   }, [menu, closeMenu])
+
+  const openRenameModal = useCallback(() => {
+    if (!menu || menu.ids.length !== 1) return
+    const entry = entries.find(e => e.id === menu.ids[0])
+    setRenameValue(entry?.title ?? '')
+    setRenameFile(false)
+    setRenameId(menu.ids[0])
+    closeMenu()
+  }, [menu, entries, closeMenu])
+
+  const applyRename = useCallback(async () => {
+    if (renameId === null) return
+    const res = await window.api.entries.rename(renameId, renameValue, renameFile)
+    if (!res.ok) { window.alert(res.error ?? 'Rename failed.'); return }
+    if (res.note) window.alert(res.note)
+    setRenameId(null)
+    bumpRefreshKey()
+  }, [renameId, renameValue, renameFile, bumpRefreshKey])
 
   const applyTags = useCallback(async () => {
     if (!tagModalIds || pendingTagNames.length === 0) { setTagModalIds(null); return }
@@ -158,7 +200,11 @@ export function useEntryContextMenu(entries: Entry[]) {
             }}>
               {menu.ids.length} {menu.ids.length === 1 ? 'item' : 'items'}
             </div>
+            {menu.ids.length === 1 && (
+              <MenuItem label="Rename…" onClick={openRenameModal} />
+            )}
             <MenuItem label="Add tags…" onClick={openTagModal} />
+            <MenuItem label="Tag people…" onClick={openPeopleModal} />
             <div
               style={{ position: 'relative' }}
               onMouseEnter={() => setGroupSubOpen(true)}
@@ -284,6 +330,121 @@ export function useEntryContextMenu(entries: Entry[]) {
               >
                 Add tags
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tag-people modal */}
+      {peopleModalIds !== null && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 110,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onMouseDown={e => { if (e.target === e.currentTarget) setPeopleModalIds(null) }}
+        >
+          <div style={{
+            width: 400, maxWidth: '90vw',
+            background: 'var(--bg-surface)', border: '1px solid var(--border)',
+            borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+            padding: 16,
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>
+              Tag people
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12 }}>
+              Added to {peopleModalIds.length} {peopleModalIds.length === 1 ? 'item' : 'items'}. Existing people are kept.
+            </div>
+            <div style={{
+              border: '1px solid var(--border)', borderRadius: 6,
+              padding: '6px 8px', background: 'var(--bg-input)', marginBottom: 12, minHeight: 34,
+            }}>
+              <PeopleEditor
+                people={pendingPersonIds
+                  .map(id => allPeople.find(p => p.id === id))
+                  .filter((p): p is NonNullable<typeof p> => p != null)}
+                onChange={setPendingPersonIds}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setPeopleModalIds(null)} style={modalBtn(false)}>Cancel</button>
+              <button
+                onClick={applyPeople}
+                disabled={pendingPersonIds.length === 0}
+                style={{ ...modalBtn(true), opacity: pendingPersonIds.length === 0 ? 0.5 : 1 }}
+              >
+                Tag people
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename modal */}
+      {renameId !== null && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 110,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onMouseDown={e => { if (e.target === e.currentTarget) setRenameId(null) }}
+        >
+          <div style={{
+            width: 380, maxWidth: '90vw',
+            background: 'var(--bg-surface)', border: '1px solid var(--border)',
+            borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+            padding: 16,
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 12 }}>
+              Rename
+            </div>
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); applyRename() }
+              }}
+              placeholder="Name"
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                border: '1px solid var(--border)', borderRadius: 6,
+                padding: '8px 10px', fontSize: 13, marginBottom: 12,
+                background: 'var(--bg-input)', color: 'var(--text)',
+              }}
+            />
+            {(() => {
+              const target = entries.find(e => e.id === renameId)
+              const hasFile = !!target?.file_path && !target.is_missing
+              if (!hasFile) return null
+              return (
+                <label style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8,
+                  fontSize: 12.5, color: 'var(--text-2)', marginBottom: 14, cursor: 'pointer',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={renameFile}
+                    onChange={e => setRenameFile(e.target.checked)}
+                    style={{ marginTop: 2, flexShrink: 0 }}
+                  />
+                  <span>
+                    Also rename the file on disk
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-4)', marginTop: 2 }}>
+                      {target!.import_mode === 'reference'
+                        ? 'This renames your original linked file outside the library. The original name is kept in the database.'
+                        : 'The original name is kept in the database for safety.'}
+                    </span>
+                  </span>
+                </label>
+              )
+            })()}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setRenameId(null)} style={modalBtn(false)}>Cancel</button>
+              <button onClick={applyRename} style={modalBtn(true)}>Save</button>
             </div>
           </div>
         </div>

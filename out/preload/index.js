@@ -45,6 +45,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     monthBuckets: (opts) => electron.ipcRenderer.invoke("entries:monthBuckets", opts),
     get: (id) => electron.ipcRenderer.invoke("entries:get", id),
     update: (id, patch) => electron.ipcRenderer.invoke("entries:update", id, patch),
+    rename: (id, title, renameFile) => electron.ipcRenderer.invoke("entries:rename", id, title, renameFile),
     setDate: (params) => electron.ipcRenderer.invoke("entries:setDate", params),
     delete: (ids) => electron.ipcRenderer.invoke("entries:delete", ids),
     create: (data) => electron.ipcRenderer.invoke("entries:create", data)
@@ -84,6 +85,17 @@ electron.contextBridge.exposeInMainWorld("api", {
     addToEntries: (entryIds, names) => electron.ipcRenderer.invoke("tags:addToEntries", entryIds, names),
     forGroup: (groupId) => electron.ipcRenderer.invoke("tags:forGroup", groupId),
     setForGroup: (groupId, names) => electron.ipcRenderer.invoke("tags:setForGroup", groupId, names)
+  },
+  people: {
+    list: () => electron.ipcRenderer.invoke("people:list"),
+    get: (id) => electron.ipcRenderer.invoke("people:get", id),
+    create: (data) => electron.ipcRenderer.invoke("people:create", data),
+    update: (id, patch) => electron.ipcRenderer.invoke("people:update", id, patch),
+    delete: (id) => electron.ipcRenderer.invoke("people:delete", id),
+    forEntry: (entryId) => electron.ipcRenderer.invoke("people:forEntry", entryId),
+    setForEntry: (entryId, personIds) => electron.ipcRenderer.invoke("people:setForEntry", entryId, personIds),
+    addToEntries: (entryIds, personIds) => electron.ipcRenderer.invoke("people:addToEntries", entryIds, personIds),
+    entries: (personId) => electron.ipcRenderer.invoke("people:entries", personId)
   },
   files: {
     getMediaUrl: (entryId) => electron.ipcRenderer.invoke("files:getMediaUrl", entryId),

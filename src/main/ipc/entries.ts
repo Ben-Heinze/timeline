@@ -6,7 +6,24 @@ import { getLibraryPath } from '../library'
 import { resolveEntryAbsolutePath } from '../volumes/paths'
 import { computeFileHash, rescanLibrary } from '../ingest'
 import { writePhotoDate } from '../exif'
-import type { SetDateParams, SetDateResult, RescanResult } from '../../shared/types'
+import type { SetDateParams, SetDateResult, RescanResult, RenameEntryResult } from '../../shared/types'
+
+// Strip characters that are illegal or unsafe in a file name (path separators,
+// Windows-reserved chars, control chars, leading dots) so a user-typed title can
+// safely become an on-disk file name. Returns '' if nothing usable remains.
+function sanitizeFileName(name: string): string {
+  return name
+    .replace(/[/\\:*?"<>|\u0000-\u001f]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^\.+/, '')
+    .trim()
+    .slice(0, 200)
+    .trim()
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try { await fs.access(p); return true } catch { return false }
+}
 
 export function registerEntryHandlers(): void {
   ipcMain.handle('entries:histogram', (_, from, to, zoomLevel, groupId) =>
@@ -33,6 +50,70 @@ export function registerEntryHandlers(): void {
     q.getEntry(id))
   ipcMain.handle('entries:update', (_, id, patch) =>
     q.updateEntry(id, patch))
+
+  // Rename an entry's display title, and — when the user opts in — the backing
+  // file on disk too. The original file name is always preserved in the database
+  // (original_file_name) the first time the file is renamed, so the pre-rename
+  // name is never lost regardless of the on-disk choice.
+  ipcMain.handle('entries:rename', async (_, id: number, newTitle: string, renameOnDisk: boolean): Promise<RenameEntryResult> => {
+    const entry = q.getEntry(id)
+    if (!entry) return { ok: false, fileRenamed: false, error: 'Entry not found.' }
+
+    const title = newTitle.trim() || null
+
+    // Title-only rename: no file involved, or the user didn't ask to touch disk.
+    if (!renameOnDisk || !entry.file_path || entry.is_missing) {
+      q.updateEntry(id, { title })
+      return { ok: true, fileRenamed: false }
+    }
+
+    const abs = resolveEntryAbsolutePath(entry)
+    if (!abs) {
+      q.updateEntry(id, { title })
+      return { ok: true, fileRenamed: false, note: 'The file is not currently reachable, so only the display name was changed.' }
+    }
+
+    const ext = path.posix.extname(entry.file_path)   // preserve the extension
+    const stem = sanitizeFileName(title ?? '')
+    if (!stem) {
+      q.updateEntry(id, { title })
+      return { ok: true, fileRenamed: false, note: 'That name has no characters usable in a file name, so only the display name was changed.' }
+    }
+
+    // Pick a destination in the same directory, disambiguating so we never
+    // clobber another file that happens to share the new name.
+    const dir = path.dirname(abs)
+    let base = stem + ext
+    let dest = path.join(dir, base)
+    if (path.resolve(dest) !== path.resolve(abs)) {
+      let n = 1
+      while (await pathExists(dest)) {
+        n += 1
+        base = `${stem} (${n})${ext}`
+        dest = path.join(dir, base)
+      }
+    }
+
+    try {
+      if (path.resolve(dest) !== path.resolve(abs)) await fs.rename(abs, dest)
+    } catch (err) {
+      // Leave the DB pointing at the still-existing original; only the title moved.
+      q.updateEntry(id, { title })
+      return { ok: false, fileRenamed: false, error: `Could not rename the file on disk: ${(err as Error).message}` }
+    }
+
+    // Rebuild file_path in its original storage convention (copy/reference/volume)
+    // by swapping only the final path segment — the directory part is untouched.
+    const dirPart = path.posix.dirname(entry.file_path)
+    const newFilePath = dirPart === '.' ? base : `${dirPart}/${base}`
+
+    q.updateEntry(id, {
+      title,
+      file_path: newFilePath,
+      original_file_name: entry.original_file_name ?? path.posix.basename(entry.file_path),
+    })
+    return { ok: true, fileRenamed: true }
+  })
 
   ipcMain.handle('entries:setDate', async (_, params: SetDateParams): Promise<SetDateResult> => {
     const { ids, mode, value, writeExif } = params
@@ -108,6 +189,7 @@ export function registerEntryHandlers(): void {
       needs_date_review: 0,
       is_missing: 0,
       content_hash: null,
+      original_file_name: null,
       import_mode: 'copy',
       volume_id: null,
       latitude: null,

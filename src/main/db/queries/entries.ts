@@ -200,11 +200,11 @@ export function insertEntry(entry: Omit<Entry, 'id'>): number {
     INSERT INTO entries
       (type, timestamp, title, file_path, thumbnail_small, thumbnail_medium,
        thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review,
-       is_missing, content_hash, import_mode, volume_id, latitude, longitude, gps_scanned, created_at)
+       is_missing, content_hash, original_file_name, import_mode, volume_id, latitude, longitude, gps_scanned, created_at)
     VALUES
       (@type, @timestamp, @title, @file_path, @thumbnail_small, @thumbnail_medium,
        @thumbnail_large, @duration_seconds, @rich_text_json, @group_id, @needs_date_review,
-       @is_missing, @content_hash, @import_mode, @volume_id, @latitude, @longitude, @gps_scanned, @created_at)
+       @is_missing, @content_hash, @original_file_name, @import_mode, @volume_id, @latitude, @longitude, @gps_scanned, @created_at)
   `).run(entry)
   return result.lastInsertRowid as number
 }

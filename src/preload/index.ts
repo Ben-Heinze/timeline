@@ -8,6 +8,7 @@ import type {
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
   SetDateParams, RescanProgressEvent, RescanResult, ImportPreview, PageParams, MonthBucket, Entry,
+  RenameEntryResult, Person, PersonListItem, NewPerson,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -74,6 +75,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('entries:get', id),
     update: (id: number, patch: Record<string, unknown>) =>
       ipcRenderer.invoke('entries:update', id, patch),
+    rename: (id: number, title: string, renameFile: boolean): Promise<RenameEntryResult> =>
+      ipcRenderer.invoke('entries:rename', id, title, renameFile),
     setDate: (params: SetDateParams) =>
       ipcRenderer.invoke('entries:setDate', params),
     delete: (ids: number[]) =>
@@ -139,6 +142,26 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('tags:forGroup', groupId),
     setForGroup: (groupId: number, names: string[]) =>
       ipcRenderer.invoke('tags:setForGroup', groupId, names),
+  },
+  people: {
+    list: (): Promise<PersonListItem[]> =>
+      ipcRenderer.invoke('people:list'),
+    get: (id: number): Promise<Person | null> =>
+      ipcRenderer.invoke('people:get', id),
+    create: (data: NewPerson): Promise<Person> =>
+      ipcRenderer.invoke('people:create', data),
+    update: (id: number, patch: Partial<Omit<Person, 'id'>>): Promise<Person> =>
+      ipcRenderer.invoke('people:update', id, patch),
+    delete: (id: number): Promise<void> =>
+      ipcRenderer.invoke('people:delete', id),
+    forEntry: (entryId: number): Promise<Person[]> =>
+      ipcRenderer.invoke('people:forEntry', entryId),
+    setForEntry: (entryId: number, personIds: number[]): Promise<Person[]> =>
+      ipcRenderer.invoke('people:setForEntry', entryId, personIds),
+    addToEntries: (entryIds: number[], personIds: number[]): Promise<void> =>
+      ipcRenderer.invoke('people:addToEntries', entryIds, personIds),
+    entries: (personId: number): Promise<Entry[]> =>
+      ipcRenderer.invoke('people:entries', personId),
   },
   files: {
     getMediaUrl: (entryId: number): Promise<string | null> =>

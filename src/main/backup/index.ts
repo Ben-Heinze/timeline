@@ -58,6 +58,9 @@ function dumpMetadata(db: Database.Database, exportType: BackupExportType): stri
       entry_tags: all('entry_tags'),
       group_tags: all('group_tags'),
       events: all('events'),
+      // Source of truth for Spotify listening; the daily/artist rollups are
+      // derived from this and rebuilt on demand, so they're not dumped here.
+      listening_history: all('listening_history'),
     },
     null,
     2,
@@ -148,6 +151,7 @@ export async function exportBackup(
       await walkForZip(path.join(libraryPath, 'thumbnails'), 'thumbnails', zipEntries)
       if (type === 'full') {
         await walkForZip(path.join(libraryPath, 'files'), 'files', zipEntries)
+        await walkForZip(path.join(libraryPath, 'spotify'), 'spotify', zipEntries)
         zipEntries.push(...referencedFiles)
       }
 

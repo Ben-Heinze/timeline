@@ -5,6 +5,7 @@ import TimelineCanvas, { yearViewRange } from './components/TimelineCanvas'
 import CalendarHeatmap from './components/CalendarHeatmap'
 import MapView from './components/MapView'
 import FilesView from './components/FilesView'
+import PeopleView from './components/PeopleView'
 import SpotifyView from './components/SpotifyView'
 import FileBrowser from './components/FileBrowser'
 import EntryModal from './components/EntryModal'
@@ -39,14 +40,15 @@ function ResizeDivider({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => 
 }
 
 export default function App() {
-  const { setGroups, setEvents, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings, setVolumes } = useStore()
+  const { setGroups, setEvents, setDataExtent, setVisibleRange, setIngestProgress, setSyncProgress, bumpRefreshKey, setSettings, settings, setVolumes, setPeople, activeView } = useStore()
 
   useEffect(() => {
     window.api.groups.list().then(setGroups)
     window.api.events.list().then(setEvents)
     window.api.settings.get().then(setSettings)
     window.api.volumes.list().then(setVolumes)
-  }, [setGroups, setEvents, setSettings, setVolumes])
+    window.api.people.list().then(setPeople)
+  }, [setGroups, setEvents, setSettings, setVolumes, setPeople])
 
   // Apply theme to document root whenever settings.theme changes
   useEffect(() => {
@@ -115,7 +117,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
-      <GroupSidebar />
+      {activeView !== 'people' && <GroupSidebar />}
       <Main />
     </div>
   )
@@ -394,6 +396,9 @@ function Main() {
           <button style={tabStyle(activeView === 'files')} onClick={() => setActiveView('files')}>
             Files
           </button>
+          <button style={tabStyle(activeView === 'people')} onClick={() => setActiveView('people')}>
+            People
+          </button>
           <button style={tabStyle(activeView === 'spotify')} onClick={() => setActiveView('spotify')}>
             Spotify
           </button>
@@ -463,6 +468,7 @@ function Main() {
              : activeView === 'map' ? <MapView />
              : activeView === 'settings' ? <SettingsView />
              : activeView === 'spotify' ? <SpotifyView />
+             : activeView === 'people' ? <PeopleView />
              : <FilesView />}
           </div>
           {activeView === 'timeline' && <EventsPanel />}

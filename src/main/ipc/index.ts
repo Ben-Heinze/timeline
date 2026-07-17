@@ -4,6 +4,7 @@ import { registerEventHandlers } from './events'
 import { registerGroupHandlers } from './groups'
 import { registerIngestHandlers } from './ingest'
 import { registerMapHandlers } from './map'
+import { registerPeopleHandlers } from './people'
 import { registerTagHandlers } from './tags'
 import { registerSettingsHandlers } from './settings'
 import { registerFileHandlers } from './files'
@@ -18,6 +19,7 @@ export function registerAllHandlers(): void {
   registerGroupHandlers()
   registerIngestHandlers()
   registerMapHandlers()
+  registerPeopleHandlers()
   registerTagHandlers()
   registerSettingsHandlers()
   registerSpotifyHandlers()

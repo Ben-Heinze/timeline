@@ -1,6 +1,7 @@
 "use strict";
 const electron = require("electron");
 const path = require("path");
+const url = require("url");
 const fs = require("fs");
 const Database = require("better-sqlite3");
 const fs$1 = require("fs/promises");
@@ -61,6 +62,9 @@ function getFilesPath() {
 function getThumbnailPath(size) {
   return path.join(getLibraryPath(), "thumbnails", size);
 }
+function getSpotifyPath() {
+  return path.join(getLibraryPath(), "spotify");
+}
 function isPathUnder(root, target) {
   const rel = path.relative(root, target);
   return rel === "" || !rel.startsWith("..") && !path.isAbsolute(rel);
@@ -71,7 +75,8 @@ function ensureLibraryDirs() {
     getFilesPath(),
     getThumbnailPath("small"),
     getThumbnailPath("medium"),
-    getThumbnailPath("large")
+    getThumbnailPath("large"),
+    getSpotifyPath()
   ];
   for (const dir of dirs) {
     fs.mkdirSync(dir, { recursive: true });
@@ -102,6 +107,7 @@ function initSchema(db2) {
       needs_date_review INTEGER NOT NULL DEFAULT 0,
       is_missing        INTEGER NOT NULL DEFAULT 0,
       content_hash      TEXT,
+      original_file_name TEXT,
       import_mode       TEXT    NOT NULL DEFAULT 'copy',
       latitude          REAL,
       longitude         REAL,
@@ -112,6 +118,33 @@ function initSchema(db2) {
     CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_entries_group_id  ON entries(group_id);
     CREATE INDEX IF NOT EXISTS idx_entries_group_timestamp ON entries(group_id, timestamp);
+
+    -- People (and animals) you can tag in photos/videos, each with an info sheet.
+    CREATE TABLE IF NOT EXISTS people (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind            TEXT    NOT NULL DEFAULT 'person' CHECK(kind IN ('person','animal')),
+      name            TEXT    NOT NULL,
+      color           TEXT    NOT NULL,
+      relationship    TEXT,
+      birthday        TEXT,             -- ISO 'YYYY-MM-DD' (a calendar date, not an instant)
+      notes           TEXT,
+      email           TEXT,
+      phone           TEXT,
+      address         TEXT,
+      species         TEXT,             -- animals only
+      breed           TEXT,             -- animals only
+      avatar_entry_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
+      created_at      INTEGER NOT NULL
+    );
+
+    -- Which people appear in which entries (mirrors entry_tags).
+    CREATE TABLE IF NOT EXISTS entry_people (
+      entry_id  INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+      person_id INTEGER NOT NULL REFERENCES people(id)  ON DELETE CASCADE,
+      PRIMARY KEY (entry_id, person_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_entry_people_person ON entry_people(person_id);
 
     CREATE TABLE IF NOT EXISTS volumes (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,6 +234,7 @@ function applyMigrations(db2) {
   );
   if (!entryCols.has("is_missing")) db2.exec(`ALTER TABLE entries ADD COLUMN is_missing  INTEGER NOT NULL DEFAULT 0`);
   if (!entryCols.has("content_hash")) db2.exec(`ALTER TABLE entries ADD COLUMN content_hash TEXT`);
+  if (!entryCols.has("original_file_name")) db2.exec(`ALTER TABLE entries ADD COLUMN original_file_name TEXT`);
   if (!entryCols.has("import_mode")) db2.exec(`ALTER TABLE entries ADD COLUMN import_mode  TEXT NOT NULL DEFAULT 'copy'`);
   if (!entryCols.has("latitude")) db2.exec(`ALTER TABLE entries ADD COLUMN latitude  REAL`);
   if (!entryCols.has("longitude")) db2.exec(`ALTER TABLE entries ADD COLUMN longitude REAL`);
@@ -520,11 +554,11 @@ function insertEntry(entry) {
     INSERT INTO entries
       (type, timestamp, title, file_path, thumbnail_small, thumbnail_medium,
        thumbnail_large, duration_seconds, rich_text_json, group_id, needs_date_review,
-       is_missing, content_hash, import_mode, volume_id, latitude, longitude, gps_scanned, created_at)
+       is_missing, content_hash, original_file_name, import_mode, volume_id, latitude, longitude, gps_scanned, created_at)
     VALUES
       (@type, @timestamp, @title, @file_path, @thumbnail_small, @thumbnail_medium,
        @thumbnail_large, @duration_seconds, @rich_text_json, @group_id, @needs_date_review,
-       @is_missing, @content_hash, @import_mode, @volume_id, @latitude, @longitude, @gps_scanned, @created_at)
+       @is_missing, @content_hash, @original_file_name, @import_mode, @volume_id, @latitude, @longitude, @gps_scanned, @created_at)
   `).run(entry);
   return result.lastInsertRowid;
 }
@@ -1090,6 +1124,7 @@ async function ingestOne(sourcePath, relDir, groupPath, mode, volumeId) {
       needs_date_review: needsDateReview,
       is_missing: 0,
       content_hash: contentHash,
+      original_file_name: fileName,
       import_mode: isReference ? "reference" : "copy",
       volume_id: isReference ? volumeId : null,
       latitude: gps?.latitude ?? null,
@@ -1510,7 +1545,10 @@ function dumpMetadata(db2, exportType) {
       tags: all("tags"),
       entry_tags: all("entry_tags"),
       group_tags: all("group_tags"),
-      events: all("events")
+      events: all("events"),
+      // Source of truth for Spotify listening; the daily/artist rollups are
+      // derived from this and rebuilt on demand, so they're not dumped here.
+      listening_history: all("listening_history")
     },
     null,
     2
@@ -1574,6 +1612,7 @@ async function exportBackup(destZip, type, onProgress) {
       await walkForZip(path.join(libraryPath, "thumbnails"), "thumbnails", zipEntries);
       if (type === "full") {
         await walkForZip(path.join(libraryPath, "files"), "files", zipEntries);
+        await walkForZip(path.join(libraryPath, "spotify"), "spotify", zipEntries);
         zipEntries.push(...referencedFiles);
       }
       await writeZip(destZip, zipEntries, onProgress);
@@ -1713,6 +1752,17 @@ function registerBackupHandlers() {
     return importBackup(zipPath, destDir, progressSender(event.sender));
   });
 }
+function sanitizeFileName(name) {
+  return name.replace(/[/\\:*?"<>|\u0000-\u001f]/g, "").replace(/\s+/g, " ").replace(/^\.+/, "").trim().slice(0, 200).trim();
+}
+async function pathExists$1(p) {
+  try {
+    await fs$1.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function registerEntryHandlers() {
   electron.ipcMain.handle("entries:histogram", (_, from, to, zoomLevel, groupId) => getHistogram(from, to, zoomLevel, groupId ?? void 0));
   electron.ipcMain.handle("entries:forDay", (_, dateMs) => getEntriesForDay(dateMs));
@@ -1726,6 +1776,51 @@ function registerEntryHandlers() {
   electron.ipcMain.handle("entries:monthBuckets", (_, opts) => getMonthBuckets(opts));
   electron.ipcMain.handle("entries:get", (_, id) => getEntry(id));
   electron.ipcMain.handle("entries:update", (_, id, patch) => updateEntry(id, patch));
+  electron.ipcMain.handle("entries:rename", async (_, id, newTitle, renameOnDisk) => {
+    const entry = getEntry(id);
+    if (!entry) return { ok: false, fileRenamed: false, error: "Entry not found." };
+    const title = newTitle.trim() || null;
+    if (!renameOnDisk || !entry.file_path || entry.is_missing) {
+      updateEntry(id, { title });
+      return { ok: true, fileRenamed: false };
+    }
+    const abs = resolveEntryAbsolutePath(entry);
+    if (!abs) {
+      updateEntry(id, { title });
+      return { ok: true, fileRenamed: false, note: "The file is not currently reachable, so only the display name was changed." };
+    }
+    const ext = path.posix.extname(entry.file_path);
+    const stem = sanitizeFileName(title ?? "");
+    if (!stem) {
+      updateEntry(id, { title });
+      return { ok: true, fileRenamed: false, note: "That name has no characters usable in a file name, so only the display name was changed." };
+    }
+    const dir = path.dirname(abs);
+    let base = stem + ext;
+    let dest = path.join(dir, base);
+    if (path.resolve(dest) !== path.resolve(abs)) {
+      let n = 1;
+      while (await pathExists$1(dest)) {
+        n += 1;
+        base = `${stem} (${n})${ext}`;
+        dest = path.join(dir, base);
+      }
+    }
+    try {
+      if (path.resolve(dest) !== path.resolve(abs)) await fs$1.rename(abs, dest);
+    } catch (err) {
+      updateEntry(id, { title });
+      return { ok: false, fileRenamed: false, error: `Could not rename the file on disk: ${err.message}` };
+    }
+    const dirPart = path.posix.dirname(entry.file_path);
+    const newFilePath = dirPart === "." ? base : `${dirPart}/${base}`;
+    updateEntry(id, {
+      title,
+      file_path: newFilePath,
+      original_file_name: entry.original_file_name ?? path.posix.basename(entry.file_path)
+    });
+    return { ok: true, fileRenamed: true };
+  });
   electron.ipcMain.handle("entries:setDate", async (_, params) => {
     const { ids, mode, value, writeExif } = params;
     if (mode === "set") setEntriesTimestamp(ids, value);
@@ -1792,6 +1887,7 @@ function registerEntryHandlers() {
     needs_date_review: 0,
     is_missing: 0,
     content_hash: null,
+    original_file_name: null,
     import_mode: "copy",
     volume_id: null,
     latitude: null,
@@ -2003,13 +2099,13 @@ async function allDownloaded() {
   }
   return true;
 }
-async function contentLength(url) {
-  const res = await fetch(url, { method: "HEAD" });
+async function contentLength(url2) {
+  const res = await fetch(url2, { method: "HEAD" });
   return Number(res.headers.get("content-length") ?? 0);
 }
-async function downloadTo(url, dest, onChunk) {
-  const res = await fetch(url);
-  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} downloading ${url}`);
+async function downloadTo(url2, dest, onChunk) {
+  const res = await fetch(url2);
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} downloading ${url2}`);
   const chunks = [];
   const reader = res.body.getReader();
   while (true) {
@@ -2063,6 +2159,103 @@ function registerMapHandlers() {
       downloading = false;
     }
   });
+}
+function listPeople() {
+  return getDb().prepare(`
+    SELECT p.*,
+           COUNT(ep.entry_id)        AS count,
+           av.thumbnail_small        AS avatar_thumb
+    FROM people p
+    LEFT JOIN entry_people ep ON ep.person_id = p.id
+    LEFT JOIN entries av       ON av.id = p.avatar_entry_id
+    GROUP BY p.id
+    ORDER BY p.name COLLATE NOCASE
+  `).all();
+}
+function getPerson(id) {
+  return getDb().prepare("SELECT * FROM people WHERE id = ?").get(id);
+}
+function createPerson(data) {
+  const db2 = getDb();
+  const result = db2.prepare(`
+    INSERT INTO people
+      (kind, name, color, relationship, birthday, notes, email, phone, address, species, breed, avatar_entry_id, created_at)
+    VALUES
+      (@kind, @name, @color, @relationship, @birthday, @notes, @email, @phone, @address, @species, @breed, @avatar_entry_id, @created_at)
+  `).run({
+    kind: data.kind,
+    name: data.name.trim(),
+    color: data.color,
+    relationship: data.relationship ?? null,
+    birthday: data.birthday ?? null,
+    notes: data.notes ?? null,
+    email: data.email ?? null,
+    phone: data.phone ?? null,
+    address: data.address ?? null,
+    species: data.species ?? null,
+    breed: data.breed ?? null,
+    avatar_entry_id: data.avatar_entry_id ?? null,
+    created_at: Date.now()
+  });
+  return getPerson(result.lastInsertRowid);
+}
+function updatePerson(id, patch) {
+  const db2 = getDb();
+  const keys = Object.keys(patch);
+  if (keys.length > 0) {
+    const fields = keys.map((k) => `${k} = @${k}`).join(", ");
+    db2.prepare(`UPDATE people SET ${fields} WHERE id = @id`).run({ ...patch, id });
+  }
+  return getPerson(id);
+}
+function deletePerson(id) {
+  getDb().prepare("DELETE FROM people WHERE id = ?").run(id);
+}
+function getEntryPeople(entryId) {
+  return getDb().prepare(`
+    SELECT p.* FROM people p
+    JOIN entry_people ep ON ep.person_id = p.id
+    WHERE ep.entry_id = ?
+    ORDER BY p.name COLLATE NOCASE
+  `).all(entryId);
+}
+function setEntryPeople(entryId, personIds) {
+  const db2 = getDb();
+  db2.transaction(() => {
+    db2.prepare("DELETE FROM entry_people WHERE entry_id = ?").run(entryId);
+    const ins = db2.prepare("INSERT OR IGNORE INTO entry_people (entry_id, person_id) VALUES (?, ?)");
+    for (const pid of personIds) ins.run(entryId, pid);
+  })();
+  return getEntryPeople(entryId);
+}
+function bulkAddPeopleToEntries(entryIds, personIds) {
+  if (entryIds.length === 0 || personIds.length === 0) return;
+  const db2 = getDb();
+  const ins = db2.prepare("INSERT OR IGNORE INTO entry_people (entry_id, person_id) VALUES (?, ?)");
+  db2.transaction(() => {
+    for (const eid of entryIds) {
+      for (const pid of personIds) ins.run(eid, pid);
+    }
+  })();
+}
+function getPersonEntries(personId) {
+  return getDb().prepare(`
+    SELECT e.* FROM entries e
+    JOIN entry_people ep ON ep.entry_id = e.id
+    WHERE ep.person_id = ?
+    ORDER BY e.timestamp DESC
+  `).all(personId);
+}
+function registerPeopleHandlers() {
+  electron.ipcMain.handle("people:list", () => listPeople());
+  electron.ipcMain.handle("people:get", (_, id) => getPerson(id));
+  electron.ipcMain.handle("people:create", (_, data) => createPerson(data));
+  electron.ipcMain.handle("people:update", (_, id, patch) => updatePerson(id, patch));
+  electron.ipcMain.handle("people:delete", (_, id) => deletePerson(id));
+  electron.ipcMain.handle("people:forEntry", (_, entryId) => getEntryPeople(entryId));
+  electron.ipcMain.handle("people:setForEntry", (_, entryId, personIds) => setEntryPeople(entryId, personIds));
+  electron.ipcMain.handle("people:addToEntries", (_, entryIds, personIds) => bulkAddPeopleToEntries(entryIds, personIds));
+  electron.ipcMain.handle("people:entries", (_, personId) => getPersonEntries(personId));
 }
 function registerTagHandlers() {
   electron.ipcMain.handle("tags:list", () => listTags());
@@ -2458,9 +2651,9 @@ function getMediaUrl(entryId) {
   return `http://127.0.0.1:${serverPort}/media/${entryId}?token=${serverToken}`;
 }
 function handleRequest(req, res) {
-  const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  const match = url.pathname.match(/^\/media\/(\d+)$/);
-  if (req.method !== "GET" || !match || url.searchParams.get("token") !== serverToken) {
+  const url2 = new URL(req.url ?? "/", "http://127.0.0.1");
+  const match = url2.pathname.match(/^\/media\/(\d+)$/);
+  if (req.method !== "GET" || !match || url2.searchParams.get("token") !== serverToken) {
     res.writeHead(403).end();
     return;
   }
@@ -2579,6 +2772,12 @@ async function expandSpotifyPaths(inputPaths) {
     }
   }
   return files;
+}
+async function saveExportToLibrary(sourcePath) {
+  const spotifyDir = getSpotifyPath();
+  if (isPathUnder(spotifyDir, sourcePath)) return;
+  await fs$1.mkdir(spotifyDir, { recursive: true });
+  await fs$1.copyFile(sourcePath, path.join(spotifyDir, path.basename(sourcePath)));
 }
 async function parseSpotifyFile(filePath) {
   const raw = await fs$1.readFile(filePath, "utf-8");
@@ -2862,6 +3061,7 @@ function registerSpotifyHandlers() {
       const file = files[i];
       const plays = await parseSpotifyFile(file);
       imported += insertPlays(plays);
+      await saveExportToLibrary(file);
       if (!sender.isDestroyed()) {
         const evt = {
           processedFiles: i + 1,
@@ -2899,6 +3099,7 @@ function registerAllHandlers() {
   registerGroupHandlers();
   registerIngestHandlers();
   registerMapHandlers();
+  registerPeopleHandlers();
   registerTagHandlers();
   registerSettingsHandlers();
   registerSpotifyHandlers();
@@ -2919,8 +3120,8 @@ function createWindow() {
     }
   });
   win.on("ready-to-show", () => win.show());
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    electron.shell.openExternal(url);
+  win.webContents.setWindowOpenHandler(({ url: url2 }) => {
+    electron.shell.openExternal(url2);
     return { action: "deny" };
   });
   if (process.env["ELECTRON_RENDERER_URL"]) {
@@ -2932,10 +3133,14 @@ function createWindow() {
 electron.app.whenReady().then(async () => {
   ensureLibraryDirs();
   registerAllHandlers();
-  electron.protocol.handle("timeline", (request) => {
+  electron.protocol.handle("timeline", async (request) => {
     const rel = decodeURIComponent(request.url.slice("timeline:///".length));
     const filePath = path.normalize(path.join(getLibraryPath(), rel));
-    return electron.net.fetch(`file://${filePath}`);
+    try {
+      return await electron.net.fetch(url.pathToFileURL(filePath).toString());
+    } catch {
+      return new Response(null, { status: 404 });
+    }
   });
   await refreshVolumes();
   backfillWatchedFolderVolumes();

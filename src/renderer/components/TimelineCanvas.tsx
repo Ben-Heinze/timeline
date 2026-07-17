@@ -22,6 +22,45 @@ const niceStep = (n: number) => {
   return (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * p
 }
 
+// Count → plotted-height transform for the histogram bars. Log mode uses log1p
+// so an empty bucket still maps to 0 while tall bars get compressed — the same
+// scale the calendar heatmap exposes via the "Logarithmic scale" setting.
+const barTransform = (scale: 'log' | 'linear') =>
+  scale === 'log' ? (v: number) => Math.log1p(v) : (v: number) => v
+
+// 1/2/5-per-decade tick ladder up to the first value >= maxCount (log axis).
+const logTicks = (maxCount: number): number[] => {
+  const ticks: number[] = []
+  const top = Math.max(1, maxCount)
+  for (let p = 0; p < 12; p++) {
+    for (const m of [1, 2, 5]) {
+      const v = m * Math.pow(10, p)
+      ticks.push(v)
+      if (v >= top) return ticks
+    }
+  }
+  return ticks
+}
+
+// Shared y-axis geometry for the bar chart so the draw pass and the hover hit
+// test stay pixel-identical. `barsH` is the pixel height of the bar area.
+function barAxis(maxCount: number, scale: 'log' | 'linear', barsH: number) {
+  const tf = barTransform(scale)
+  let niceMax: number
+  let ticks: number[]
+  if (scale === 'log') {
+    ticks = logTicks(maxCount)
+    niceMax = ticks[ticks.length - 1]
+  } else {
+    const yStep = niceStep(maxCount)
+    niceMax = Math.ceil(maxCount / yStep) * yStep
+    ticks = []
+    for (let v = yStep; v <= niceMax; v += yStep) ticks.push(v)
+  }
+  const barScale = (barsH * 0.92) / tf(niceMax)
+  return { tf, ticks, barScale }
+}
+
 // Fixed bucket size per zoom level
 export const BUCKET_MS: Record<ZoomLevel, number> = {
   year:  365.25 * MS_DAY,
@@ -185,6 +224,7 @@ export default function TimelineCanvas() {
 
   const theme = settings?.theme ?? 'light'
   const curveTension = settings?.curveTension ?? 1
+  const barScaleMode = settings?.heatmapScale ?? 'log'
 
   // CSS custom properties only change when `theme` changes, but the draw effect below
   // re-runs far more often than that (e.g. every debounced pan). Reading them via
@@ -376,15 +416,14 @@ export default function TimelineCanvas() {
       if (total > maxCount) maxCount = total
     }
 
-    const yStep   = niceStep(maxCount)
-    const niceMax = Math.ceil(maxCount / yStep) * yStep
-    const barScale = (barsH * 0.92) / niceMax
+    const { tf, ticks: yTicks, barScale } = barAxis(maxCount, barScaleMode, barsH)
 
     // Y axis grid lines (drawn before bars)
     ctx.strokeStyle = themeVars.canvasGrid
     ctx.lineWidth = 1
-    for (let v = yStep; v <= niceMax; v += yStep) {
-      const y = Math.round(barsH - v * barScale) + 0.5
+    for (const v of yTicks) {
+      const y = Math.round(barsH - tf(v) * barScale) + 0.5
+      if (y < 4) continue
       ctx.beginPath()
       ctx.moveTo(YAXIS_W, y)
       ctx.lineTo(w, y)
@@ -406,7 +445,7 @@ export default function TimelineCanvas() {
         const x = slotX + barOX
 
         const total     = segs.reduce((s, sg) => s + sg.count, 0)
-        const totalBarH = Math.max(2, total * barScale)
+        const totalBarH = Math.max(2, tf(total) * barScale)
 
         if (selectedPeriod && bucketStart >= selectedPeriod[0] && bucketStart < selectedPeriod[1]) {
           ctx.fillStyle = 'rgba(245,158,11,0.10)'
@@ -428,7 +467,7 @@ export default function TimelineCanvas() {
       const pts = sorted.map(([bs, segs]) => {
         const total = segs.reduce((s, sg) => s + sg.count, 0)
         const cx = tsToX((bs + bucketEndMs(bs, zoomLevel)) / 2)
-        return { x: cx, y: barsH - Math.max(2, total * barScale) }
+        return { x: cx, y: barsH - Math.max(2, tf(total) * barScale) }
       })
 
       if (pts.length > 0) {
@@ -616,9 +655,9 @@ export default function TimelineCanvas() {
     ctx.font = '10px system-ui, sans-serif'
     ctx.textAlign = 'right'
     ctx.textBaseline = 'middle'
-    for (let v = yStep; v <= niceMax; v += yStep) {
-      const y = barsH - v * barScale
-      if (y < 4) break
+    for (const v of yTicks) {
+      const y = barsH - tf(v) * barScale
+      if (y < 4) continue
       ctx.fillText(String(v), YAXIS_W - 5, y)
     }
     ctx.strokeStyle = themeVars.canvasAxis
@@ -627,7 +666,7 @@ export default function TimelineCanvas() {
     ctx.moveTo(YAXIS_W - 0.5, 0)
     ctx.lineTo(YAXIS_W - 0.5, chartH)
     ctx.stroke()
-  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, themeVars, curveMode, curveTension, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets])
+  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, themeVars, curveMode, curveTension, barScaleMode, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets])
 
   // Wheel → pan
   const handleWheel = useCallback((e: WheelEvent) => {
@@ -794,9 +833,7 @@ export default function TimelineCanvas() {
         const t = segs.reduce((s, sg) => s + sg.count, 0)
         if (t > maxCount) maxCount = t
       }
-      const yStep = niceStep(maxCount)
-      const niceMax = Math.ceil(maxCount / yStep) * yStep
-      const barScale = (barsBottom * 0.92) / niceMax
+      const { tf, barScale } = barAxis(maxCount, barScaleMode, barsBottom)
 
       for (const [bucketStart, segs] of bucketSegments) {
         const total = segs.reduce((s, sg) => s + sg.count, 0)
@@ -804,7 +841,7 @@ export default function TimelineCanvas() {
         const slotW = tsToX(bucketEndMs(bucketStart, zoomLevel)) - slotX
         const barW  = curveMode ? slotW : Math.max(2, slotW * BAR_FILL)
         const barX  = curveMode ? slotX : slotX + (slotW - barW) / 2
-        const barH  = Math.max(2, total * barScale)
+        const barH  = Math.max(2, tf(total) * barScale)
         if (cx >= barX && cx < barX + barW && cy >= barsBottom - barH) {
           found = { bucketStart }
           if (!curveMode) {
@@ -824,7 +861,7 @@ export default function TimelineCanvas() {
       }
     }
     setHover(found !== null ? { x: cx, y: cy, ...found } : null)
-  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, bucketSegments, zoomLevel, curveMode, eventAt, eventBandH])
+  }, [rangeSelectMode, setDateRangeSelection, setVisibleRange, bucketSegments, zoomLevel, curveMode, barScaleMode, eventAt, eventBandH])
 
   // Click: drill down / open the file browser (not used in range select mode — handled globally)
   const onMouseUp = useCallback((e: React.MouseEvent) => {

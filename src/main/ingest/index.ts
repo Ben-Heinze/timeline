@@ -344,6 +344,7 @@ async function ingestOne(sourcePath: string, relDir: string, groupPath: string[]
       needs_date_review: needsDateReview,
       is_missing: 0,
       content_hash: contentHash,
+      original_file_name: fileName,
       import_mode: isReference ? 'reference' : 'copy',
       volume_id: isReference ? volumeId : null,
       latitude: gps?.latitude ?? null,
