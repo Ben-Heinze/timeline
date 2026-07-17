@@ -186,6 +186,20 @@ export default function TimelineCanvas() {
   const theme = settings?.theme ?? 'light'
   const curveTension = settings?.curveTension ?? 1
 
+  // CSS custom properties only change when `theme` changes, but the draw effect below
+  // re-runs far more often than that (e.g. every debounced pan). Reading them via
+  // getComputedStyle ~9x per draw is wasted work, so cache them keyed by theme instead.
+  const themeVars = useMemo(() => ({
+    canvasBg:    cv('--canvas-bg'),
+    canvasGrid:  cv('--canvas-grid'),
+    accent:      cv('--accent'),
+    canvasAxis:  cv('--canvas-axis'),
+    canvasTick:  cv('--canvas-tick'),
+    canvasLabel: cv('--canvas-label'),
+    text4:       cv('--text-4'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [theme])
+
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear())
   const [selectedMonthStart, setSelectedMonthStart] = useState<number>(() => {
     const now = new Date()
@@ -265,20 +279,28 @@ export default function TimelineCanvas() {
     return null
   }, [eventLanes, eventBandH])
 
-  // Fetch histogram with fixed bucket for this zoom level
+  // Fetch histogram with fixed bucket for this zoom level. Debounced: panning fires
+  // setVisibleRange every mouse-move, and Year view queries the full data extent, so
+  // we wait for the view to settle before issuing the (potentially expensive) query —
+  // same reasoning as the listening-ribbon fetch below.
   useEffect(() => {
     const [from, to] = visibleRange
-    window.api.entries.histogram(from, to, zoomLevel, selectedGroupId ?? undefined).then(buckets => {
-      setHistogramBuckets(buckets)
-      // Only auto-fit to full extent from year view — never yank the user out of day/month
-      if (buckets.length === 0 && selectedGroupId == null && zoomLevel === 'year') {
-        const ext = extentRef.current
-        if (ext) {
-          setVisibleRange(yearViewRange(ext))
-          setZoomLevel('year')
+    let cancelled = false
+    const t = setTimeout(() => {
+      window.api.entries.histogram(from, to, zoomLevel, selectedGroupId ?? undefined).then(buckets => {
+        if (cancelled) return
+        setHistogramBuckets(buckets)
+        // Only auto-fit to full extent from year view — never yank the user out of day/month
+        if (buckets.length === 0 && selectedGroupId == null && zoomLevel === 'year') {
+          const ext = extentRef.current
+          if (ext) {
+            setVisibleRange(yearViewRange(ext))
+            setZoomLevel('year')
+          }
         }
-      }
-    })
+      })
+    }, 180)
+    return () => { cancelled = true; clearTimeout(t) }
   }, [visibleRange, zoomLevel, selectedGroupId, refreshKey, setHistogramBuckets, setVisibleRange, setZoomLevel])
 
   // Listening-density ribbon data — only needed while the Spotify panel is open.
@@ -328,7 +350,7 @@ export default function TimelineCanvas() {
     const rangeMs = to - from
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.fillStyle = cv('--canvas-bg')
+    ctx.fillStyle = themeVars.canvasBg
     ctx.fillRect(0, 0, w, h)
 
     const chartW = w - YAXIS_W
@@ -359,7 +381,7 @@ export default function TimelineCanvas() {
     const barScale = (barsH * 0.92) / niceMax
 
     // Y axis grid lines (drawn before bars)
-    ctx.strokeStyle = cv('--canvas-grid')
+    ctx.strokeStyle = themeVars.canvasGrid
     ctx.lineWidth = 1
     for (let v = yStep; v <= niceMax; v += yStep) {
       const y = Math.round(barsH - v * barScale) + 0.5
@@ -370,7 +392,7 @@ export default function TimelineCanvas() {
     }
 
     const groupColors = new Map(groups.map(g => [g.id, g.color]))
-    const defaultBarColor = cv('--accent')
+    const defaultBarColor = themeVars.accent
 
     if (!curveMode) {
       for (const [bucketStart, segs] of byStart) {
@@ -546,7 +568,7 @@ export default function TimelineCanvas() {
     }
 
     if (byStart.size === 0) {
-      ctx.fillStyle = cv('--text-4')
+      ctx.fillStyle = themeVars.text4
       ctx.font = '13px system-ui, sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
@@ -556,7 +578,7 @@ export default function TimelineCanvas() {
       ctx.fillText(msg, YAXIS_W + chartW / 2, barsH / 2)
     }
 
-    ctx.strokeStyle = cv('--canvas-axis')
+    ctx.strokeStyle = themeVars.canvasAxis
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(YAXIS_W, chartH + 0.5)
@@ -580,17 +602,17 @@ export default function TimelineCanvas() {
       }
       const x = tsToX(tickMs)
       if (x < YAXIS_W + 2 || x > w - 2) continue
-      ctx.fillStyle = cv('--canvas-tick')
+      ctx.fillStyle = themeVars.canvasTick
       ctx.fillRect(Math.round(x), chartH + 1, 1, 5)
-      ctx.fillStyle = cv('--canvas-label')
+      ctx.fillStyle = themeVars.canvasLabel
       ctx.textAlign = x < YAXIS_W + 30 ? 'left' : x > w - 30 ? 'right' : 'center'
       ctx.fillText(fmt(tick), x, h - 3)
     }
 
     // Y axis: paint over left margin, draw labels and border
-    ctx.fillStyle = cv('--canvas-bg')
+    ctx.fillStyle = themeVars.canvasBg
     ctx.fillRect(0, 0, YAXIS_W - 1, h)
-    ctx.fillStyle = cv('--canvas-label')
+    ctx.fillStyle = themeVars.canvasLabel
     ctx.font = '10px system-ui, sans-serif'
     ctx.textAlign = 'right'
     ctx.textBaseline = 'middle'
@@ -599,13 +621,13 @@ export default function TimelineCanvas() {
       if (y < 4) break
       ctx.fillText(String(v), YAXIS_W - 5, y)
     }
-    ctx.strokeStyle = cv('--canvas-axis')
+    ctx.strokeStyle = themeVars.canvasAxis
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(YAXIS_W - 0.5, 0)
     ctx.lineTo(YAXIS_W - 0.5, chartH)
     ctx.stroke()
-  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets])
+  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, themeVars, curveMode, curveTension, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets])
 
   // Wheel → pan
   const handleWheel = useCallback((e: WheelEvent) => {

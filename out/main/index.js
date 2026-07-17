@@ -111,6 +111,7 @@ function initSchema(db2) {
 
     CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_entries_group_id  ON entries(group_id);
+    CREATE INDEX IF NOT EXISTS idx_entries_group_timestamp ON entries(group_id, timestamp);
 
     CREATE TABLE IF NOT EXISTS volumes (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,6 +221,7 @@ function getDb() {
     const dbPath = path.join(getLibraryPath(), "timeline.db");
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
     db.pragma("foreign_keys = ON");
     initSchema(db);
   }
@@ -2690,25 +2692,11 @@ function getListeningHistogram(from, to, zoomLevel) {
 }
 function getYearlySummaries() {
   if (yearlySummariesCache !== null) return yearlySummariesCache;
+  ensureRollups();
   const db2 = getDb();
+  const dailyRows = db2.prepare(`SELECT day, ms_played, play_count FROM listening_daily`).all();
+  const artistDailyRows = db2.prepare(`SELECT day, artist_name, ms_played, play_count FROM listening_artist_daily`).all();
   const yearExpr = `CAST(strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER)`;
-  const totals = db2.prepare(`
-    SELECT ${yearExpr} AS year, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
-    FROM listening_history
-    GROUP BY year
-  `).all();
-  const topArtistRows = db2.prepare(`
-    WITH by_artist_year AS (
-      SELECT ${yearExpr} AS year, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
-      FROM listening_history
-      WHERE media_type = 'track' AND artist_name IS NOT NULL
-      GROUP BY year, artist_name
-    ), ranked AS (
-      SELECT *, ROW_NUMBER() OVER (PARTITION BY year ORDER BY ms_played DESC) AS rnk
-      FROM by_artist_year
-    )
-    SELECT year, artist_name, ms_played, play_count FROM ranked WHERE rnk <= 5 ORDER BY year, rnk
-  `).all();
   const topTrackRows = db2.prepare(`
     WITH by_track_year AS (
       SELECT ${yearExpr} AS year, track_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
@@ -2721,40 +2709,50 @@ function getYearlySummaries() {
     )
     SELECT year, track_name, artist_name, ms_played, play_count FROM ranked WHERE rnk = 1
   `).all();
-  const monthlyRows = db2.prepare(`
-    SELECT ${yearExpr} AS year,
-           CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
-           SUM(ms_played) AS ms_played
-    FROM listening_history
-    GROUP BY year, month
-  `).all();
+  const totalsByYear = /* @__PURE__ */ new Map();
+  const monthlyByYear = /* @__PURE__ */ new Map();
+  for (const r of dailyRows) {
+    const d = new Date(r.day);
+    const year = d.getFullYear();
+    const t = totalsByYear.get(year) ?? { ms_played: 0, play_count: 0 };
+    t.ms_played += r.ms_played;
+    t.play_count += r.play_count;
+    totalsByYear.set(year, t);
+    let monthly = monthlyByYear.get(year);
+    if (!monthly) {
+      monthly = new Array(12).fill(0);
+      monthlyByYear.set(year, monthly);
+    }
+    monthly[d.getMonth()] += r.ms_played;
+  }
   const artistsByYear = /* @__PURE__ */ new Map();
-  for (const r of topArtistRows) {
-    const arr = artistsByYear.get(r.year) ?? [];
-    arr.push({ artist_name: r.artist_name, ms_played: r.ms_played, play_count: r.play_count });
-    artistsByYear.set(r.year, arr);
+  for (const r of artistDailyRows) {
+    const year = new Date(r.day).getFullYear();
+    let byArtist = artistsByYear.get(year);
+    if (!byArtist) {
+      byArtist = /* @__PURE__ */ new Map();
+      artistsByYear.set(year, byArtist);
+    }
+    const a = byArtist.get(r.artist_name) ?? { artist_name: r.artist_name, ms_played: 0, play_count: 0 };
+    a.ms_played += r.ms_played;
+    a.play_count += r.play_count;
+    byArtist.set(r.artist_name, a);
   }
   const trackByYear = /* @__PURE__ */ new Map();
   for (const r of topTrackRows) {
     trackByYear.set(r.year, { track_name: r.track_name, artist_name: r.artist_name, ms_played: r.ms_played, play_count: r.play_count });
   }
-  const monthlyByYear = /* @__PURE__ */ new Map();
-  for (const r of monthlyRows) {
-    let arr = monthlyByYear.get(r.year);
-    if (!arr) {
-      arr = new Array(12).fill(0);
-      monthlyByYear.set(r.year, arr);
-    }
-    arr[r.month - 1] = r.ms_played;
-  }
-  yearlySummariesCache = totals.sort((a, b) => b.year - a.year).map((t) => ({
-    year: t.year,
-    msPlayed: t.ms_played,
-    playCount: t.play_count,
-    topArtists: artistsByYear.get(t.year) ?? [],
-    topTrack: trackByYear.get(t.year) ?? null,
-    monthly: monthlyByYear.get(t.year) ?? new Array(12).fill(0)
-  }));
+  yearlySummariesCache = [...totalsByYear.entries()].sort(([a], [b]) => b - a).map(([year, totals]) => {
+    const topArtists = [...artistsByYear.get(year)?.values() ?? []].sort((a, b) => b.ms_played - a.ms_played).slice(0, 5);
+    return {
+      year,
+      msPlayed: totals.ms_played,
+      playCount: totals.play_count,
+      topArtists,
+      topTrack: trackByYear.get(year) ?? null,
+      monthly: monthlyByYear.get(year) ?? new Array(12).fill(0)
+    };
+  });
   return yearlySummariesCache;
 }
 function getYearDetail(year) {

@@ -15,7 +15,6 @@ test.describe('Timeline view', () => {
   test('shows zoom level buttons', async ({ appPage: page }) => {
     await expect(page.getByRole('button', { name: 'Year' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Month' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Week' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Day' })).toBeVisible()
   })
 

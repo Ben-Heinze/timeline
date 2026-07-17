@@ -7561,6 +7561,16 @@ function TimelineCanvas() {
   } = useStore();
   const theme = settings?.theme ?? "light";
   const curveTension = settings?.curveTension ?? 1;
+  const themeVars = reactExports.useMemo(() => ({
+    canvasBg: cv("--canvas-bg"),
+    canvasGrid: cv("--canvas-grid"),
+    accent: cv("--accent"),
+    canvasAxis: cv("--canvas-axis"),
+    canvasTick: cv("--canvas-tick"),
+    canvasLabel: cv("--canvas-label"),
+    text4: cv("--text-4")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [theme]);
   const [selectedYear, setSelectedYear] = reactExports.useState((/* @__PURE__ */ new Date()).getFullYear());
   const [selectedMonthStart, setSelectedMonthStart] = reactExports.useState(() => {
     const now2 = /* @__PURE__ */ new Date();
@@ -7637,16 +7647,24 @@ function TimelineCanvas() {
   }, [eventLanes, eventBandH]);
   reactExports.useEffect(() => {
     const [from2, to] = visibleRange;
-    window.api.entries.histogram(from2, to, zoomLevel, selectedGroupId ?? void 0).then((buckets) => {
-      setHistogramBuckets(buckets);
-      if (buckets.length === 0 && selectedGroupId == null && zoomLevel === "year") {
-        const ext = extentRef.current;
-        if (ext) {
-          setVisibleRange(yearViewRange(ext));
-          setZoomLevel("year");
+    let cancelled = false;
+    const t2 = setTimeout(() => {
+      window.api.entries.histogram(from2, to, zoomLevel, selectedGroupId ?? void 0).then((buckets) => {
+        if (cancelled) return;
+        setHistogramBuckets(buckets);
+        if (buckets.length === 0 && selectedGroupId == null && zoomLevel === "year") {
+          const ext = extentRef.current;
+          if (ext) {
+            setVisibleRange(yearViewRange(ext));
+            setZoomLevel("year");
+          }
         }
-      }
-    });
+      });
+    }, 180);
+    return () => {
+      cancelled = true;
+      clearTimeout(t2);
+    };
   }, [visibleRange, zoomLevel, selectedGroupId, refreshKey, setHistogramBuckets, setVisibleRange, setZoomLevel]);
   reactExports.useEffect(() => {
     if (!spotifyPanelOpen) {
@@ -7691,7 +7709,7 @@ function TimelineCanvas() {
     const [from2, to] = visibleRange;
     const rangeMs = to - from2;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = cv("--canvas-bg");
+    ctx.fillStyle = themeVars.canvasBg;
     ctx.fillRect(0, 0, w2, h);
     const chartW = w2 - YAXIS_W;
     const tsToX = (ts) => YAXIS_W + (ts - from2) / rangeMs * chartW;
@@ -7714,7 +7732,7 @@ function TimelineCanvas() {
     const yStep = niceStep(maxCount);
     const niceMax = Math.ceil(maxCount / yStep) * yStep;
     const barScale = barsH * 0.92 / niceMax;
-    ctx.strokeStyle = cv("--canvas-grid");
+    ctx.strokeStyle = themeVars.canvasGrid;
     ctx.lineWidth = 1;
     for (let v2 = yStep; v2 <= niceMax; v2 += yStep) {
       const y2 = Math.round(barsH - v2 * barScale) + 0.5;
@@ -7724,7 +7742,7 @@ function TimelineCanvas() {
       ctx.stroke();
     }
     const groupColors = new Map(groups.map((g) => [g.id, g.color]));
-    const defaultBarColor = cv("--accent");
+    const defaultBarColor = themeVars.accent;
     if (!curveMode) {
       for (const [bucketStart, segs] of byStart) {
         const slotX = tsToX(bucketStart);
@@ -7875,14 +7893,14 @@ function TimelineCanvas() {
       }
     }
     if (byStart.size === 0) {
-      ctx.fillStyle = cv("--text-4");
+      ctx.fillStyle = themeVars.text4;
       ctx.font = "13px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       const msg = dataExtent ? "No entries in this time window" : "No entries yet — import files or add a journal entry to get started";
       ctx.fillText(msg, YAXIS_W + chartW / 2, barsH / 2);
     }
-    ctx.strokeStyle = cv("--canvas-axis");
+    ctx.strokeStyle = themeVars.canvasAxis;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(YAXIS_W, chartH + 0.5);
@@ -7903,15 +7921,15 @@ function TimelineCanvas() {
       }
       const x2 = tsToX(tickMs);
       if (x2 < YAXIS_W + 2 || x2 > w2 - 2) continue;
-      ctx.fillStyle = cv("--canvas-tick");
+      ctx.fillStyle = themeVars.canvasTick;
       ctx.fillRect(Math.round(x2), chartH + 1, 1, 5);
-      ctx.fillStyle = cv("--canvas-label");
+      ctx.fillStyle = themeVars.canvasLabel;
       ctx.textAlign = x2 < YAXIS_W + 30 ? "left" : x2 > w2 - 30 ? "right" : "center";
       ctx.fillText(fmt(tick), x2, h - 3);
     }
-    ctx.fillStyle = cv("--canvas-bg");
+    ctx.fillStyle = themeVars.canvasBg;
     ctx.fillRect(0, 0, YAXIS_W - 1, h);
-    ctx.fillStyle = cv("--canvas-label");
+    ctx.fillStyle = themeVars.canvasLabel;
     ctx.font = "10px system-ui, sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
@@ -7920,13 +7938,13 @@ function TimelineCanvas() {
       if (y2 < 4) break;
       ctx.fillText(String(v2), YAXIS_W - 5, y2);
     }
-    ctx.strokeStyle = cv("--canvas-axis");
+    ctx.strokeStyle = themeVars.canvasAxis;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(YAXIS_W - 0.5, 0);
     ctx.lineTo(YAXIS_W - 0.5, chartH);
     ctx.stroke();
-  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, theme, curveMode, curveTension, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets]);
+  }, [visibleRange, bucketSegments, groups, selectedPeriod, size, zoomLevel, dateRangeSelection, dataExtent, themeVars, curveMode, curveTension, eventLanes, eventBandH, spotifyPanelOpen, listeningBuckets]);
   const handleWheel = reactExports.useCallback((e) => {
     e.preventDefault();
     if (zoomRef.current === "month") {

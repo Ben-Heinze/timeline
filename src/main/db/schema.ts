@@ -34,6 +34,7 @@ export function initSchema(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_entries_group_id  ON entries(group_id);
+    CREATE INDEX IF NOT EXISTS idx_entries_group_timestamp ON entries(group_id, timestamp);
 
     CREATE TABLE IF NOT EXISTS volumes (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
