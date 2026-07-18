@@ -30,7 +30,7 @@ function gridRowHeight(viewMode: Exclude<ViewMode, 'list'>): number {
 }
 
 type Row =
-  | { kind: 'header'; label: string; count: number; height: number }
+  | { kind: 'header'; label: string; count: number; height: number; bucketStart: number; collapsed: boolean }
   | { kind: 'items'; startIndex: number; count: number; height: number }
 
 /** Largest index i such that offsets[i] <= y (offsets is non-decreasing, length = rows.length + 1). */
@@ -90,6 +90,18 @@ export default function FilesView() {
   const [viewMode, setViewMode] = useState<ViewMode>('medium')
   const [sortBy, setSortBy] = useState<SortBy>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  // Month buckets the user has collapsed, keyed by bucketStart. Collapsing hides
+  // a bucket's item rows while its global index range stays reserved, so paging
+  // and shift-selection indices remain aligned with the backend ordering.
+  const [collapsedBuckets, setCollapsedBuckets] = useState<Set<number>>(new Set())
+
+  const toggleBucket = useCallback((bucketStart: number) => {
+    setCollapsedBuckets(prev => {
+      const next = new Set(prev)
+      if (next.has(bucketStart)) next.delete(bucketStart); else next.add(bucketStart)
+      return next
+    })
+  }, [])
 
   const [total, setTotal] = useState(0)
   const [monthBuckets, setMonthBuckets] = useState<MonthBucket[]>([])
@@ -114,6 +126,7 @@ export default function FilesView() {
     inFlightRef.current = new Set()
     setTotal(0)
     setMonthBuckets([])
+    setCollapsedBuckets(new Set())
     setScrollTop(0)
     if (scrollRef.current) scrollRef.current.scrollTop = 0
     bumpCacheVersion()
@@ -206,15 +219,19 @@ export default function FilesView() {
     if (sortBy === 'date' && monthBuckets.length > 0) {
       let cursor = 0
       for (const bucket of monthBuckets) {
-        out.push({ kind: 'header', label: monthYearLabel(bucket.bucketStart), count: bucket.count, height: HEADER_ROW_HEIGHT })
-        pushItemRows(cursor, bucket.count)
+        const collapsed = collapsedBuckets.has(bucket.bucketStart)
+        out.push({
+          kind: 'header', label: monthYearLabel(bucket.bucketStart), count: bucket.count,
+          height: HEADER_ROW_HEIGHT, bucketStart: bucket.bucketStart, collapsed,
+        })
+        if (!collapsed) pushItemRows(cursor, bucket.count)
         cursor += bucket.count
       }
     } else if (sortBy !== 'date') {
       pushItemRows(0, total)
     }
     return out
-  }, [total, monthBuckets, sortBy, viewMode, columns])
+  }, [total, monthBuckets, sortBy, viewMode, columns, collapsedBuckets])
 
   const offsets = useMemo(() => {
     const out = new Array<number>(rows.length + 1)
@@ -349,15 +366,27 @@ export default function FilesView() {
               const top = offsets[index]
               if (row.kind === 'header') {
                 return (
-                  <header key={`h-${index}`} style={{
-                    position: 'absolute', top, left: 0, right: 0, height: row.height,
-                    background: 'var(--bg-surface)',
-                    padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
-                    color: 'var(--text-2)', letterSpacing: 0.4,
-                    borderBottom: '1px solid var(--border-light)',
-                  }}>
+                  <header
+                    key={`h-${index}`}
+                    onClick={() => toggleBucket(row.bucketStart)}
+                    title={row.collapsed ? 'Expand month' : 'Collapse month'}
+                    style={{
+                      position: 'absolute', top, left: 0, right: 0, height: row.height,
+                      background: 'var(--bg-surface)',
+                      padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
+                      color: 'var(--text-2)', letterSpacing: 0.4,
+                      borderBottom: '1px solid var(--border-light)',
+                      cursor: 'pointer', userSelect: 'none',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                    }}
+                  >
+                    <span style={{
+                      display: 'inline-block', fontSize: 10, color: 'var(--text-4)',
+                      transform: row.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+                      transition: 'transform 0.12s ease',
+                    }}>▾</span>
                     {row.label}
-                    <span style={{ marginLeft: 8, color: 'var(--text-4)', fontWeight: 400 }}>
+                    <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
                       {row.count}
                     </span>
                   </header>

@@ -135,3 +135,25 @@ export async function writePhotoDate(absPath: string, timestampMs: number): Prom
     { writeArgs: ['-overwrite_original'] }
   )
 }
+
+/**
+ * Write GPS coordinates into a photo/video's metadata. Signed decimal degrees are
+ * split into a positive magnitude plus a N/S/E/W reference, matching how the read
+ * path (parseGps) reconstructs the sign — so a re-ingest reads back the same point.
+ */
+export async function writePhotoGPS(
+  absPath: string,
+  latitude: number,
+  longitude: number,
+): Promise<void> {
+  await tool().write(
+    absPath,
+    {
+      GPSLatitude: Math.abs(latitude),
+      GPSLatitudeRef: latitude >= 0 ? 'N' : 'S',
+      GPSLongitude: Math.abs(longitude),
+      GPSLongitudeRef: longitude >= 0 ? 'E' : 'W',
+    },
+    { writeArgs: ['-overwrite_original'] }
+  )
+}

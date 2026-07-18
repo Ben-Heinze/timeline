@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import React, { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useStore } from '../store/useStore'
 import { useEntryContextMenu } from './EntryContextMenu'
 import type { Entry, FileViewMode, SpotifyPlay } from '../../shared/types'
@@ -31,6 +31,17 @@ export default function FileBrowser() {
   const [plays, setPlays] = useState<SpotifyPlay[]>([])
   const [resizing, setResizing] = useState(false)
   const [handleHovered, setHandleHovered] = useState(false)
+  // Section keys the user has collapsed. Kept per-key so it survives refetches
+  // (edits bump the entry list) and copes with nested/grouped sections.
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+
+  const toggleSection = useCallback((key: string) => {
+    setCollapsedSections(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }, [])
 
   const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(entries)
 
@@ -179,6 +190,38 @@ export default function FileBrowser() {
   const entriesRef = useRef(entries)
   entriesRef.current = entries
 
+  // Keep the scroll position stable when the list is refetched after an
+  // in-place edit (adding tags, deleting, etc.), but scroll back to the top
+  // when the user navigates to a different scope or location. `refreshKey`
+  // bumps signal an edit → preserve; scope/location changes → reset.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollTopRef = useRef(0)
+  const scrollActionRef = useRef<'reset' | 'preserve' | null>(null)
+
+  const prevRefreshKey = useRef(refreshKey)
+  useEffect(() => {
+    if (prevRefreshKey.current !== refreshKey) {
+      prevRefreshKey.current = refreshKey
+      scrollActionRef.current = 'preserve'
+    }
+  }, [refreshKey])
+
+  useEffect(() => {
+    scrollActionRef.current = 'reset'
+  }, [scopeFrom, scopeTo, selectedGroupId, selectedLocation])
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (scrollActionRef.current === 'reset') {
+      el.scrollTop = 0
+      scrollActionRef.current = null
+    } else if (scrollActionRef.current === 'preserve') {
+      el.scrollTop = scrollTopRef.current
+      scrollActionRef.current = null
+    }
+  }, [entries])
+
   const onSelect = useCallback((e: React.MouseEvent, entry: Entry) => {
     const selectedIds = selectedIdsRef.current
     const lastSelectedId = lastSelectedIdRef.current
@@ -305,7 +348,11 @@ export default function FileBrowser() {
         >✕</button>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <div
+        ref={scrollRef}
+        onScroll={e => { scrollTopRef.current = e.currentTarget.scrollTop }}
+        style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}
+      >
         {playGroups.length > 0 && (
           <section>
             <header
@@ -365,23 +412,37 @@ export default function FileBrowser() {
             No entries for this period
           </div>
         ) : sections ? (
-          sections.map(section => (
-            <section key={section.key}>
-              <header style={{
-                position: 'sticky', top: 0, zIndex: 1,
-                background: 'var(--bg-app)',
-                padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
-                color: 'var(--text-2)', letterSpacing: 0.4,
-                borderBottom: '1px solid var(--border-light)',
-              }}>
-                {section.label}
-                <span style={{ marginLeft: 8, color: 'var(--text-4)', fontWeight: 400 }}>
-                  {section.items.length}
-                </span>
-              </header>
-              {renderItems(section.items)}
-            </section>
-          ))
+          sections.map(section => {
+            const collapsed = collapsedSections.has(section.key)
+            return (
+              <section key={section.key}>
+                <header
+                  onClick={() => toggleSection(section.key)}
+                  title={collapsed ? 'Expand section' : 'Collapse section'}
+                  style={{
+                    position: 'sticky', top: 0, zIndex: 1,
+                    background: 'var(--bg-app)',
+                    padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
+                    color: 'var(--text-2)', letterSpacing: 0.4,
+                    borderBottom: collapsed ? 'none' : '1px solid var(--border-light)',
+                    cursor: 'pointer', userSelect: 'none',
+                    display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                >
+                  <span style={{
+                    display: 'inline-block', fontSize: 10, color: 'var(--text-4)',
+                    transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.12s ease',
+                  }}>▾</span>
+                  {section.label}
+                  <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
+                    {section.items.length}
+                  </span>
+                </header>
+                {!collapsed && renderItems(section.items)}
+              </section>
+            )
+          })
         ) : (
           renderItems(entries)
         )}

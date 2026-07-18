@@ -1,7 +1,8 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import fs from 'fs/promises'
 import path from 'path'
-import { getSettings, saveSettings } from '../settings'
+import { getSettings, saveSettings, invalidateSettingsCache } from '../settings'
+import { setActiveProfilePath } from '../profiles'
 import { getFilesPath, getLibraryPath, ensureLibraryDirs } from '../library'
 import { closeDb } from '../db'
 import { restartWatcher } from '../sync'
@@ -98,8 +99,8 @@ export function registerSettingsHandlers(): void {
     if (foundIds.length > 0) markEntriesFound(foundIds)
     if (missingIds.length > 0) markEntriesMissing(missingIds)
 
-    const s = getSettings()
-    saveSettings({ ...s, libraryPath: newPath })
+    setActiveProfilePath(newPath)
+    invalidateSettingsCache()
     ensureLibraryDirs()
     restartWatcher()
 
@@ -142,7 +143,8 @@ export function registerSettingsHandlers(): void {
       }
     }
 
-    saveSettings({ ...current, libraryPath: newPath })
+    setActiveProfilePath(newPath)
+    invalidateSettingsCache()
     ensureLibraryDirs()
     return { success: true }
   })

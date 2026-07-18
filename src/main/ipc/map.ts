@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import fs from 'fs/promises'
 import path from 'path'
 import { getLibraryPath } from '../library'
-import type { MapHiresLayer } from '../../shared/types'
+import type { MapHiresLayer, GeocodeResult } from '../../shared/types'
 
 // Natural Earth 10m data (public domain) rendered locally for the hi-res
 // offline map. Downloaded on demand into <library>/map/.
@@ -70,6 +70,31 @@ export function registerMapHandlers(): void {
       return await fs.readFile(path.join(mapDir(), def.file), 'utf-8')
     } catch {
       return null
+    }
+  })
+
+  // Online place-name lookup via OpenStreetMap Nominatim. Runs in main so we can
+  // send the User-Agent their usage policy requires and dodge renderer CORS/CSP.
+  // The renderer also searches a bundled offline gazetteer; this adds street- and
+  // POI-level precision when the user is online.
+  ipcMain.handle('geocode:search', async (_, query: string): Promise<GeocodeResult[]> => {
+    const q = query.trim()
+    if (!q) return []
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=0&limit=6&q=${encodeURIComponent(q)}`
+    try {
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Timeline-Photo-App/1.0 (personal photo library)' },
+      })
+      if (!res.ok) return []
+      const rows = await res.json() as Array<{ display_name: string; lat: string; lon: string }>
+      return rows.map(r => ({
+        label: r.display_name,
+        latitude: Number(r.lat),
+        longitude: Number(r.lon),
+        source: 'online' as const,
+      })).filter(r => Number.isFinite(r.latitude) && Number.isFinite(r.longitude))
+    } catch {
+      return []
     }
   })
 

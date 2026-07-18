@@ -1,9 +1,16 @@
 import { app } from 'electron'
 import path from 'path'
 import fs from 'fs'
+import { getLibraryPath } from './library'
 import type { AppSettings, FileViewMode, WatchedFolder } from '../shared/types'
 
-const settingsFile = () => path.join(app.getPath('userData'), 'settings.json')
+// Preferences now live INSIDE each library folder (<libraryPath>/settings.json)
+// so every profile keeps its own theme, layout, watched folders and map mode,
+// and so a backup of the library carries its settings with it. `libraryPath`
+// itself is NOT stored here — it's derived from the active profile.
+const settingsFile = () => path.join(getLibraryPath(), 'settings.json')
+// One-time fallback: settings used to live here before per-library settings.
+const legacyGlobalFile = () => path.join(app.getPath('userData'), 'settings.json')
 
 let cached: AppSettings | null = null
 
@@ -13,37 +20,51 @@ function migrateWatchedFolders(raw: unknown): WatchedFolder[] {
   return raw.map(f => (typeof f === 'string' ? { path: f, volumeId: null } : f))
 }
 
+function readRawSettings(): (Partial<AppSettings> & { dayViewHeight?: number; dayViewMode?: FileViewMode }) | null {
+  // Prefer the per-library file; fall back once to the legacy global file so an
+  // upgrading install keeps its existing preferences.
+  for (const file of [settingsFile(), legacyGlobalFile()]) {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf-8'))
+    } catch { /* try next */ }
+  }
+  return null
+}
+
 export function getSettings(): AppSettings {
   if (cached) return cached
-  const defaultLibrary = path.join(app.getPath('userData'), 'library')
-  try {
-    const raw = fs.readFileSync(settingsFile(), 'utf-8')
-    // dayViewHeight/dayViewMode are legacy names from before the file-browser rename
-    const parsed = JSON.parse(raw) as Partial<AppSettings> & { dayViewHeight?: number; dayViewMode?: FileViewMode }
-    cached = {
-      libraryPath: parsed.libraryPath || defaultLibrary,
-      watchedFolders: migrateWatchedFolders(parsed.watchedFolders),
-      duplicateScanMode: parsed.duplicateScanMode ?? 'hash',
-      histogramHeight: parsed.histogramHeight !== undefined ? parsed.histogramHeight : 420,
-      theme: parsed.theme ?? 'light',
-      heatmapScale: parsed.heatmapScale ?? 'log',
-      heatmapMaxCount: parsed.heatmapMaxCount ?? null,
-      curveTension: parsed.curveTension ?? 1,
-      fileBrowserHeight: parsed.fileBrowserHeight ?? parsed.dayViewHeight ?? 240,
-      fileBrowserMode: parsed.fileBrowserMode ?? parsed.dayViewMode ?? 'medium',
-      mapMode: parsed.mapMode ?? 'offline',
-      groupSidebarWidth: parsed.groupSidebarWidth ?? 220,
-      eventsPanelWidth: parsed.eventsPanelWidth ?? 272,
-      spotifyPanelWidth: parsed.spotifyPanelWidth ?? 272,
-      spotifyHistoryCollapsed: parsed.spotifyHistoryCollapsed ?? false,
-    }
-  } catch {
-    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: 'hash', histogramHeight: 420, theme: 'light', heatmapScale: 'log', heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: 'medium', mapMode: 'offline', groupSidebarWidth: 220, eventsPanelWidth: 272, spotifyPanelWidth: 272, spotifyHistoryCollapsed: false }
+  const parsed = readRawSettings()
+  const base = parsed ?? {}
+  cached = {
+    // libraryPath is injected from the active profile, never persisted here.
+    libraryPath: getLibraryPath(),
+    watchedFolders: migrateWatchedFolders(base.watchedFolders),
+    duplicateScanMode: base.duplicateScanMode ?? 'hash',
+    histogramHeight: base.histogramHeight !== undefined ? base.histogramHeight : 420,
+    theme: base.theme ?? 'light',
+    heatmapScale: base.heatmapScale ?? 'log',
+    heatmapMaxCount: base.heatmapMaxCount ?? null,
+    curveTension: base.curveTension ?? 1,
+    fileBrowserHeight: base.fileBrowserHeight ?? base.dayViewHeight ?? 240,
+    fileBrowserMode: base.fileBrowserMode ?? base.dayViewMode ?? 'medium',
+    mapMode: base.mapMode ?? 'offline',
+    groupSidebarWidth: base.groupSidebarWidth ?? 220,
+    eventsPanelWidth: base.eventsPanelWidth ?? 272,
+    spotifyPanelWidth: base.spotifyPanelWidth ?? 272,
+    spotifyHistoryCollapsed: base.spotifyHistoryCollapsed ?? false,
   }
   return cached
 }
 
 export function saveSettings(settings: AppSettings): void {
-  cached = settings
-  fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2), 'utf-8')
+  cached = { ...settings, libraryPath: getLibraryPath() }
+  // Persist everything except the derived libraryPath into the library folder.
+  const { libraryPath: _omit, ...toStore } = settings
+  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true })
+  fs.writeFileSync(settingsFile(), JSON.stringify(toStore, null, 2), 'utf-8')
+}
+
+/** Drop the in-memory cache so the next read reflects a switched/restored library. */
+export function invalidateSettingsCache(): void {
+  cached = null
 }

@@ -2,14 +2,18 @@
 ** TODO Add zooming and scrolling to Timeline
 ** DONE play/view pictures/videos/audio directly in app
 ** TODO Add Collapsable/Expand groups in browser tab to shrink bloat
-** TODO Rename files
-** TODO People tab
-** TODO have option to save spotify data when importing it.
+** DONE Rename files
+** DONE People tab
+** DONE have option to save spotify data when importing it.
+** TODO Add default "Jan 1 2000" for unknown dates
+** TODO update location somehow
+** TODO Add more loading bars (importing spotify, updating dates on images, add others here).
+
 
 * Bugs
 ** TODO In File view, your file browser returns to the top once you add tags or delete files
 ** TODO Sometimes it wont let you type in your own tags
-** TODO Cant edit name for group even though functionality pretends to exist
-** TODO Calender Heat Map is overtaken by Event highlighting
-** TODO Log scale doesnt work. Maybe add third option
+** DONE Cant edit name for group even though functionality pretends to exist
+** DONE Calender Heat Map is overtaken by Event highlighting
+** DONE Log scale doesnt work. Maybe add third option
 ** TODO Still laggy

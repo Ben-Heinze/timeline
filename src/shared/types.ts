@@ -47,6 +47,28 @@ export interface SetDateResult {
   exifFailed: number           // eligible but the write errored
 }
 
+export interface SetLocationParams {
+  ids: number[]
+  latitude: number
+  longitude: number
+  writeExif: boolean           // also write GPS into copy-mode photo/video files
+}
+
+export interface SetLocationResult {
+  updated: number              // entries whose in-app location changed
+  exifWritten: number          // files successfully rewritten on disk
+  exifSkipped: number          // not eligible (referenced original, non-photo, missing…)
+  exifFailed: number           // eligible but the write errored
+}
+
+// One hit from a place-name geocode lookup (offline gazetteer or online Nominatim).
+export interface GeocodeResult {
+  label: string                // "Belize City, Belize"
+  latitude: number
+  longitude: number
+  source: 'offline' | 'online'
+}
+
 // Outcome of renaming a single entry. The display title is always updated;
 // `fileRenamed` reports whether the on-disk file was also renamed (only when the
 // user opted in and the file was reachable). `note` carries a non-fatal reason
@@ -226,6 +248,19 @@ export interface MapDownloadProgressEvent {
   received: number   // bytes downloaded so far, across all layer files
   total: number      // total bytes expected
   file: string       // file currently downloading
+}
+
+// A switchable Timeline library on this machine. `path` is its library folder;
+// preferences and data all live inside it, so switching copies nothing.
+export interface Profile {
+  id: string
+  name: string
+  path: string
+}
+
+export interface ProfileList {
+  profiles: Profile[]
+  activeId: string
 }
 
 export interface AppSettings {

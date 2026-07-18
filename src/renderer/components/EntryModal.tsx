@@ -6,6 +6,7 @@ import type { Entry, Tag, FileInfo, Person } from '../../shared/types'
 import TagEditor from './TagEditor'
 import PeopleEditor from './PeopleEditor'
 import ChangeDateModal from './ChangeDateModal'
+import SetLocationModal from './SetLocationModal'
 import { useVolumeStatus, VolumeBadgeInline } from './VolumeBadge'
 import LocationMiniMap from './LocationMiniMap'
 
@@ -321,6 +322,7 @@ export default function EntryModal() {
   const [entryPeople, setEntryPeople] = useState<Person[]>([])
   const [periodEntries, setPeriodEntries] = useState<Entry[]>([])
   const [dateModalOpen, setDateModalOpen] = useState(false)
+  const [locationModalOpen, setLocationModalOpen] = useState(false)
 
   useEffect(() => {
     if (!activeEntryId) { setEntry(null); setEntryTags([]); setEntryPeople([]); return }
@@ -364,15 +366,15 @@ export default function EntryModal() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!activeEntryId) return
-      // While the change-date modal is open it owns the keyboard (Escape, typing).
-      if (dateModalOpen) return
+      // While a child modal is open it owns the keyboard (Escape, typing).
+      if (dateModalOpen || locationModalOpen) return
       if (e.key === 'Escape') setActiveEntryId(null)
       if (e.key === 'ArrowLeft') navigatePrev()
       if (e.key === 'ArrowRight') navigateNext()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId, dateModalOpen])
+  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId, dateModalOpen, locationModalOpen])
 
   if (!activeEntryId) return null
 
@@ -418,6 +420,13 @@ export default function EntryModal() {
               title="Change date"
               style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 12, padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}
             >Edit date</button>
+          )}
+          {entry && (
+            <button
+              onClick={() => setLocationModalOpen(true)}
+              title="Set location"
+              style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 12, padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}
+            >{entry.latitude != null && entry.longitude != null ? 'Edit location' : 'Add location'}</button>
           )}
           <button
             onClick={() => setActiveEntryId(null)}
@@ -508,6 +517,17 @@ export default function EntryModal() {
         <ChangeDateModal
           ids={[entry.id]}
           onClose={() => setDateModalOpen(false)}
+          onApplied={() => {
+            window.api.entries.get(entry.id).then(setEntry)
+            bumpRefreshKey()
+          }}
+        />
+      )}
+
+      {locationModalOpen && entry && (
+        <SetLocationModal
+          ids={[entry.id]}
+          onClose={() => setLocationModalOpen(false)}
           onApplied={() => {
             window.api.entries.get(entry.id).then(setEntry)
             bumpRefreshKey()

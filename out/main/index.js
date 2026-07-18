@@ -3,58 +3,121 @@ const electron = require("electron");
 const path = require("path");
 const url = require("url");
 const fs = require("fs");
+const crypto = require("crypto");
 const Database = require("better-sqlite3");
 const fs$1 = require("fs/promises");
 const archiver = require("archiver");
 const extractZip = require("extract-zip");
 const chokidar = require("chokidar");
-const crypto = require("crypto");
 const child_process = require("child_process");
 const ffmpegStatic = require("ffmpeg-static");
 const sharp = require("sharp");
 const exifr = require("exifr");
 const exiftoolVendored = require("exiftool-vendored");
 const http = require("http");
-const settingsFile = () => path.join(electron.app.getPath("userData"), "settings.json");
-let cached = null;
-function migrateWatchedFolders(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((f) => typeof f === "string" ? { path: f, volumeId: null } : f);
+const profilesFile = () => path.join(electron.app.getPath("userData"), "profiles.json");
+const legacySettingsFile = () => path.join(electron.app.getPath("userData"), "settings.json");
+const defaultLibraryDir = () => path.join(electron.app.getPath("userData"), "library");
+const librariesRoot = () => path.join(electron.app.getPath("userData"), "libraries");
+let cached$1 = null;
+function persist(store) {
+  fs.writeFileSync(profilesFile(), JSON.stringify(store, null, 2), "utf-8");
 }
-function getSettings() {
-  if (cached) return cached;
-  const defaultLibrary = path.join(electron.app.getPath("userData"), "library");
+function migrateFromLegacy() {
+  let libPath = defaultLibraryDir();
   try {
-    const raw = fs.readFileSync(settingsFile(), "utf-8");
-    const parsed = JSON.parse(raw);
-    cached = {
-      libraryPath: parsed.libraryPath || defaultLibrary,
-      watchedFolders: migrateWatchedFolders(parsed.watchedFolders),
-      duplicateScanMode: parsed.duplicateScanMode ?? "hash",
-      histogramHeight: parsed.histogramHeight !== void 0 ? parsed.histogramHeight : 420,
-      theme: parsed.theme ?? "light",
-      heatmapScale: parsed.heatmapScale ?? "log",
-      heatmapMaxCount: parsed.heatmapMaxCount ?? null,
-      curveTension: parsed.curveTension ?? 1,
-      fileBrowserHeight: parsed.fileBrowserHeight ?? parsed.dayViewHeight ?? 240,
-      fileBrowserMode: parsed.fileBrowserMode ?? parsed.dayViewMode ?? "medium",
-      mapMode: parsed.mapMode ?? "offline",
-      groupSidebarWidth: parsed.groupSidebarWidth ?? 220,
-      eventsPanelWidth: parsed.eventsPanelWidth ?? 272,
-      spotifyPanelWidth: parsed.spotifyPanelWidth ?? 272,
-      spotifyHistoryCollapsed: parsed.spotifyHistoryCollapsed ?? false
-    };
+    const legacy = JSON.parse(fs.readFileSync(legacySettingsFile(), "utf-8"));
+    if (typeof legacy.libraryPath === "string" && legacy.libraryPath) libPath = legacy.libraryPath;
   } catch {
-    cached = { libraryPath: defaultLibrary, watchedFolders: [], duplicateScanMode: "hash", histogramHeight: 420, theme: "light", heatmapScale: "log", heatmapMaxCount: null, curveTension: 1, fileBrowserHeight: 240, fileBrowserMode: "medium", mapMode: "offline", groupSidebarWidth: 220, eventsPanelWidth: 272, spotifyPanelWidth: 272, spotifyHistoryCollapsed: false };
   }
-  return cached;
+  const store = {
+    profiles: [{ id: crypto.randomUUID(), name: "My Timeline", path: libPath }],
+    activeId: ""
+  };
+  store.activeId = store.profiles[0].id;
+  return store;
 }
-function saveSettings(settings) {
-  cached = settings;
-  fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2), "utf-8");
+function load() {
+  if (cached$1) return cached$1;
+  try {
+    const raw = JSON.parse(fs.readFileSync(profilesFile(), "utf-8"));
+    if (Array.isArray(raw.profiles) && raw.profiles.length > 0) {
+      if (!raw.profiles.some((p) => p.id === raw.activeId)) raw.activeId = raw.profiles[0].id;
+      cached$1 = raw;
+      return cached$1;
+    }
+  } catch {
+  }
+  cached$1 = migrateFromLegacy();
+  persist(cached$1);
+  return cached$1;
+}
+function listProfiles() {
+  const s = load();
+  return { profiles: s.profiles.map((p) => ({ ...p })), activeId: s.activeId };
+}
+function getActiveProfile() {
+  const s = load();
+  return s.profiles.find((p) => p.id === s.activeId) ?? s.profiles[0];
+}
+function getActiveLibraryPath() {
+  return getActiveProfile().path;
+}
+function createProfileNew(name) {
+  const s = load();
+  const id = crypto.randomUUID();
+  const dir = path.join(librariesRoot(), id);
+  fs.mkdirSync(dir, { recursive: true });
+  const profile = { id, name: name.trim() || "New Timeline", path: dir };
+  s.profiles.push(profile);
+  persist(s);
+  return { ...profile };
+}
+function addExistingProfile(name, dir) {
+  const s = load();
+  const existing = s.profiles.find((p) => path.resolve(p.path) === path.resolve(dir));
+  if (existing) return { ...existing };
+  const profile = {
+    id: crypto.randomUUID(),
+    name: name.trim() || path.basename(dir) || "Timeline",
+    path: dir
+  };
+  s.profiles.push(profile);
+  persist(s);
+  return { ...profile };
+}
+function switchProfile(id) {
+  const s = load();
+  const target = s.profiles.find((p) => p.id === id);
+  if (!target) throw new Error("Profile not found.");
+  s.activeId = id;
+  persist(s);
+  return { ...target };
+}
+function renameProfile(id, name) {
+  const s = load();
+  const p = s.profiles.find((p2) => p2.id === id);
+  if (!p) throw new Error("Profile not found.");
+  p.name = name.trim() || p.name;
+  persist(s);
+}
+function removeProfile(id) {
+  const s = load();
+  if (id === s.activeId) throw new Error("Cannot remove the active Timeline. Switch to another first.");
+  if (s.profiles.length <= 1) throw new Error("Cannot remove the only Timeline.");
+  s.profiles = s.profiles.filter((p) => p.id !== id);
+  persist(s);
+}
+function setActiveProfilePath(newPath) {
+  const s = load();
+  const p = s.profiles.find((p2) => p2.id === s.activeId);
+  if (p) {
+    p.path = newPath;
+    persist(s);
+  }
 }
 function getLibraryPath() {
-  return getSettings().libraryPath;
+  return getActiveLibraryPath();
 }
 function getFilesPath() {
   return path.join(getLibraryPath(), "files");
@@ -266,6 +329,55 @@ function closeDb() {
     db.close();
     db = null;
   }
+}
+const settingsFile = () => path.join(getLibraryPath(), "settings.json");
+const legacyGlobalFile = () => path.join(electron.app.getPath("userData"), "settings.json");
+let cached = null;
+function migrateWatchedFolders(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((f) => typeof f === "string" ? { path: f, volumeId: null } : f);
+}
+function readRawSettings() {
+  for (const file of [settingsFile(), legacyGlobalFile()]) {
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf-8"));
+    } catch {
+    }
+  }
+  return null;
+}
+function getSettings() {
+  if (cached) return cached;
+  const parsed = readRawSettings();
+  const base = parsed ?? {};
+  cached = {
+    // libraryPath is injected from the active profile, never persisted here.
+    libraryPath: getLibraryPath(),
+    watchedFolders: migrateWatchedFolders(base.watchedFolders),
+    duplicateScanMode: base.duplicateScanMode ?? "hash",
+    histogramHeight: base.histogramHeight !== void 0 ? base.histogramHeight : 420,
+    theme: base.theme ?? "light",
+    heatmapScale: base.heatmapScale ?? "log",
+    heatmapMaxCount: base.heatmapMaxCount ?? null,
+    curveTension: base.curveTension ?? 1,
+    fileBrowserHeight: base.fileBrowserHeight ?? base.dayViewHeight ?? 240,
+    fileBrowserMode: base.fileBrowserMode ?? base.dayViewMode ?? "medium",
+    mapMode: base.mapMode ?? "offline",
+    groupSidebarWidth: base.groupSidebarWidth ?? 220,
+    eventsPanelWidth: base.eventsPanelWidth ?? 272,
+    spotifyPanelWidth: base.spotifyPanelWidth ?? 272,
+    spotifyHistoryCollapsed: base.spotifyHistoryCollapsed ?? false
+  };
+  return cached;
+}
+function saveSettings(settings) {
+  cached = { ...settings, libraryPath: getLibraryPath() };
+  const { libraryPath: _omit, ...toStore } = settings;
+  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+  fs.writeFileSync(settingsFile(), JSON.stringify(toStore, null, 2), "utf-8");
+}
+function invalidateSettingsCache() {
+  cached = null;
 }
 function listGroups() {
   return getDb().prepare("SELECT * FROM groups ORDER BY name").all();
@@ -817,6 +929,18 @@ async function writePhotoDate(absPath, timestampMs) {
   await tool().write(
     absPath,
     { DateTimeOriginal: stamp, CreateDate: stamp, ModifyDate: stamp },
+    { writeArgs: ["-overwrite_original"] }
+  );
+}
+async function writePhotoGPS(absPath, latitude, longitude) {
+  await tool().write(
+    absPath,
+    {
+      GPSLatitude: Math.abs(latitude),
+      GPSLatitudeRef: latitude >= 0 ? "N" : "S",
+      GPSLongitude: Math.abs(longitude),
+      GPSLongitudeRef: longitude >= 0 ? "E" : "W"
+    },
     { writeArgs: ["-overwrite_original"] }
   );
 }
@@ -1532,28 +1656,6 @@ async function walkForZip(root, zipPrefix, out) {
     else if (d.isFile()) out.push({ abs, rel });
   }
 }
-function dumpMetadata(db2, exportType) {
-  const all = (table) => db2.prepare(`SELECT * FROM ${table}`).all();
-  return JSON.stringify(
-    {
-      format: MANIFEST_FORMAT,
-      formatVersion: FORMAT_VERSION,
-      exportType,
-      exportedAt: Date.now(),
-      entries: all("entries"),
-      groups: all("groups"),
-      tags: all("tags"),
-      entry_tags: all("entry_tags"),
-      group_tags: all("group_tags"),
-      events: all("events"),
-      // Source of truth for Spotify listening; the daily/artist rollups are
-      // derived from this and rebuilt on demand, so they're not dumped here.
-      listening_history: all("listening_history")
-    },
-    null,
-    2
-  );
-}
 async function exportBackup(destZip, type, onProgress) {
   if (isCurrentlySyncing()) {
     throw new Error("A library sync is in progress — wait for it to finish before exporting.");
@@ -1586,8 +1688,6 @@ async function exportBackup(destZip, type, onProgress) {
           referencedFiles.push({ abs: ref.file_path, rel });
         }
       }
-      const metadataJson = dumpMetadata(snap, type);
-      await fs$1.writeFile(path.join(tmpDir, "metadata.json"), metadataJson, "utf-8");
       const count = (table) => snap.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
       const manifest = {
         format: MANIFEST_FORMAT,
@@ -1606,9 +1706,15 @@ async function exportBackup(destZip, type, onProgress) {
       await fs$1.writeFile(path.join(tmpDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
       const zipEntries = [
         { abs: path.join(tmpDir, "manifest.json"), rel: "manifest.json" },
-        { abs: path.join(tmpDir, "metadata.json"), rel: "metadata.json" },
         { abs: snapshotPath, rel: "timeline.db" }
       ];
+      const settingsAbs = path.join(libraryPath, "settings.json");
+      try {
+        await fs$1.access(settingsAbs);
+        zipEntries.push({ abs: settingsAbs, rel: "settings.json" });
+      } catch {
+      }
+      const controlFileCount = zipEntries.length;
       await walkForZip(path.join(libraryPath, "thumbnails"), "thumbnails", zipEntries);
       if (type === "full") {
         await walkForZip(path.join(libraryPath, "files"), "files", zipEntries);
@@ -1619,7 +1725,7 @@ async function exportBackup(destZip, type, onProgress) {
       onProgress({ phase: "done", completed: zipEntries.length, total: zipEntries.length, current: "" });
       return {
         entries: manifest.counts.entries,
-        filesIncluded: type === "full" ? zipEntries.length - 3 : 0,
+        filesIncluded: type === "full" ? zipEntries.length - controlFileCount : 0,
         skippedReferences
       };
     } finally {
@@ -1691,7 +1797,9 @@ async function importBackup(zipPath, destDir, onProgress) {
   }
   stopWatcher();
   closeDb();
-  saveSettings({ ...getSettings(), libraryPath: destDir });
+  const imported = addExistingProfile(path.basename(destDir), destDir);
+  switchProfile(imported.id);
+  invalidateSettingsCache();
   ensureLibraryDirs();
   getDb();
   const entries = getAllEntriesWithFilePaths();
@@ -1837,6 +1945,32 @@ function registerEntryHandlers() {
       }
       try {
         await writePhotoDate(abs, entry.timestamp);
+        const hash = await computeFileHash(abs);
+        updateEntry(id, { content_hash: hash });
+        result.exifWritten++;
+      } catch {
+        result.exifFailed++;
+      }
+    }
+    return result;
+  });
+  electron.ipcMain.handle("entries:setLocation", async (_, params) => {
+    const { ids, latitude, longitude, writeExif } = params;
+    for (const id of ids) {
+      updateEntry(id, { latitude, longitude, gps_scanned: 1 });
+    }
+    const result = { updated: ids.length, exifWritten: 0, exifSkipped: 0, exifFailed: 0 };
+    if (!writeExif) return result;
+    for (const id of ids) {
+      const entry = getEntry(id);
+      const writable = entry && (entry.type === "photo" || entry.type === "video") && entry.import_mode === "copy" && !entry.is_missing;
+      const abs = writable ? resolveEntryAbsolutePath(entry) : null;
+      if (!abs) {
+        result.exifSkipped++;
+        continue;
+      }
+      try {
+        await writePhotoGPS(abs, latitude, longitude);
         const hash = await computeFileHash(abs);
         updateEntry(id, { content_hash: hash });
         result.exifWritten++;
@@ -2131,6 +2265,26 @@ function registerMapHandlers() {
       return await fs$1.readFile(path.join(mapDir(), def.file), "utf-8");
     } catch {
       return null;
+    }
+  });
+  electron.ipcMain.handle("geocode:search", async (_, query) => {
+    const q = query.trim();
+    if (!q) return [];
+    const url2 = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=0&limit=6&q=${encodeURIComponent(q)}`;
+    try {
+      const res = await fetch(url2, {
+        headers: { "User-Agent": "Timeline-Photo-App/1.0 (personal photo library)" }
+      });
+      if (!res.ok) return [];
+      const rows = await res.json();
+      return rows.map((r) => ({
+        label: r.display_name,
+        latitude: Number(r.lat),
+        longitude: Number(r.lon),
+        source: "online"
+      })).filter((r) => Number.isFinite(r.latitude) && Number.isFinite(r.longitude));
+    } catch {
+      return [];
     }
   });
   electron.ipcMain.handle("map:downloadHires", async (event) => {
@@ -2585,8 +2739,8 @@ function registerSettingsHandlers() {
     }
     if (foundIds.length > 0) markEntriesFound(foundIds);
     if (missingIds.length > 0) markEntriesMissing(missingIds);
-    const s = getSettings();
-    saveSettings({ ...s, libraryPath: newPath });
+    setActiveProfilePath(newPath);
+    invalidateSettingsCache();
     ensureLibraryDirs();
     restartWatcher();
     return { found: foundIds.length, total: entries.length };
@@ -2619,9 +2773,47 @@ function registerSettingsHandlers() {
         throw e;
       }
     }
-    saveSettings({ ...current, libraryPath: newPath });
+    setActiveProfilePath(newPath);
+    invalidateSettingsCache();
     ensureLibraryDirs();
     return { success: true };
+  });
+}
+function activate() {
+  closeDb();
+  invalidateSettingsCache();
+  ensureLibraryDirs();
+  restartWatcher();
+}
+function registerProfileHandlers() {
+  electron.ipcMain.handle("profiles:list", () => listProfiles());
+  electron.ipcMain.handle("profiles:createNew", (_, name) => {
+    return createProfileNew(name);
+  });
+  electron.ipcMain.handle("profiles:addExisting", async (_, name) => {
+    const win = electron.BrowserWindow.getFocusedWindow() ?? electron.BrowserWindow.getAllWindows()[0];
+    const result = await electron.dialog.showOpenDialog(win, {
+      title: "Select a Timeline folder",
+      properties: ["openDirectory", "createDirectory"]
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    return addExistingProfile(name, result.filePaths[0]);
+  });
+  electron.ipcMain.handle("profiles:switch", (_, id) => {
+    if (isCurrentlySyncing()) {
+      throw new Error("A library sync is in progress — wait for it to finish before switching.");
+    }
+    const profile = switchProfile(id);
+    activate();
+    return profile;
+  });
+  electron.ipcMain.handle("profiles:rename", (_, id, name) => {
+    renameProfile(id, name);
+    return listProfiles();
+  });
+  electron.ipcMain.handle("profiles:remove", (_, id) => {
+    removeProfile(id);
+    return listProfiles();
   });
 }
 const MEDIA_MIME = {
@@ -3102,6 +3294,7 @@ function registerAllHandlers() {
   registerPeopleHandlers();
   registerTagHandlers();
   registerSettingsHandlers();
+  registerProfileHandlers();
   registerSpotifyHandlers();
   registerVolumeHandlers();
 }

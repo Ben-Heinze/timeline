@@ -47,6 +47,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     update: (id, patch) => electron.ipcRenderer.invoke("entries:update", id, patch),
     rename: (id, title, renameFile) => electron.ipcRenderer.invoke("entries:rename", id, title, renameFile),
     setDate: (params) => electron.ipcRenderer.invoke("entries:setDate", params),
+    setLocation: (params) => electron.ipcRenderer.invoke("entries:setLocation", params),
     delete: (ids) => electron.ipcRenderer.invoke("entries:delete", ids),
     create: (data) => electron.ipcRenderer.invoke("entries:create", data)
   },
@@ -54,6 +55,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     hiresStatus: () => electron.ipcRenderer.invoke("map:hiresStatus"),
     getLayer: (layer) => electron.ipcRenderer.invoke("map:getLayer", layer),
     downloadHires: () => electron.ipcRenderer.invoke("map:downloadHires"),
+    geocode: (query) => electron.ipcRenderer.invoke("geocode:search", query),
     onDownloadProgress: (cb) => {
       const handler = (_, data) => cb(data);
       electron.ipcRenderer.on("map:downloadProgress", handler);
@@ -115,6 +117,14 @@ electron.contextBridge.exposeInMainWorld("api", {
     relocateLibrary: (newPath) => electron.ipcRenderer.invoke("settings:relocateLibrary", newPath),
     resetLibrary: () => electron.ipcRenderer.invoke("settings:resetLibrary"),
     generateTestData: () => electron.ipcRenderer.invoke("settings:generateTestData")
+  },
+  profiles: {
+    list: () => electron.ipcRenderer.invoke("profiles:list"),
+    createNew: (name) => electron.ipcRenderer.invoke("profiles:createNew", name),
+    addExisting: (name) => electron.ipcRenderer.invoke("profiles:addExisting", name),
+    switch: (id) => electron.ipcRenderer.invoke("profiles:switch", id),
+    rename: (id, name) => electron.ipcRenderer.invoke("profiles:rename", id, name),
+    remove: (id) => electron.ipcRenderer.invoke("profiles:remove", id)
   },
   backup: {
     export: (type) => electron.ipcRenderer.invoke("backup:export", type),

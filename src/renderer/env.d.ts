@@ -2,13 +2,13 @@
 
 import type {
   IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, Bucket, Group, GroupStats, Entry, NewGroup,
-  EntryType, Tag, SearchFilters, AppSettings, DuplicateGroup, FileInfo,
+  EntryType, Tag, SearchFilters, AppSettings, Profile, ProfileList, DuplicateGroup, FileInfo,
   LifeEvent, NewLifeEvent,
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
-  SetDateParams, SetDateResult, RescanProgressEvent, RescanResult, ImportPreview,
+  SetDateParams, SetDateResult, SetLocationParams, SetLocationResult, GeocodeResult, RescanProgressEvent, RescanResult, ImportPreview,
   PageParams, MonthBucket, RenameEntryResult, Person, PersonListItem, NewPerson,
 } from '../shared/types'
 
@@ -43,6 +43,7 @@ interface Api {
     update: (id: number, patch: Record<string, unknown>) => Promise<void>
     rename: (id: number, title: string, renameFile: boolean) => Promise<RenameEntryResult>
     setDate: (params: SetDateParams) => Promise<SetDateResult>
+    setLocation: (params: SetLocationParams) => Promise<SetLocationResult>
     delete: (ids: number[]) => Promise<void>
     create: (data: { type: EntryType; timestamp: number; title: string | null; rich_text_json: string | null; group_id: number | null }) => Promise<number>
   }
@@ -50,6 +51,7 @@ interface Api {
     hiresStatus: () => Promise<{ downloaded: boolean; downloading: boolean }>
     getLayer: (layer: MapHiresLayer) => Promise<string | null>
     downloadHires: () => Promise<void>
+    geocode: (query: string) => Promise<GeocodeResult[]>
     onDownloadProgress: (cb: (event: MapDownloadProgressEvent) => void) => () => void
   }
   groups: {
@@ -107,6 +109,14 @@ interface Api {
     relocateLibrary: (newPath: string) => Promise<{ found: number; total: number }>
     resetLibrary: () => Promise<{ success: boolean }>
     generateTestData: () => Promise<{ entries: number; tags: number; denseDays: number; located: number; groups: number }>
+  }
+  profiles: {
+    list: () => Promise<ProfileList>
+    createNew: (name: string) => Promise<Profile>
+    addExisting: (name: string) => Promise<Profile | null>
+    switch: (id: string) => Promise<Profile>
+    rename: (id: string, name: string) => Promise<ProfileList>
+    remove: (id: string) => Promise<ProfileList>
   }
   backup: {
     export: (type: BackupExportType) => Promise<BackupExportResult>

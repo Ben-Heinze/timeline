@@ -7,6 +7,7 @@ import { registerMapHandlers } from './map'
 import { registerPeopleHandlers } from './people'
 import { registerTagHandlers } from './tags'
 import { registerSettingsHandlers } from './settings'
+import { registerProfileHandlers } from './profiles'
 import { registerFileHandlers } from './files'
 import { registerSpotifyHandlers } from './spotify'
 import { registerVolumeHandlers } from './volumes'
@@ -22,6 +23,7 @@ export function registerAllHandlers(): void {
   registerPeopleHandlers()
   registerTagHandlers()
   registerSettingsHandlers()
+  registerProfileHandlers()
   registerSpotifyHandlers()
   registerVolumeHandlers()
 }

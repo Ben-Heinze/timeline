@@ -13,6 +13,7 @@ import GroupSidebar from './components/GroupSidebar'
 import JournalModal from './components/JournalModal'
 import SearchResults from './components/SearchResults'
 import SearchBar from './components/SearchBar'
+import ProfileSwitcher from './components/ProfileSwitcher'
 import SettingsView from './components/SettingsView'
 import ImportTagModal from './components/ImportTagModal'
 import DateRangeGroupModal from './components/DateRangeGroupModal'
@@ -50,10 +51,8 @@ export default function App() {
     window.api.people.list().then(setPeople)
   }, [setGroups, setEvents, setSettings, setVolumes, setPeople])
 
-  // Apply theme to document root whenever settings.theme changes
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', settings?.theme ?? 'light')
-  }, [settings?.theme])
+  // Theme is applied synchronously in main.tsx via a store subscription so the
+  // timeline canvas reads the correct CSS variables on first paint.
 
   const refreshExtent = React.useCallback(() => {
     return window.api.entries.extent().then(ext => {
@@ -379,6 +378,8 @@ function Main() {
         background: 'var(--bg-surface)', flexShrink: 0,
       }}>
         <h1 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>Timeline</h1>
+
+        <ProfileSwitcher />
 
         {/* View tabs */}
         <div style={{

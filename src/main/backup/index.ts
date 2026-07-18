@@ -7,7 +7,8 @@ import archiver from 'archiver'
 import extractZip from 'extract-zip'
 import { getDb, closeDb } from '../db'
 import { getLibraryPath, ensureLibraryDirs } from '../library'
-import { getSettings, saveSettings } from '../settings'
+import { invalidateSettingsCache } from '../settings'
+import { addExistingProfile, switchProfile } from '../profiles'
 import { stopWatcher, startWatcher, isCurrentlySyncing } from '../sync'
 import { getAllEntriesWithFilePaths, markEntriesMissing, markEntriesFound } from '../db/queries/entries'
 import type { BackupExportType, BackupManifest, BackupProgressEvent } from '../../shared/types'
@@ -42,29 +43,6 @@ async function walkForZip(root: string, zipPrefix: string, out: ZipEntry[]): Pro
     if (d.isDirectory()) await walkForZip(abs, rel, out)
     else if (d.isFile()) out.push({ abs, rel })
   }
-}
-
-function dumpMetadata(db: Database.Database, exportType: BackupExportType): string {
-  const all = (table: string) => db.prepare(`SELECT * FROM ${table}`).all()
-  return JSON.stringify(
-    {
-      format: MANIFEST_FORMAT,
-      formatVersion: FORMAT_VERSION,
-      exportType,
-      exportedAt: Date.now(),
-      entries: all('entries'),
-      groups: all('groups'),
-      tags: all('tags'),
-      entry_tags: all('entry_tags'),
-      group_tags: all('group_tags'),
-      events: all('events'),
-      // Source of truth for Spotify listening; the daily/artist rollups are
-      // derived from this and rebuilt on demand, so they're not dumped here.
-      listening_history: all('listening_history'),
-    },
-    null,
-    2,
-  )
 }
 
 export interface ExportSummary {
@@ -122,9 +100,6 @@ export async function exportBackup(
         }
       }
 
-      const metadataJson = dumpMetadata(snap, type)
-      await fs.writeFile(path.join(tmpDir, 'metadata.json'), metadataJson, 'utf-8')
-
       const count = (table: string) =>
         (snap.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
       const manifest: BackupManifest = {
@@ -143,11 +118,21 @@ export async function exportBackup(
       }
       await fs.writeFile(path.join(tmpDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8')
 
+      // The restore uses the SQLite snapshot as the single source of truth — it
+      // holds every table (entries, groups, people/animals, events, tags, volumes,
+      // Spotify listening…), so there is no separate metadata dump to keep in sync.
       const zipEntries: ZipEntry[] = [
         { abs: path.join(tmpDir, 'manifest.json'), rel: 'manifest.json' },
-        { abs: path.join(tmpDir, 'metadata.json'), rel: 'metadata.json' },
         { abs: snapshotPath, rel: 'timeline.db' },
       ]
+      // The library's own preferences (theme, layout, watched folders, map mode)
+      // travel with it, so a restored Timeline looks and behaves the same.
+      const settingsAbs = path.join(libraryPath, 'settings.json')
+      try {
+        await fs.access(settingsAbs)
+        zipEntries.push({ abs: settingsAbs, rel: 'settings.json' })
+      } catch { /* no per-library settings yet — nothing to carry */ }
+      const controlFileCount = zipEntries.length   // manifest, db, (settings)
       await walkForZip(path.join(libraryPath, 'thumbnails'), 'thumbnails', zipEntries)
       if (type === 'full') {
         await walkForZip(path.join(libraryPath, 'files'), 'files', zipEntries)
@@ -160,7 +145,7 @@ export async function exportBackup(
       onProgress({ phase: 'done', completed: zipEntries.length, total: zipEntries.length, current: '' })
       return {
         entries: manifest.counts.entries,
-        filesIncluded: type === 'full' ? zipEntries.length - 3 : 0,
+        filesIncluded: type === 'full' ? zipEntries.length - controlFileCount : 0,
         skippedReferences,
       }
     } finally {
@@ -258,7 +243,13 @@ export async function importBackup(
   stopWatcher()
   closeDb()
 
-  saveSettings({ ...getSettings(), libraryPath: destDir })
+  // The restored library becomes its own profile and the active one, rather than
+  // overwriting the current profile — so importing adds a Timeline instead of
+  // replacing the one you were using. Its settings.json (if present in the zip)
+  // now lives in destDir, so the reopened settings reflect the restored library.
+  const imported = addExistingProfile(path.basename(destDir), destDir)
+  switchProfile(imported.id)
+  invalidateSettingsCache()
   ensureLibraryDirs()
   getDb() // reopens against the restored DB and applies schema migrations
 

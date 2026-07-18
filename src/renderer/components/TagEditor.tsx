@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useStore } from '../store/useStore'
 import type { Tag } from '../../shared/types'
 
@@ -13,6 +14,8 @@ export default function TagEditor({ tags, onChange, compact }: Props) {
   const [current, setCurrent] = useState<Tag[]>(tags)
   const [input, setInput] = useState('')
   const [suggestOpen, setSuggestOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [menuPos, setMenuPos] = useState<{ left: number; width: number; top?: number; bottom?: number } | null>(null)
 
   useEffect(() => { setCurrent(tags) }, [tags])
 
@@ -43,8 +46,38 @@ export default function TagEditor({ tags, onChange, compact }: Props) {
     ? allTags.filter(t => !currentIds.has(t.id) && t.name.toLowerCase().includes(inputLower)).slice(0, 6)
     : allTags.filter(t => !currentIds.has(t.id)).slice(0, 6)
 
+  // The suggestions list must render in a body portal: this editor sits in the
+  // bottom footer of an overflow-hidden modal (and inside the context menu), so
+  // an in-flow dropdown gets clipped off-screen. We anchor it to the editor's
+  // rect and flip it above the field when there isn't room below.
+  const MENU_MAX = 140
+  const menuOpen = suggestOpen && suggestions.length > 0
+
+  const updateMenuPos = useCallback(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - r.bottom
+    if (spaceBelow < MENU_MAX + 8 && r.top > spaceBelow) {
+      setMenuPos({ left: r.left, width: r.width, bottom: window.innerHeight - r.top + 2 })
+    } else {
+      setMenuPos({ left: r.left, width: r.width, top: r.bottom + 2 })
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!menuOpen) { setMenuPos(null); return }
+    updateMenuPos()
+    window.addEventListener('resize', updateMenuPos)
+    window.addEventListener('scroll', updateMenuPos, true)
+    return () => {
+      window.removeEventListener('resize', updateMenuPos)
+      window.removeEventListener('scroll', updateMenuPos, true)
+    }
+  }, [menuOpen, input, current.length, updateMenuPos])
+
   return (
-    <div style={{ position: 'relative' }}>
+    <div ref={wrapRef} style={{ position: 'relative' }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
         {current.map(t => (
           <span key={t.id} style={{
@@ -79,12 +112,13 @@ export default function TagEditor({ tags, onChange, compact }: Props) {
           }}
         />
       </div>
-      {suggestOpen && suggestions.length > 0 && (
+      {menuOpen && menuPos && createPortal(
         <div style={{
-          position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0,
+          position: 'fixed', left: menuPos.left, width: menuPos.width,
+          top: menuPos.top, bottom: menuPos.bottom,
           background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 6,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.08)', zIndex: 20,
-          maxHeight: 140, overflowY: 'auto',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.08)', zIndex: 1000,
+          maxHeight: MENU_MAX, overflowY: 'auto',
         }}>
           {suggestions.map(t => (
             <div
@@ -95,7 +129,8 @@ export default function TagEditor({ tags, onChange, compact }: Props) {
               onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = ''}
             >#{t.name}</div>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

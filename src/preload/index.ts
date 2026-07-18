@@ -1,13 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, NewGroup, Group,
-  EntryType, SearchFilters, AppSettings, DuplicateGroup, FileInfo,
+  EntryType, SearchFilters, AppSettings, Profile, ProfileList, DuplicateGroup, FileInfo,
   LifeEvent, NewLifeEvent,
   BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
-  SetDateParams, RescanProgressEvent, RescanResult, ImportPreview, PageParams, MonthBucket, Entry,
+  SetDateParams, SetLocationParams, SetLocationResult, GeocodeResult, RescanProgressEvent, RescanResult, ImportPreview, PageParams, MonthBucket, Entry,
   RenameEntryResult, Person, PersonListItem, NewPerson,
 } from '../shared/types'
 
@@ -79,6 +79,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('entries:rename', id, title, renameFile),
     setDate: (params: SetDateParams) =>
       ipcRenderer.invoke('entries:setDate', params),
+    setLocation: (params: SetLocationParams): Promise<SetLocationResult> =>
+      ipcRenderer.invoke('entries:setLocation', params),
     delete: (ids: number[]) =>
       ipcRenderer.invoke('entries:delete', ids),
     create: (data: { type: EntryType; timestamp: number; title: string | null; rich_text_json: string | null; group_id: number | null }) =>
@@ -91,6 +93,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('map:getLayer', layer),
     downloadHires: (): Promise<void> =>
       ipcRenderer.invoke('map:downloadHires'),
+    geocode: (query: string): Promise<GeocodeResult[]> =>
+      ipcRenderer.invoke('geocode:search', query),
     onDownloadProgress: (cb: (event: MapDownloadProgressEvent) => void) => {
       const handler = (_: unknown, data: MapDownloadProgressEvent) => cb(data)
       ipcRenderer.on('map:downloadProgress', handler)
@@ -196,6 +200,20 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('settings:resetLibrary'),
     generateTestData: (): Promise<{ entries: number; tags: number; denseDays: number; located: number; groups: number }> =>
       ipcRenderer.invoke('settings:generateTestData'),
+  },
+  profiles: {
+    list: (): Promise<ProfileList> =>
+      ipcRenderer.invoke('profiles:list'),
+    createNew: (name: string): Promise<Profile> =>
+      ipcRenderer.invoke('profiles:createNew', name),
+    addExisting: (name: string): Promise<Profile | null> =>
+      ipcRenderer.invoke('profiles:addExisting', name),
+    switch: (id: string): Promise<Profile> =>
+      ipcRenderer.invoke('profiles:switch', id),
+    rename: (id: string, name: string): Promise<ProfileList> =>
+      ipcRenderer.invoke('profiles:rename', id, name),
+    remove: (id: string): Promise<ProfileList> =>
+      ipcRenderer.invoke('profiles:remove', id),
   },
   backup: {
     export: (type: BackupExportType): Promise<BackupExportResult> =>

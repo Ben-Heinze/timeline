@@ -4,6 +4,7 @@ import TagEditor from './TagEditor'
 import PeopleEditor from './PeopleEditor'
 import { GroupPickerList } from './GroupPicker'
 import ChangeDateModal from './ChangeDateModal'
+import SetLocationModal from './SetLocationModal'
 import type { Entry, Tag } from '../../shared/types'
 
 interface ContextMenuState {
@@ -28,6 +29,7 @@ export function useEntryContextMenu(entries: Entry[]) {
   const [peopleModalIds, setPeopleModalIds] = useState<number[] | null>(null)
   const [pendingPersonIds, setPendingPersonIds] = useState<number[]>([])
   const [dateModalIds, setDateModalIds] = useState<number[] | null>(null)
+  const [locationModalIds, setLocationModalIds] = useState<number[] | null>(null)
   const [renameId, setRenameId] = useState<number | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renameFile, setRenameFile] = useState(false)
@@ -129,6 +131,12 @@ export function useEntryContextMenu(entries: Entry[]) {
     closeMenu()
   }, [menu, closeMenu])
 
+  const openLocationModal = useCallback(() => {
+    if (!menu) return
+    setLocationModalIds(menu.ids)
+    closeMenu()
+  }, [menu, closeMenu])
+
   const openRenameModal = useCallback(() => {
     if (!menu || menu.ids.length !== 1) return
     const entry = entries.find(e => e.id === menu.ids[0])
@@ -161,6 +169,16 @@ export function useEntryContextMenu(entries: Entry[]) {
     closeMenu()
     bumpRefreshKey()
   }, [menu, closeMenu, bumpRefreshKey])
+
+  // Whether any targeted entry is currently in a group — gates the top-level
+  // "Remove from group" action so it's hidden when there's nothing to remove.
+  const menuHasGrouped = useMemo(() => {
+    if (!menu) return false
+    return menu.ids.some(id => {
+      const entry = entries.find(e => e.id === id)
+      return entry != null && entry.group_id != null
+    })
+  }, [menu, entries])
 
   const deleteSelected = useCallback(async () => {
     if (!menu) return
@@ -221,12 +239,15 @@ export function useEntryContextMenu(entries: Entry[]) {
                   <GroupPickerList
                     groups={groups}
                     onPick={assignToGroup}
-                    onRemove={() => assignToGroup(null)}
                   />
                 </div>
               )}
             </div>
+            {menuHasGrouped && (
+              <MenuItem label="Remove from group" onClick={() => assignToGroup(null)} />
+            )}
             <MenuItem label="Change date…" onClick={openDateModal} />
+            <MenuItem label="Set location…" onClick={openLocationModal} />
             <div style={{ height: 1, background: 'var(--border-light)', margin: '4px 0' }} />
             <MenuItem label="Delete…" danger onClick={deleteSelected} />
           </div>
@@ -455,6 +476,15 @@ export function useEntryContextMenu(entries: Entry[]) {
         <ChangeDateModal
           ids={dateModalIds}
           onClose={() => setDateModalIds(null)}
+          onApplied={bumpRefreshKey}
+        />
+      )}
+
+      {/* Set-location modal */}
+      {locationModalIds !== null && (
+        <SetLocationModal
+          ids={locationModalIds}
+          onClose={() => setLocationModalIds(null)}
           onApplied={bumpRefreshKey}
         />
       )}

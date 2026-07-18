@@ -1,9 +1,9 @@
 import path from 'path'
 import fs from 'fs'
-import { getSettings } from './settings'
+import { getActiveLibraryPath } from './profiles'
 
 export function getLibraryPath(): string {
-  return getSettings().libraryPath
+  return getActiveLibraryPath()
 }
 
 export function getFilesPath(): string {

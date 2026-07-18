@@ -5,8 +5,8 @@ import * as q from '../db/queries/entries'
 import { getLibraryPath } from '../library'
 import { resolveEntryAbsolutePath } from '../volumes/paths'
 import { computeFileHash, rescanLibrary } from '../ingest'
-import { writePhotoDate } from '../exif'
-import type { SetDateParams, SetDateResult, RescanResult, RenameEntryResult } from '../../shared/types'
+import { writePhotoDate, writePhotoGPS } from '../exif'
+import type { SetDateParams, SetDateResult, SetLocationParams, SetLocationResult, RescanResult, RenameEntryResult } from '../../shared/types'
 
 // Strip characters that are illegal or unsafe in a file name (path separators,
 // Windows-reserved chars, control chars, leading dots) so a user-typed title can
@@ -138,6 +138,42 @@ export function registerEntryHandlers(): void {
       if (!abs) { result.exifSkipped++; continue }
       try {
         await writePhotoDate(abs, entry!.timestamp)
+        // Rewriting the file changes its bytes; keep the dedupe hash accurate.
+        const hash = await computeFileHash(abs)
+        q.updateEntry(id, { content_hash: hash })
+        result.exifWritten++
+      } catch {
+        result.exifFailed++
+      }
+    }
+    return result
+  })
+
+  ipcMain.handle('entries:setLocation', async (_, params: SetLocationParams): Promise<SetLocationResult> => {
+    const { ids, latitude, longitude, writeExif } = params
+
+    // 1. Update the in-app location for every selected entry. gps_scanned is set
+    //    so these no longer look like "never checked for GPS" during rescans.
+    for (const id of ids) {
+      q.updateEntry(id, { latitude, longitude, gps_scanned: 1 })
+    }
+
+    const result: SetLocationResult = { updated: ids.length, exifWritten: 0, exifSkipped: 0, exifFailed: 0 }
+    if (!writeExif) return result
+
+    // 2. Best-effort write of the new GPS back into the file's metadata. Only
+    //    copy-mode photos/videos the app owns are touched; referenced originals
+    //    and anything unreachable are left alone. Mirrors entries:setDate.
+    for (const id of ids) {
+      const entry = q.getEntry(id)
+      const writable = entry
+        && (entry.type === 'photo' || entry.type === 'video')
+        && entry.import_mode === 'copy'
+        && !entry.is_missing
+      const abs = writable ? resolveEntryAbsolutePath(entry) : null
+      if (!abs) { result.exifSkipped++; continue }
+      try {
+        await writePhotoGPS(abs, latitude, longitude)
         // Rewriting the file changes its bytes; keep the dedupe hash accurate.
         const hash = await computeFileHash(abs)
         q.updateEntry(id, { content_hash: hash })
