@@ -14,7 +14,7 @@ test.describe('Life events', () => {
     })
     await page.evaluate(() => window.location.reload())
     await page.waitForSelector('button:has-text("+ Journal")', { timeout: 20_000 })
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
   })
 
   test('events panel is open by default with an empty state', async ({ appPage: page }) => {

@@ -11,9 +11,9 @@ test.describe('App launch and navigation', () => {
   })
 
   test('shows all four view tabs', async ({ appPage: page }) => {
-    await expect(page.getByRole('button', { name: 'Timeline' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Timeline', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Calendar' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Files' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Files', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible()
   })
 
@@ -30,7 +30,7 @@ test.describe('App launch and navigation', () => {
   })
 
   test('Timeline tab is active by default', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
     await expect(page.locator('canvas')).toBeVisible()
   })
 
@@ -41,7 +41,7 @@ test.describe('App launch and navigation', () => {
   })
 
   test('switches to Files view', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Files' }).click()
+    await page.getByRole('button', { name: 'Files', exact: true }).click()
     await expect(page.getByText(/Sort/i).first()).toBeVisible()
   })
 
@@ -52,7 +52,7 @@ test.describe('App launch and navigation', () => {
   })
 
   test('returns to Timeline view from Settings', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
     await expect(page.locator('canvas')).toBeVisible()
     await expect(page.getByRole('button', { name: '+ Journal' })).toBeVisible()
   })

@@ -5,7 +5,7 @@ test.describe('Timeline view', () => {
     await seedJournalEntries(page, 5)
     await page.evaluate(() => window.location.reload())
     await page.waitForSelector('button:has-text("+ Journal")', { timeout: 20_000 })
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
   })
 
   test('canvas element is rendered', async ({ appPage: page }) => {
@@ -13,9 +13,9 @@ test.describe('Timeline view', () => {
   })
 
   test('shows zoom level buttons', async ({ appPage: page }) => {
-    await expect(page.getByRole('button', { name: 'Year' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Month' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Day' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Year', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Month', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Day', exact: true })).toBeVisible()
   })
 
   test('shows Select Range button', async ({ appPage: page }) => {
@@ -23,8 +23,8 @@ test.describe('Timeline view', () => {
   })
 
   test('shows navigation arrows', async ({ appPage: page }) => {
-    await expect(page.getByRole('button', { name: '←' })).toBeVisible()
-    await expect(page.getByRole('button', { name: '→' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Pan earlier' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Pan later' })).toBeVisible()
   })
 
   test('Year zoom is active by default', async ({ appPage: page }) => {
@@ -33,19 +33,19 @@ test.describe('Timeline view', () => {
   })
 
   test('clicking Month button changes zoom level', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Month' }).click()
+    await page.getByRole('button', { name: 'Month', exact: true }).click()
     // Month zoom hint or axis should reflect monthly granularity
     await expect(page.locator('canvas')).toBeVisible()
     // Month button should now appear active (no assertion on style, but click doesn't error)
   })
 
   test('clicking Day button changes zoom level', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Day' }).click()
+    await page.getByRole('button', { name: 'Day', exact: true }).click()
     await expect(page.locator('canvas')).toBeVisible()
   })
 
   test('clicking Year re-fits to full data extent', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Year' }).click()
+    await page.getByRole('button', { name: 'Year', exact: true }).click()
     await expect(page.getByText('click bar to zoom in')).toBeVisible()
   })
 
@@ -70,7 +70,7 @@ test.describe('Timeline view', () => {
   })
 
   test('clicking a histogram bar opens the DayView panel', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Year' }).click()
+    await page.getByRole('button', { name: 'Year', exact: true }).click()
     // Click the canvas roughly in the center where a bar would be
     const canvas = page.locator('canvas')
     const box = await canvas.boundingBox()
@@ -83,9 +83,9 @@ test.describe('Timeline view', () => {
   })
 
   test('navigation arrows pan the timeline', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Month' }).click()
-    const leftArrow = page.getByRole('button', { name: '←' })
-    const rightArrow = page.getByRole('button', { name: '→' })
+    await page.getByRole('button', { name: 'Month', exact: true }).click()
+    const leftArrow = page.getByRole('button', { name: 'Pan earlier' })
+    const rightArrow = page.getByRole('button', { name: 'Pan later' })
     await leftArrow.click()
     await expect(page.locator('canvas')).toBeVisible()
     await rightArrow.click()

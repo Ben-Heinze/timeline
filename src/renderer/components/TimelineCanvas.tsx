@@ -1142,8 +1142,8 @@ export default function TimelineCanvas() {
         >
           {rangeSelectMode ? '✕ Cancel' : '⊞ Select Range'}
         </button>
-        <button onClick={panLeft}  style={navBtnStyle}>←</button>
-        <button onClick={panRight} style={{ ...navBtnStyle, marginLeft: 3 }}>→</button>
+        <button onClick={panLeft}  style={navBtnStyle} title="Pan earlier" aria-label="Pan earlier">←</button>
+        <button onClick={panRight} style={{ ...navBtnStyle, marginLeft: 3 }} title="Pan later" aria-label="Pan later">→</button>
       </div>
 
       {/* Month navigator (day view only) */}
@@ -1156,6 +1156,7 @@ export default function TimelineCanvas() {
           <button
             onClick={() => setMonthRange(addMonths(selectedMonthStart, -1))}
             style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 10px', fontSize: 13, cursor: 'pointer', color: 'var(--text-2)' }}
+            title="Previous month" aria-label="Previous month"
           >←</button>
           <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 160, textAlign: 'center' }}>
             {new Date(selectedMonthStart).toLocaleString('en-US', { month: 'long', year: 'numeric' })}
@@ -1163,6 +1164,7 @@ export default function TimelineCanvas() {
           <button
             onClick={() => setMonthRange(addMonths(selectedMonthStart, 1))}
             style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 10px', fontSize: 13, cursor: 'pointer', color: 'var(--text-2)' }}
+            title="Next month" aria-label="Next month"
           >→</button>
         </div>
       )}
@@ -1177,6 +1179,7 @@ export default function TimelineCanvas() {
           <button
             onClick={() => setYearRange(selectedYear - 1)}
             style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 10px', fontSize: 13, cursor: 'pointer', color: 'var(--text-2)' }}
+            title="Previous year" aria-label="Previous year"
           >←</button>
           <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', minWidth: 48, textAlign: 'center' }}>
             {selectedYear}
@@ -1184,6 +1187,7 @@ export default function TimelineCanvas() {
           <button
             onClick={() => setYearRange(selectedYear + 1)}
             style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 5, padding: '2px 10px', fontSize: 13, cursor: 'pointer', color: 'var(--text-2)' }}
+            title="Next year" aria-label="Next year"
           >→</button>
         </div>
       )}

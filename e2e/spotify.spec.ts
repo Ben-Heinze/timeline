@@ -36,7 +36,7 @@ test.describe('Spotify view', () => {
 
   test('Timeline Spotify panel toggle shows the listening ribbon', async ({ appPage: page }) => {
     await page.getByRole('button', { name: 'Timeline', exact: true }).click()
-    await page.getByRole('button', { name: 'Year' }).click()
+    await page.getByRole('button', { name: 'Year', exact: true }).click()
     await page.getByRole('button', { name: '♫ Spotify' }).click()
     // The panel scopes its heading to the visible range/period, whether or not it found plays
     await expect(page.getByText(/visible range|during/).first()).toBeVisible({ timeout: 10_000 })

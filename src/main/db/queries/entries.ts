@@ -74,7 +74,13 @@ export function listAllEntries(opts: {
 } & PageParams): Entry[] {
   const dir = opts.sortDir === 'asc' ? 'ASC' : 'DESC'
   const where = opts.groupId != null ? `WHERE e.${groupFilterSql(opts.groupId)}` : ''
-  const params: Record<string, unknown> = { limit: opts.limit, offset: opts.offset }
+  // Pagination is optional: callers that omit limit/offset (or pass a non-number)
+  // get the full result set. Binding an undefined @limit would otherwise make
+  // SQLite throw "datatype mismatch", so only add the clause when we have a real
+  // page to request.
+  const paginated = Number.isFinite(opts.limit as number) && Number.isFinite(opts.offset as number)
+  const pageSql = paginated ? 'LIMIT @limit OFFSET @offset' : ''
+  const params: Record<string, unknown> = paginated ? { limit: opts.limit, offset: opts.offset } : {}
 
   if (opts.sortBy === 'tag') {
     // Sort by the alphabetically-first tag on each entry; entries with no tags always go last
@@ -89,7 +95,7 @@ export function listAllEntries(opts: {
         CASE WHEN MIN(t.name) IS NULL THEN 1 ELSE 0 END ASC,
         MIN(t.name) ${dir},
         e.timestamp DESC
-      LIMIT @limit OFFSET @offset
+      ${pageSql}
     `).all(params) as Entry[]
   }
 
@@ -100,7 +106,7 @@ export function listAllEntries(opts: {
     SELECT * FROM entries
     ${simpleWhere}
     ORDER BY ${col} ${dir}${tie}
-    LIMIT @limit OFFSET @offset
+    ${pageSql}
   `).all(params) as Entry[]
 }
 

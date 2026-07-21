@@ -70,6 +70,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     update: (id, patch) => electron.ipcRenderer.invoke("groups:update", id, patch),
     delete: (id) => electron.ipcRenderer.invoke("groups:delete", id),
     assignEntries: (groupId, entryIds) => electron.ipcRenderer.invoke("groups:assignEntries", groupId, entryIds),
+    removeEntries: (entryIds) => electron.ipcRenderer.invoke("groups:removeEntries", entryIds),
     assignEntriesForPeriod: (groupId, from, to) => electron.ipcRenderer.invoke("groups:assignEntriesForPeriod", groupId, from, to)
   },
   events: {
@@ -164,5 +165,19 @@ electron.contextBridge.exposeInMainWorld("api", {
     refresh: () => electron.ipcRenderer.invoke("volumes:refresh"),
     matchPath: (path) => electron.ipcRenderer.invoke("volumes:matchPath", path),
     setLabel: (id, label) => electron.ipcRenderer.invoke("volumes:setLabel", id, label)
+  },
+  phone: {
+    start: () => electron.ipcRenderer.invoke("phone:start"),
+    stop: () => electron.ipcRenderer.invoke("phone:stop"),
+    onUploadProgress: (cb) => {
+      const handler = (_, data) => cb(data);
+      electron.ipcRenderer.on("phone:upload-progress", handler);
+      return () => electron.ipcRenderer.removeListener("phone:upload-progress", handler);
+    },
+    onUploadDone: (cb) => {
+      const handler = (_, data) => cb(data);
+      electron.ipcRenderer.on("phone:upload-done", handler);
+      return () => electron.ipcRenderer.removeListener("phone:upload-done", handler);
+    }
   }
 });

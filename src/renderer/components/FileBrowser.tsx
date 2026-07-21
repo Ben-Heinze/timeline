@@ -140,7 +140,10 @@ export default function FileBrowser() {
 
   const handleAssign = useCallback(async (groupId: number | null) => {
     const ids = [...selectedIds]
-    await window.api.groups.assignEntries(groupId, ids)
+    // null is the dropdown's "Remove from group" signal: move entries up to
+    // their group's parent rather than ungrouping them outright.
+    if (groupId === null) await window.api.groups.removeEntries(ids)
+    else await window.api.groups.assignEntries(groupId, ids)
     setSelection(new Set(), null)
     bumpRefreshKey()
   }, [selectedIds, setSelection, bumpRefreshKey])

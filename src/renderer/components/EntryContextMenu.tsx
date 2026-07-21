@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store/useStore'
 import TagEditor from './TagEditor'
 import PeopleEditor from './PeopleEditor'
@@ -18,13 +18,25 @@ interface ContextMenuState {
 export function useEntryContextMenu(entries: Entry[]) {
   const {
     selectedIds, setSelection,
-    groups, tags: allTags, setTags: setAllTags,
+    groups, setGroups, selectedGroupId,
+    tags: allTags, setTags: setAllTags,
     people: allPeople, setPeople,
     bumpRefreshKey,
   } = useStore()
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  // Clamped on-screen position, refined from the menu's real measured size so a
+  // menu opened near the bottom/right edge flips fully into view instead of
+  // spilling off-screen (its height varies with which items are shown).
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null)
   const [groupSubOpen, setGroupSubOpen] = useState(false)
+  const groupRowRef = useRef<HTMLDivElement>(null)
+  const groupSubRef = useRef<HTMLDivElement>(null)
+  // Fixed position for the "Add to group" flyout. It must live outside the
+  // menu's scroll container (which clips overflow), so it's positioned in
+  // viewport coords from the anchor row and flipped/clamped to stay on-screen.
+  const [groupSubPos, setGroupSubPos] = useState<{ left: number; top: number } | null>(null)
   const [tagModalIds, setTagModalIds] = useState<number[] | null>(null)
   const [peopleModalIds, setPeopleModalIds] = useState<number[] | null>(null)
   const [pendingPersonIds, setPendingPersonIds] = useState<number[]>([])
@@ -80,8 +92,40 @@ export function useEntryContextMenu(entries: Entry[]) {
       setSelection(new Set([entry.id]), entry.id)
     }
     setGroupSubOpen(false)
+    setMenuPos(null)
     setMenu({ x: e.clientX, y: e.clientY, ids })
   }, [setSelection])
+
+  // After the menu mounts (or its contents change), measure its real box and
+  // clamp so the whole menu stays on-screen — including when opened near the
+  // bottom edge, where a fixed height guess used to let the tail fall off.
+  useLayoutEffect(() => {
+    if (!menu) return
+    const el = menuRef.current
+    if (!el) return
+    const { width, height } = el.getBoundingClientRect()
+    const margin = 8
+    const left = Math.max(margin, Math.min(menu.x, window.innerWidth - width - margin))
+    const top = Math.max(margin, Math.min(menu.y, window.innerHeight - height - margin))
+    setMenuPos({ left, top })
+  }, [menu])
+
+  // Position the group flyout next to its anchor row, flipping to the left side
+  // when it would overflow the right edge and clamping vertically.
+  useLayoutEffect(() => {
+    if (!groupSubOpen) { setGroupSubPos(null); return }
+    const row = groupRowRef.current
+    const sub = groupSubRef.current
+    if (!row || !sub) return
+    const anchor = row.getBoundingClientRect()
+    const { width, height } = sub.getBoundingClientRect()
+    const margin = 8
+    let left = anchor.right - 2
+    if (left + width + margin > window.innerWidth) left = anchor.left - width + 2
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin))
+    const top = Math.max(margin, Math.min(anchor.top - 4, window.innerHeight - height - margin))
+    setGroupSubPos({ left, top })
+  }, [groupSubOpen, groups])
 
   const closeMenu = useCallback(() => {
     setMenu(null)
@@ -170,15 +214,58 @@ export function useEntryContextMenu(entries: Entry[]) {
     bumpRefreshKey()
   }, [menu, closeMenu, bumpRefreshKey])
 
-  // Whether any targeted entry is currently in a group — gates the top-level
-  // "Remove from group" action so it's hidden when there's nothing to remove.
-  const menuHasGrouped = useMemo(() => {
-    if (!menu) return false
-    return menu.ids.some(id => {
-      const entry = entries.find(e => e.id === id)
-      return entry != null && entry.group_id != null
+  // Hierarchical remove: move the targeted entries up to their group's parent
+  // (out entirely only when they sit in a top-level group), so removing from a
+  // subgroup keeps them in the ancestor groups.
+  const removeFromGroup = useCallback(async () => {
+    if (!menu) return
+    await window.api.groups.removeEntries(menu.ids)
+    closeMenu()
+    bumpRefreshKey()
+  }, [menu, closeMenu, bumpRefreshKey])
+
+  // Create a new group from the submenu, then assign the targeted entries to it.
+  // Nests under the sidebar's highlighted group (selectedGroupId) when one is set.
+  const createAndAssignGroup = useCallback(async (name: string) => {
+    if (!menu) return
+    const ids = menu.ids
+    const created = await window.api.groups.create({
+      name, parent_id: selectedGroupId, color: pickGroupColor(name),
     })
-  }, [menu, entries])
+    setGroups(await window.api.groups.list())
+    await window.api.groups.assignEntries(created.id, ids)
+    closeMenu()
+    bumpRefreshKey()
+  }, [menu, selectedGroupId, setGroups, closeMenu, bumpRefreshKey])
+
+  // Name of the highlighted sidebar group, shown as the nesting hint in the submenu.
+  const parentGroupName = useMemo(
+    () => groups.find(g => g.id === selectedGroupId)?.name ?? null,
+    [groups, selectedGroupId]
+  )
+
+  // The "Remove from group" action: gated so it's hidden when nothing is
+  // grouped, and labeled with the destination. When every targeted entry shares
+  // one group we name it — "Remove from 'batch1'" — and note the parent it moves
+  // up into; a mixed selection falls back to the generic label.
+  const removeInfo = useMemo(() => {
+    if (!menu) return null
+    const byId = new Map(groups.map(g => [g.id, g]))
+    const groupIds = new Set<number>()
+    for (const id of menu.ids) {
+      const entry = entries.find(e => e.id === id)
+      if (entry?.group_id != null) groupIds.add(entry.group_id)
+    }
+    if (groupIds.size === 0) return null
+    if (groupIds.size > 1) return { label: 'Remove from group', hint: null }
+    const group = byId.get([...groupIds][0])
+    if (!group) return { label: 'Remove from group', hint: null }
+    const parent = group.parent_id != null ? byId.get(group.parent_id) : null
+    return {
+      label: `Remove from “${group.name}”`,
+      hint: parent ? `Moves up to ${parent.name}` : 'Leaves it ungrouped',
+    }
+  }, [menu, entries, groups])
 
   const deleteSelected = useCallback(async () => {
     if (!menu) return
@@ -203,10 +290,14 @@ export function useEntryContextMenu(entries: Entry[]) {
             onMouseDown={closeMenu}
             onContextMenu={e => { e.preventDefault(); closeMenu() }}
           />
-          <div style={{
+          <div ref={menuRef} style={{
             position: 'fixed', zIndex: 101,
-            left: Math.min(menu.x, window.innerWidth - 210),
-            top: Math.min(menu.y, window.innerHeight - 140),
+            // Before measurement, position at the click point but hidden to
+            // avoid a flash; the layout effect then clamps it fully on-screen.
+            left: menuPos ? menuPos.left : menu.x,
+            top: menuPos ? menuPos.top : menu.y,
+            visibility: menuPos ? 'visible' : 'hidden',
+            maxHeight: 'calc(100vh - 16px)', overflowY: 'auto',
             minWidth: 190,
             background: 'var(--bg-surface)', border: '1px solid var(--border)',
             borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
@@ -224,27 +315,37 @@ export function useEntryContextMenu(entries: Entry[]) {
             <MenuItem label="Add tags…" onClick={openTagModal} />
             <MenuItem label="Tag people…" onClick={openPeopleModal} />
             <div
-              style={{ position: 'relative' }}
+              ref={groupRowRef}
               onMouseEnter={() => setGroupSubOpen(true)}
               onMouseLeave={() => setGroupSubOpen(false)}
             >
               <MenuItem label="Add to group" trailing="›" onClick={() => setGroupSubOpen(o => !o)} />
               {groupSubOpen && (
-                <div style={{
-                  position: 'absolute', left: '100%', top: -4, zIndex: 102,
-                  minWidth: 200,
-                  background: 'var(--bg-surface)', border: '1px solid var(--border)',
-                  borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)', overflow: 'hidden',
-                }}>
+                <div
+                  ref={groupSubRef}
+                  onMouseEnter={() => setGroupSubOpen(true)}
+                  onMouseLeave={() => setGroupSubOpen(false)}
+                  style={{
+                    position: 'fixed', zIndex: 102,
+                    left: groupSubPos ? groupSubPos.left : 0,
+                    top: groupSubPos ? groupSubPos.top : 0,
+                    visibility: groupSubPos ? 'visible' : 'hidden',
+                    minWidth: 200, maxHeight: 'calc(100vh - 16px)', overflowY: 'auto',
+                    background: 'var(--bg-surface)', border: '1px solid var(--border)',
+                    borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                  }}
+                >
                   <GroupPickerList
                     groups={groups}
                     onPick={assignToGroup}
+                    onCreate={createAndAssignGroup}
+                    parentName={parentGroupName}
                   />
                 </div>
               )}
             </div>
-            {menuHasGrouped && (
-              <MenuItem label="Remove from group" onClick={() => assignToGroup(null)} />
+            {removeInfo && (
+              <MenuItem label={removeInfo.label} sublabel={removeInfo.hint ?? undefined} onClick={removeFromGroup} />
             )}
             <MenuItem label="Change date…" onClick={openDateModal} />
             <MenuItem label="Set location…" onClick={openLocationModal} />
@@ -494,12 +595,13 @@ export function useEntryContextMenu(entries: Entry[]) {
   return { onEntryContextMenu, contextMenuUI }
 }
 
-function MenuItem({ label, onClick, danger, trailing, swatch }: {
+function MenuItem({ label, onClick, danger, trailing, swatch, sublabel }: {
   label: string
   onClick: () => void
   danger?: boolean
   trailing?: string
   swatch?: string
+  sublabel?: string
 }) {
   return (
     <div
@@ -516,10 +618,28 @@ function MenuItem({ label, onClick, danger, trailing, swatch }: {
       {swatch && (
         <span style={{ width: 10, height: 10, borderRadius: 3, background: swatch, flexShrink: 0 }} />
       )}
-      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {label}
+        {sublabel && (
+          <span style={{ display: 'block', fontSize: 11, color: 'var(--text-4)', marginTop: 1 }}>{sublabel}</span>
+        )}
+      </span>
       {trailing && <span style={{ color: 'var(--text-4)' }}>{trailing}</span>}
     </div>
   )
+}
+
+// Deterministic group color from the name, mirroring the palette the main
+// process uses (createGroup's autoColor) so quick-created groups look native.
+const GROUP_COLORS = [
+  '#ef4444', '#f97316', '#f59e0b', '#84cc16',
+  '#22c55e', '#10b981', '#06b6d4', '#3b82f6',
+  '#8b5cf6', '#ec4899', '#6b7280', '#78716c',
+]
+function pickGroupColor(name: string): string {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0
+  return GROUP_COLORS[Math.abs(h) % GROUP_COLORS.length]
 }
 
 const modalBtn = (primary: boolean): React.CSSProperties => ({

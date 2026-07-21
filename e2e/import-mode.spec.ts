@@ -85,6 +85,6 @@ test.describe('Import mode', () => {
     await expect(page.getByText('Library location')).toBeVisible()
     await expect(page.getByText('Watched folders')).toBeVisible()
     await expect(page.getByText('Import mode')).not.toBeVisible()
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
   })
 })

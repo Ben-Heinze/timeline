@@ -322,6 +322,22 @@ export interface ImportPreview {
   byType: Record<EntryType, number>
 }
 
+export interface PhoneStartResult {
+  port: number
+  token: string
+  lanIps: string[]
+}
+
+export interface PhoneUploadProgressEvent {
+  file: string
+  receivedBytes: number
+}
+
+export interface PhoneUploadDoneEvent {
+  received: number
+  imported: number
+}
+
 export interface SyncProgressEvent {
   phase: 'checking' | 'scanning' | 'ingesting' | 'done'
   checked: number

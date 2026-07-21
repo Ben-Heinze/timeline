@@ -112,6 +112,14 @@ export default function MapView() {
       add(L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        // Don't fetch a whole new tile grid for every intermediate zoom level a
+        // fast scroll passes through — wait for the gesture to settle. Combined
+        // with a bigger keepBuffer this avoids the request bursts that make the
+        // public OSM server throttle us (the multi-second stalls). Cross-origin
+        // lets tiles be reused from the browser cache without re-decoding.
+        updateWhenZooming: false,
+        keepBuffer: 4,
+        crossOrigin: true,
       }))
       map.setMaxZoom(19)
     } else if (mode === 'hires' && hiresData) {
@@ -210,7 +218,20 @@ export default function MapView() {
     }
     if (located.length === 0) return
 
-    const points = located.map(e => [e.latitude!, e.longitude!, 1] as [number, number, number])
+    // leaflet.heat re-projects every point on each pan/zoom. Photos cluster
+    // heavily at the same spots (a trip, a home), so collapse points that share
+    // a ~100m cell into one weighted point: the density render is identical
+    // (simpleheat already sums overlapping points), but the per-redraw cost
+    // scales with distinct locations, not photo count.
+    const buckets = new Map<string, [number, number, number]>()
+    for (const e of located) {
+      const lat = e.latitude!, lng = e.longitude!
+      const key = `${Math.round(lat * 1000)},${Math.round(lng * 1000)}`
+      const b = buckets.get(key)
+      if (b) b[2] += 1
+      else buckets.set(key, [lat, lng, 1])
+    }
+    const points = [...buckets.values()]
     heatRef.current = L.heatLayer(points, {
       radius: 22,
       blur: 16,

@@ -117,18 +117,16 @@ export default function FilesView() {
   const [scrollTop, setScrollTop] = useState(0)
   const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => setScrollTop(e.currentTarget.scrollTop), [])
 
-  // Filter/sort identity changed: everything already loaded is invalid.
-  useEffect(() => {
+  // Reload the row skeleton (counts + month buckets) for the current filter/sort
+  // and invalidate every loaded page so visible rows refetch. Intentionally
+  // leaves scrollTop and collapsed months untouched — callers decide whether the
+  // change warrants jumping back to the top.
+  const reload = useCallback(() => {
     epochRef.current++
     const epoch = epochRef.current
     pageCacheRef.current = new Map()
     idToIndexRef.current = new Map()
     inFlightRef.current = new Set()
-    setTotal(0)
-    setMonthBuckets([])
-    setCollapsedBuckets(new Set())
-    setScrollTop(0)
-    if (scrollRef.current) scrollRef.current.scrollTop = 0
     bumpCacheVersion()
 
     const groupId = selectedGroupId ?? undefined
@@ -139,10 +137,33 @@ export default function FilesView() {
       window.api.entries.monthBuckets({ groupId, sortDir }).then(buckets => {
         if (epochRef.current === epoch) setMonthBuckets(buckets)
       })
+    } else {
+      setMonthBuckets([])
     }
-    // scrollRef is a stable ref object; not a dependency
+  }, [selectedGroupId, sortBy, sortDir])
+
+  // Filter/sort identity changed: everything already loaded is invalid, and the
+  // old scroll position/collapsed months are meaningless — reset to the top.
+  useEffect(() => {
+    setTotal(0)
+    setMonthBuckets([])
+    setCollapsedBuckets(new Set())
+    setScrollTop(0)
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+    reload()
+    // scrollRef is a stable ref object; reload is recreated with these same deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedGroupId, sortBy, sortDir, refreshKey])
+  }, [selectedGroupId, sortBy, sortDir])
+
+  // An action was applied (tag/person edit, delete, group change, ingest) and
+  // bumped refreshKey: refresh the data in place while keeping the user where
+  // they were. Skips the initial mount, already covered by the effect above.
+  const refreshMountedRef = useRef(false)
+  useEffect(() => {
+    if (!refreshMountedRef.current) { refreshMountedRef.current = true; return }
+    reload()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey])
 
   const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(
     useMemo(() => {
@@ -193,7 +214,11 @@ export default function FilesView() {
   const onActivate = useCallback((entry: Entry) => setActiveEntryId(entry.id), [setActiveEntryId])
 
   const handleAssign = useCallback(async (groupId: number | null) => {
-    await window.api.groups.assignEntries(groupId, [...selectedIds])
+    const ids = [...selectedIds]
+    // null is the dropdown's "Remove from group" signal: move entries up to
+    // their group's parent rather than ungrouping them outright.
+    if (groupId === null) await window.api.groups.removeEntries(ids)
+    else await window.api.groups.assignEntries(groupId, ids)
     setSelection(new Set(), null)
     bumpRefreshKey()
   }, [selectedIds, setSelection, bumpRefreshKey])
@@ -275,7 +300,11 @@ export default function FilesView() {
         bumpCacheVersion()
       })
     }
-  }, [total, minVisibleIndex, maxVisibleIndex, selectedGroupId, sortBy, sortDir])
+    // cacheVersion is a dependency so an in-place reload() (edit/tag/date/delete
+    // that invalidates the cache without changing total/scroll) forces the visible
+    // pages to refetch. The loop skips already-cached/in-flight pages, so the
+    // per-page bump on load can't spin — it just fills any still-missing pages.
+  }, [total, minVisibleIndex, maxVisibleIndex, selectedGroupId, sortBy, sortDir, cacheVersion])
 
   const renderEntry = (entry: Entry) => {
     const selected = selectedIds.has(entry.id)

@@ -11,6 +11,7 @@ import { registerProfileHandlers } from './profiles'
 import { registerFileHandlers } from './files'
 import { registerSpotifyHandlers } from './spotify'
 import { registerVolumeHandlers } from './volumes'
+import { registerPhoneHandlers } from './phone'
 
 export function registerAllHandlers(): void {
   registerBackupHandlers()
@@ -26,4 +27,5 @@ export function registerAllHandlers(): void {
   registerProfileHandlers()
   registerSpotifyHandlers()
   registerVolumeHandlers()
+  registerPhoneHandlers()
 }

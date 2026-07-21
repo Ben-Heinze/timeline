@@ -8,7 +8,7 @@ test.describe('Search and filter', () => {
     // Reload to apply seeded entries to the UI
     await page.evaluate(() => window.location.reload())
     await page.waitForSelector('button:has-text("+ Journal")', { timeout: 20_000 })
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
   })
 
   test('search box is visible in header', async ({ appPage: page }) => {

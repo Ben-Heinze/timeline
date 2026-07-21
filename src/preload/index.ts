@@ -9,6 +9,7 @@ import type {
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
   SetDateParams, SetLocationParams, SetLocationResult, GeocodeResult, RescanProgressEvent, RescanResult, ImportPreview, PageParams, MonthBucket, Entry,
   RenameEntryResult, Person, PersonListItem, NewPerson,
+  PhoneStartResult, PhoneUploadProgressEvent, PhoneUploadDoneEvent,
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -116,6 +117,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('groups:delete', id),
     assignEntries: (groupId: number | null, entryIds: number[]) =>
       ipcRenderer.invoke('groups:assignEntries', groupId, entryIds),
+    removeEntries: (entryIds: number[]) =>
+      ipcRenderer.invoke('groups:removeEntries', entryIds),
     assignEntriesForPeriod: (groupId: number, from: number, to: number): Promise<number> =>
       ipcRenderer.invoke('groups:assignEntriesForPeriod', groupId, from, to),
   },
@@ -269,5 +272,21 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('volumes:matchPath', path),
     setLabel: (id: number, label: string): Promise<void> =>
       ipcRenderer.invoke('volumes:setLabel', id, label),
+  },
+  phone: {
+    start: (): Promise<PhoneStartResult> =>
+      ipcRenderer.invoke('phone:start'),
+    stop: (): Promise<void> =>
+      ipcRenderer.invoke('phone:stop'),
+    onUploadProgress: (cb: (event: PhoneUploadProgressEvent) => void) => {
+      const handler = (_: unknown, data: PhoneUploadProgressEvent) => cb(data)
+      ipcRenderer.on('phone:upload-progress', handler)
+      return () => ipcRenderer.removeListener('phone:upload-progress', handler)
+    },
+    onUploadDone: (cb: (event: PhoneUploadDoneEvent) => void) => {
+      const handler = (_: unknown, data: PhoneUploadDoneEvent) => cb(data)
+      ipcRenderer.on('phone:upload-done', handler)
+      return () => ipcRenderer.removeListener('phone:upload-done', handler)
+    },
   },
 })

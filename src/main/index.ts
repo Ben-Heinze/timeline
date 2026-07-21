@@ -6,6 +6,7 @@ import { closeDb } from './db'
 import { registerAllHandlers } from './ipc'
 import { startMediaServer } from './media'
 import { startWatcher, stopWatcher } from './sync'
+import { stopPhoneServer } from './phone/server'
 import { refreshVolumes, backfillWatchedFolderVolumes } from './volumes'
 import { endExifTool } from './exif'
 
@@ -75,9 +76,13 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   stopWatcher()
+  void stopPhoneServer()
   closeDb()
   if (process.platform !== 'darwin') app.quit()
 })
 
 // Shut the persistent ExifTool child process down cleanly on quit.
-app.on('will-quit', () => { void endExifTool() })
+app.on('will-quit', () => {
+  void endExifTool()
+  void stopPhoneServer()
+})

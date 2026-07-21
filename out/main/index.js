@@ -15,6 +15,8 @@ const sharp = require("sharp");
 const exifr = require("exifr");
 const exiftoolVendored = require("exiftool-vendored");
 const http = require("http");
+const os = require("os");
+const busboy = require("busboy");
 const profilesFile = () => path.join(electron.app.getPath("userData"), "profiles.json");
 const legacySettingsFile = () => path.join(electron.app.getPath("userData"), "settings.json");
 const defaultLibraryDir = () => path.join(electron.app.getPath("userData"), "library");
@@ -483,6 +485,15 @@ function assignEntriesToGroup(groupId, entryIds) {
     for (const id of ids) stmt.run(groupId, id);
   })(entryIds);
 }
+function removeEntriesFromGroup(entryIds) {
+  if (entryIds.length === 0) return;
+  const placeholders = entryIds.map(() => "?").join(", ");
+  getDb().prepare(`
+    UPDATE entries
+    SET group_id = (SELECT parent_id FROM groups WHERE groups.id = entries.group_id)
+    WHERE id IN (${placeholders}) AND group_id IS NOT NULL
+  `).run(...entryIds);
+}
 function assignEntriesForPeriod(groupId, from, to) {
   const result = getDb().prepare(`UPDATE entries SET group_id = ? WHERE timestamp >= ? AND timestamp < ?`).run(groupId, from, to);
   return result.changes;
@@ -552,7 +563,9 @@ function deleteEntries(ids) {
 function listAllEntries(opts) {
   const dir = opts.sortDir === "asc" ? "ASC" : "DESC";
   const where = opts.groupId != null ? `WHERE e.${groupFilterSql(opts.groupId)}` : "";
-  const params = { limit: opts.limit, offset: opts.offset };
+  const paginated = Number.isFinite(opts.limit) && Number.isFinite(opts.offset);
+  const pageSql = paginated ? "LIMIT @limit OFFSET @offset" : "";
+  const params = paginated ? { limit: opts.limit, offset: opts.offset } : {};
   if (opts.sortBy === "tag") {
     return getDb().prepare(`
       SELECT e.*
@@ -565,7 +578,7 @@ function listAllEntries(opts) {
         CASE WHEN MIN(t.name) IS NULL THEN 1 ELSE 0 END ASC,
         MIN(t.name) ${dir},
         e.timestamp DESC
-      LIMIT @limit OFFSET @offset
+      ${pageSql}
     `).all(params);
   }
   const col = opts.sortBy === "date" ? "timestamp" : opts.sortBy === "title" ? "title" : "type";
@@ -575,7 +588,7 @@ function listAllEntries(opts) {
     SELECT * FROM entries
     ${simpleWhere}
     ORDER BY ${col} ${dir}${tie}
-    LIMIT @limit OFFSET @offset
+    ${pageSql}
   `).all(params);
 }
 function countAllEntries(opts) {
@@ -1829,7 +1842,7 @@ async function importBackup(zipPath, destDir, onProgress) {
     missingFiles: missingIds.length
   };
 }
-function progressSender(sender) {
+function progressSender$1(sender) {
   return (e) => {
     if (!sender.isDestroyed()) sender.send("backup:progress", e);
   };
@@ -1844,7 +1857,7 @@ function registerBackupHandlers() {
       filters: [{ name: "Zip archive", extensions: ["zip"] }]
     });
     if (result.canceled || !result.filePath) return { canceled: true };
-    const summary = await exportBackup(result.filePath, type, progressSender(event.sender));
+    const summary = await exportBackup(result.filePath, type, progressSender$1(event.sender));
     return { canceled: false, path: result.filePath, ...summary };
   });
   electron.ipcMain.handle("backup:pickArchive", async (event) => {
@@ -1857,7 +1870,7 @@ function registerBackupHandlers() {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
   electron.ipcMain.handle("backup:import", async (event, zipPath, destDir) => {
-    return importBackup(zipPath, destDir, progressSender(event.sender));
+    return importBackup(zipPath, destDir, progressSender$1(event.sender));
   });
 }
 function sanitizeFileName(name) {
@@ -2071,6 +2084,7 @@ function registerGroupHandlers() {
   electron.ipcMain.handle("groups:update", (_, id, patch) => updateGroup(id, patch));
   electron.ipcMain.handle("groups:delete", (_, id) => deleteGroup(id));
   electron.ipcMain.handle("groups:assignEntries", (_, groupId, entryIds) => assignEntriesToGroup(groupId, entryIds));
+  electron.ipcMain.handle("groups:removeEntries", (_, entryIds) => removeEntriesFromGroup(entryIds));
   electron.ipcMain.handle("groups:assignEntriesForPeriod", (_, groupId, from, to) => assignEntriesForPeriod(groupId, from, to));
 }
 function listTags() {
@@ -2178,12 +2192,12 @@ function registerIngestHandlers() {
   });
   electron.ipcMain.handle("ingest:start", async (event, filePaths, tagNames = []) => {
     const sender = event.sender;
-    const send = (channel, data) => {
+    const send2 = (channel, data) => {
       if (!sender.isDestroyed()) sender.send(channel, data);
     };
     try {
       const { insertedIds, failures, total } = await ingestFiles(filePaths, "copy", null, (progress) => {
-        send("ingest:progress", progress);
+        send2("ingest:progress", progress);
       });
       if (tagNames.length > 0 && insertedIds.length > 0) {
         bulkSetEntryTags(insertedIds, tagNames);
@@ -2191,12 +2205,12 @@ function registerIngestHandlers() {
       if (total === 0) return;
       const logPath = failures.length > 0 ? await writeImportErrorLog(failures) : null;
       const done = { total, imported: total - failures.length, failures, logPath };
-      send("ingest:done", done);
+      send2("ingest:done", done);
     } catch (e) {
       const failures = [{ file: filePaths.join(", "), error: e.message ?? String(e) }];
       const logPath = await writeImportErrorLog(failures);
       const done = { total: filePaths.length, imported: 0, failures, logPath };
-      send("ingest:done", done);
+      send2("ingest:done", done);
     }
   });
   electron.ipcMain.handle("sync:run", async (event) => {
@@ -2842,7 +2856,7 @@ function getMediaUrl(entryId) {
   if (!serverPort || !resolveEntryFilePath(entryId)) return null;
   return `http://127.0.0.1:${serverPort}/media/${entryId}?token=${serverToken}`;
 }
-function handleRequest(req, res) {
+function handleRequest$1(req, res) {
   const url2 = new URL(req.url ?? "/", "http://127.0.0.1");
   const match = url2.pathname.match(/^\/media\/(\d+)$/);
   if (req.method !== "GET" || !match || url2.searchParams.get("token") !== serverToken) {
@@ -2881,11 +2895,11 @@ function handleRequest(req, res) {
   res.on("close", () => stream.destroy());
 }
 function startMediaServer() {
-  const server = http.createServer(handleRequest);
-  server.unref();
+  const server2 = http.createServer(handleRequest$1);
+  server2.unref();
   return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      serverPort = server.address().port;
+    server2.listen(0, "127.0.0.1", () => {
+      serverPort = server2.address().port;
       resolve();
     });
   });
@@ -3283,6 +3297,372 @@ function registerVolumeHandlers() {
     updateVolumeLabel(id, label);
   });
 }
+function renderUploadPage(token2) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Send to Timeline</title>
+<style>
+  :root { --accent: #4f46e5; --ok: #16a34a; --err: #dc2626; --bg: #f4f4f6; --card: #fff; --text: #18181b; --sub: #71717a; --line: #e4e4e7; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0c0c0f; --card: #17171b; --text: #f4f4f5; --sub: #a1a1aa; --line: #2a2a30; } }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; font: 16px/1.4 -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text);
+         padding: max(20px, env(safe-area-inset-top)) 20px calc(40px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--sub); font-size: 14px; margin: 0 0 24px; }
+  label.pick { display: block; text-align: center; background: var(--accent); color: #fff; font-weight: 600;
+               padding: 18px; border-radius: 14px; cursor: pointer; font-size: 17px; }
+  label.pick:active { opacity: .85; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  ul { list-style: none; padding: 0; margin: 20px 0 0; display: flex; flex-direction: column; gap: 10px; }
+  li { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+  .status { font-size: 13px; font-weight: 600; flex-shrink: 0; }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--err); }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  .retry { border: 1px solid var(--line); background: transparent; color: var(--accent); font-weight: 600;
+           border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+  .done-msg { margin-top: 20px; text-align: center; color: var(--ok); font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Send to Timeline</h1>
+<p class="sub">Pick photos and videos to add to your library on this Wi-Fi.</p>
+<label class="pick" for="picker">Choose photos &amp; videos</label>
+<input id="picker" type="file" multiple accept="image/*,video/*">
+<ul id="list"></ul>
+<div id="doneMsg" class="done-msg" hidden>All uploaded — pick more or close this tab.</div>
+<script>
+(function () {
+  var TOKEN = ${JSON.stringify(token2)};
+  var CONCURRENCY = 2;
+  var list = document.getElementById('list');
+  var doneMsg = document.getElementById('doneMsg');
+  var picker = document.getElementById('picker');
+  var queue = [];
+  var active = 0;
+
+  picker.addEventListener('change', function () {
+    doneMsg.hidden = true;
+    var files = Array.prototype.slice.call(picker.files || []);
+    files.forEach(add);
+    picker.value = '';
+    pump();
+  });
+
+  function add(file) {
+    var li = document.createElement('li');
+    var row = document.createElement('div'); row.className = 'row';
+    var name = document.createElement('span'); name.className = 'name'; name.textContent = file.name;
+    var status = document.createElement('span'); status.className = 'status'; status.textContent = 'Waiting';
+    row.appendChild(name); row.appendChild(status);
+    var bar = document.createElement('div'); bar.className = 'bar';
+    var fill = document.createElement('div'); bar.appendChild(fill);
+    li.appendChild(row); li.appendChild(bar);
+    list.appendChild(li);
+    queue.push({ file: file, status: status, fill: fill, li: li, row: row });
+  }
+
+  function pump() {
+    while (active < CONCURRENCY && queue.length) {
+      active++;
+      upload(queue.shift());
+    }
+    if (active === 0 && queue.length === 0 && list.children.length && !hasError()) {
+      doneMsg.hidden = false;
+    }
+  }
+
+  function hasError() {
+    return !!list.querySelector('.status.err');
+  }
+
+  function upload(item) {
+    item.status.className = 'status';
+    item.status.textContent = 'Uploading';
+    var fd = new FormData();
+    fd.append('file', item.file, item.file.name);
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/upload?token=' + encodeURIComponent(TOKEN));
+    xhr.upload.onprogress = function (e) {
+      if (e.lengthComputable) item.fill.style.width = Math.round((e.loaded / e.total) * 100) + '%';
+    };
+    xhr.onload = function () {
+      active--;
+      if (xhr.status === 200) {
+        item.fill.style.width = '100%';
+        item.status.className = 'status ok';
+        item.status.textContent = 'Sent';
+      } else {
+        fail(item);
+      }
+      pump();
+    };
+    xhr.onerror = function () { active--; fail(item); pump(); };
+    xhr.send(fd);
+  }
+
+  function fail(item) {
+    item.status.className = 'status err';
+    item.status.textContent = 'Failed';
+    if (!item.row.querySelector('.retry')) {
+      var btn = document.createElement('button');
+      btn.className = 'retry'; btn.textContent = 'Retry';
+      btn.onclick = function () {
+        item.row.removeChild(btn);
+        item.fill.style.width = '0';
+        queue.push(item);
+        pump();
+      };
+      item.row.appendChild(btn);
+    }
+  }
+})();
+<\/script>
+</body>
+</html>`;
+}
+const MAX_FILE_BYTES = 10 * 1024 * 1024 * 1024;
+const MAX_FILES = 1e3;
+const PROGRESS_STEP = 512 * 1024;
+const BASE_PORT = Number(process.env.TIMELINE_PHONE_PORT) || 47820;
+const PORT_ATTEMPTS = 10;
+let server = null;
+let port = 0;
+let token = "";
+let stagingDir = "";
+let progressSender = null;
+let ingestChain = Promise.resolve();
+function send(channel, data) {
+  if (progressSender && !progressSender.isDestroyed()) progressSender.send(channel, data);
+}
+function getLanIps() {
+  const candidates = [];
+  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
+    if (!addrs) continue;
+    for (const a of addrs) {
+      const isV4 = a.family === "IPv4" || a.family === 4;
+      if (!isV4 || a.internal || a.address.startsWith("169.254.")) continue;
+      let score = 0;
+      if (a.address.startsWith("192.168.")) score += 100;
+      else if (a.address.startsWith("10.")) score += 80;
+      else if (/^172\.(1[6-9]|2\d|3[01])\./.test(a.address)) score += 60;
+      else score += 20;
+      if (/^(veth|docker|br-|vmnet|vboxnet|utun|tun|tap|wg|zt|hyper-v|vEthernet)/i.test(name)) score -= 50;
+      candidates.push({ ip: a.address, score });
+    }
+  }
+  candidates.sort((x, y) => y.score - x.score);
+  return candidates.map((c) => c.ip);
+}
+function sanitizeFilename(name) {
+  const base = path.basename(name ?? "").replace(/[/\\]/g, "_").trim();
+  if (!base || base === "." || base === "..") return `upload-${crypto.randomBytes(4).toString("hex")}`;
+  return base;
+}
+function uniqueName(used, name) {
+  if (!used.has(name)) {
+    used.add(name);
+    return name;
+  }
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  let i = 2;
+  let candidate = `${stem} (${i})${ext}`;
+  while (used.has(candidate)) {
+    i++;
+    candidate = `${stem} (${i})${ext}`;
+  }
+  used.add(candidate);
+  return candidate;
+}
+function sendMessage(res, code, message) {
+  res.writeHead(code, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><body style="font:16px/1.5 system-ui,sans-serif;padding:40px;text-align:center">${message}</body>`);
+}
+function handleRequest(req, res) {
+  const url2 = new URL(req.url ?? "/", "http://localhost");
+  if (!token || url2.searchParams.get("token") !== token) {
+    sendMessage(res, 403, "This link has expired. On your computer, reopen “Import from phone” and scan the new QR code.");
+    return;
+  }
+  if (req.method === "GET" && (url2.pathname === "/" || url2.pathname === "/index.html")) {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(renderUploadPage(token));
+    return;
+  }
+  if (req.method === "POST" && url2.pathname === "/upload") {
+    handleUpload(req, res).catch(() => {
+      if (!res.headersSent) res.writeHead(500).end();
+    });
+    return;
+  }
+  sendMessage(res, 404, "Not found.");
+}
+async function handleUpload(req, res) {
+  const reqDir = path.join(stagingDir, crypto.randomBytes(4).toString("hex"));
+  await fs$1.mkdir(reqDir, { recursive: true });
+  const bb = busboy({ headers: req.headers, limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES } });
+  const used = /* @__PURE__ */ new Set();
+  const completed = [];
+  const writes = [];
+  bb.on("file", (_field, stream, info) => {
+    const safeName = uniqueName(used, sanitizeFilename(info.filename));
+    const dest = path.join(reqDir, safeName);
+    writes.push(new Promise((resolve) => {
+      const ws = fs.createWriteStream(dest);
+      let tooBig = false;
+      let received = 0;
+      let lastSent = 0;
+      stream.on("limit", () => {
+        tooBig = true;
+      });
+      stream.on("data", (chunk) => {
+        received += chunk.length;
+        if (received - lastSent >= PROGRESS_STEP) {
+          lastSent = received;
+          send("phone:upload-progress", { file: safeName, receivedBytes: received });
+        }
+      });
+      stream.pipe(ws);
+      ws.on("finish", () => {
+        if (tooBig) {
+          void fs$1.rm(dest, { force: true }).catch(() => {
+          });
+          resolve();
+          return;
+        }
+        completed.push(dest);
+        resolve();
+      });
+      ws.on("error", () => {
+        void fs$1.rm(dest, { force: true }).catch(() => {
+        });
+        resolve();
+      });
+    }));
+  });
+  bb.on("close", async () => {
+    await Promise.all(writes);
+    if (!res.headersSent) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, received: completed.length }));
+    }
+    enqueueIngest(completed, reqDir);
+  });
+  bb.on("error", () => {
+    if (!res.headersSent) res.writeHead(500).end();
+  });
+  req.pipe(bb);
+}
+function enqueueIngest(files, reqDir) {
+  ingestChain = ingestChain.then(() => runIngest(files, reqDir));
+}
+async function runIngest(files, reqDir) {
+  if (files.length === 0) {
+    await fs$1.rm(reqDir, { recursive: true, force: true }).catch(() => {
+    });
+    return;
+  }
+  try {
+    const { failures, total } = await ingestFiles(files, "copy", null, (p) => send("ingest:progress", p));
+    const logPath = failures.length > 0 ? await writeImportErrorLog(failures) : null;
+    const imported = total - failures.length;
+    const done = { total, imported, failures, logPath };
+    send("ingest:done", done);
+    send("phone:upload-done", { received: files.length, imported });
+  } catch (e) {
+    const failures = [{ file: files.join(", "), error: e.message ?? String(e) }];
+    const logPath = await writeImportErrorLog(failures);
+    send("ingest:done", { total: files.length, imported: 0, failures, logPath });
+    send("phone:upload-done", { received: files.length, imported: 0 });
+  } finally {
+    await fs$1.rm(reqDir, { recursive: true, force: true }).catch(() => {
+    });
+  }
+}
+let lifecycleChain = Promise.resolve();
+function enqueue(op) {
+  const run = lifecycleChain.then(op, op);
+  lifecycleChain = run.then(() => {
+  }, () => {
+  });
+  return run;
+}
+async function listenOnStablePort(srv) {
+  for (let p = BASE_PORT; p < BASE_PORT + PORT_ATTEMPTS; p++) {
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (e) => {
+          srv.removeListener("listening", onOk);
+          reject(e);
+        };
+        const onOk = () => {
+          srv.removeListener("error", onError);
+          resolve();
+        };
+        srv.once("error", onError);
+        srv.once("listening", onOk);
+        srv.listen(p, "0.0.0.0");
+      });
+      return p;
+    } catch (e) {
+      if (e.code !== "EADDRINUSE") throw e;
+    }
+  }
+  await new Promise((resolve, reject) => {
+    srv.once("error", reject);
+    srv.listen(0, "0.0.0.0", () => resolve());
+  });
+  return srv.address().port;
+}
+async function doStart(sender) {
+  await doStop();
+  token = crypto.randomBytes(16).toString("hex");
+  stagingDir = path.join(electron.app.getPath("temp"), "timeline-phone-upload", crypto.randomBytes(6).toString("hex"));
+  await fs$1.mkdir(stagingDir, { recursive: true });
+  progressSender = sender;
+  const srv = http.createServer(handleRequest);
+  srv.unref();
+  port = await listenOnStablePort(srv);
+  server = srv;
+  return { port, token, lanIps: getLanIps() };
+}
+async function doStop() {
+  if (server) {
+    const srv = server;
+    server = null;
+    await new Promise((resolve) => {
+      srv.close(() => resolve());
+      srv.closeAllConnections?.();
+    });
+  }
+  port = 0;
+  token = "";
+  progressSender = null;
+  if (stagingDir) {
+    const dir = stagingDir;
+    stagingDir = "";
+    await fs$1.rm(dir, { recursive: true, force: true }).catch(() => {
+    });
+  }
+}
+function startPhoneServer(sender) {
+  return enqueue(() => doStart(sender));
+}
+function stopPhoneServer() {
+  return enqueue(() => doStop());
+}
+function registerPhoneHandlers() {
+  electron.ipcMain.handle("phone:start", (event) => startPhoneServer(event.sender));
+  electron.ipcMain.handle("phone:stop", () => stopPhoneServer());
+}
 function registerAllHandlers() {
   registerBackupHandlers();
   registerEntryHandlers();
@@ -3297,6 +3677,7 @@ function registerAllHandlers() {
   registerProfileHandlers();
   registerSpotifyHandlers();
   registerVolumeHandlers();
+  registerPhoneHandlers();
 }
 electron.protocol.registerSchemesAsPrivileged([
   { scheme: "timeline", privileges: { secure: true, supportFetchAPI: true, bypassCSP: true } }
@@ -3345,9 +3726,11 @@ electron.app.whenReady().then(async () => {
 });
 electron.app.on("window-all-closed", () => {
   stopWatcher();
+  void stopPhoneServer();
   closeDb();
   if (process.platform !== "darwin") electron.app.quit();
 });
 electron.app.on("will-quit", () => {
   void endExifTool();
+  void stopPhoneServer();
 });

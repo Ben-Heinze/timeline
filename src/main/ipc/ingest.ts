@@ -6,7 +6,7 @@ import { runSync, scanDuplicates, isCurrentlySyncing } from '../sync'
 import { bulkSetEntryTags } from '../db/queries/tags'
 import type { IngestProgressEvent, IngestDoneEvent, IngestFailure, ImportPreview, EntryType } from '../../shared/types'
 
-async function writeImportErrorLog(failures: IngestFailure[]): Promise<string | null> {
+export async function writeImportErrorLog(failures: IngestFailure[]): Promise<string | null> {
   try {
     const logPath = path.join(app.getPath('userData'), 'import-errors.log')
     const lines = [

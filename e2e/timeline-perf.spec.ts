@@ -30,7 +30,7 @@ test.describe('Timeline histogram performance', () => {
   })
 
   test('panning the timeline does not fire one query per mouse-move', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Year' }).click()
+    await page.getByRole('button', { name: 'Year', exact: true }).click()
     await waitForCanvasSettle(page) // let the initial debounced fetch resolve first
 
     await installDebounceSpy(page)
@@ -61,11 +61,11 @@ test.describe('Timeline histogram performance', () => {
 
   test('clicking Year stays under budget with a large multi-year dataset', async ({ appPage: page }) => {
     // Start from Month so the Year click does real work re-fitting to the full extent.
-    await page.getByRole('button', { name: 'Month' }).click()
+    await page.getByRole('button', { name: 'Month', exact: true }).click()
     await waitForCanvasSettle(page)
 
     const t0 = Date.now()
-    await page.getByRole('button', { name: 'Year' }).click()
+    await page.getByRole('button', { name: 'Year', exact: true }).click()
     await waitForCanvasSettle(page)
     const ms = Date.now() - t0
 

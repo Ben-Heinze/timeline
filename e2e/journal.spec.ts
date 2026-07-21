@@ -4,7 +4,7 @@ test.describe('Journal entry creation and editing', () => {
   test.beforeAll(async ({ appPage: page }) => {
     await page.evaluate(() => window.location.reload())
     await page.waitForSelector('button:has-text("+ Journal")', { timeout: 20_000 })
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
   })
 
   test('clicking + Journal opens the modal', async ({ appPage: page }) => {
@@ -40,18 +40,18 @@ test.describe('Journal entry creation and editing', () => {
   })
 
   test('timeline shows histogram bar after entry creation', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
     await expect(page.locator('canvas')).toBeVisible()
     await expect(page.getByText('No entries yet')).not.toBeVisible()
   })
 
   test('files view shows the journal entry', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Files' }).click()
+    await page.getByRole('button', { name: 'Files', exact: true }).click()
     await expect(page.getByText('My First Journal Entry')).toBeVisible()
   })
 
   test('saves a second journal entry', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
     await page.getByRole('button', { name: '+ Journal' }).click()
     await page.getByPlaceholder('Title (optional)').fill('Second Journal Entry')
     await page.locator('input[type="datetime-local"]').fill('2022-03-10T14:30')
@@ -62,10 +62,10 @@ test.describe('Journal entry creation and editing', () => {
   })
 
   test('editing a journal entry updates its title', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Files' }).click()
+    await page.getByRole('button', { name: 'Files', exact: true }).click()
     await page.getByText('My First Journal Entry').dblclick()
     // Double-click opens EntryModal (not JournalModal) — click its Edit button to enter edit mode
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await expect(page.getByText('Edit Entry')).toBeVisible()
     const titleInput = page.getByPlaceholder('Title (optional)')
     await titleInput.clear()
@@ -77,7 +77,7 @@ test.describe('Journal entry creation and editing', () => {
   })
 
   test('Cancel button closes the modal without saving', async ({ appPage: page }) => {
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
     await page.getByRole('button', { name: '+ Journal' }).click()
     await page.getByPlaceholder('Title (optional)').fill('Should Not Be Saved')
     await page.getByRole('button', { name: 'Cancel' }).click()

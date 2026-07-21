@@ -16,6 +16,7 @@ import SearchBar from './components/SearchBar'
 import ProfileSwitcher from './components/ProfileSwitcher'
 import SettingsView from './components/SettingsView'
 import ImportTagModal from './components/ImportTagModal'
+import ImportFromPhoneModal from './components/ImportFromPhoneModal'
 import DateRangeGroupModal from './components/DateRangeGroupModal'
 import EventsPanel from './components/EventsPanel'
 import SpotifyPanel from './components/SpotifyPanel'
@@ -258,6 +259,7 @@ function Main() {
   const isSyncing = syncProgress !== null && syncProgress.phase !== 'done'
   const isImporting = ingestProgress !== null && !ingestProgress.done
   const [importPending, setImportPending] = useState<{ paths: string[]; preview: ImportPreview } | null>(null)
+  const [phoneModalOpen, setPhoneModalOpen] = useState(false)
   const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const dragCounterRef = React.useRef(0)
   const importBusy = isImporting || isSyncing
@@ -427,6 +429,17 @@ function Main() {
               }}
             >{isSyncing ? 'Syncing…' : 'Sync'}</button>
             <button
+              onClick={() => setPhoneModalOpen(true)}
+              disabled={importBusy}
+              style={{
+                padding: '6px 14px',
+                background: 'var(--bg-subtle)',
+                border: 'none', borderRadius: 4,
+                color: importBusy ? 'var(--text-3)' : 'var(--text-2)', fontSize: 13, fontWeight: 600,
+                cursor: importBusy ? 'not-allowed' : 'pointer',
+              }}
+            >Import from phone</button>
+            <button
               onClick={() => handleImport('folder')}
               disabled={importBusy}
               style={{
@@ -493,6 +506,9 @@ function Main() {
           onConfirm={confirmImport}
           onCancel={() => setImportPending(null)}
         />
+      )}
+      {phoneModalOpen && (
+        <ImportFromPhoneModal onClose={() => setPhoneModalOpen(false)} />
       )}
     </main>
   )

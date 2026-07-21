@@ -10,6 +10,7 @@ import type {
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
   SetDateParams, SetDateResult, SetLocationParams, SetLocationResult, GeocodeResult, RescanProgressEvent, RescanResult, ImportPreview,
   PageParams, MonthBucket, RenameEntryResult, Person, PersonListItem, NewPerson,
+  PhoneStartResult, PhoneUploadProgressEvent, PhoneUploadDoneEvent,
 } from '../shared/types'
 
 interface Api {
@@ -62,6 +63,7 @@ interface Api {
     update: (id: number, patch: Partial<Omit<Group, 'id'>>) => Promise<Group>
     delete: (id: number) => Promise<void>
     assignEntries: (groupId: number | null, entryIds: number[]) => Promise<void>
+    removeEntries: (entryIds: number[]) => Promise<void>
     assignEntriesForPeriod: (groupId: number, from: number, to: number) => Promise<number>
   }
   events: {
@@ -144,6 +146,12 @@ interface Api {
     refresh: () => Promise<VolumeStatus[]>
     matchPath: (path: string) => Promise<{ volumeId: number | null; osLabel: string | null }>
     setLabel: (id: number, label: string) => Promise<void>
+  }
+  phone: {
+    start: () => Promise<PhoneStartResult>
+    stop: () => Promise<void>
+    onUploadProgress: (cb: (event: PhoneUploadProgressEvent) => void) => () => void
+    onUploadDone: (cb: (event: PhoneUploadDoneEvent) => void) => () => void
   }
 }
 

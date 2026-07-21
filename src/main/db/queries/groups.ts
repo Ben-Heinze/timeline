@@ -122,6 +122,23 @@ export function assignEntriesToGroup(groupId: number | null, entryIds: number[])
   })(entryIds)
 }
 
+/**
+ * Hierarchical "remove from group": move each entry up one level, to its
+ * current group's parent (NULL when it sits in a top-level group). Entries in a
+ * subgroup stay in the ancestor groups — e.g. removing photos from "batch1"
+ * drops them back into its parent "12.3.2020 photos" rather than ungrouping
+ * them entirely. Entries with no group are left untouched.
+ */
+export function removeEntriesFromGroup(entryIds: number[]): void {
+  if (entryIds.length === 0) return
+  const placeholders = entryIds.map(() => '?').join(', ')
+  getDb().prepare(`
+    UPDATE entries
+    SET group_id = (SELECT parent_id FROM groups WHERE groups.id = entries.group_id)
+    WHERE id IN (${placeholders}) AND group_id IS NOT NULL
+  `).run(...entryIds)
+}
+
 export function assignEntriesForPeriod(groupId: number, from: number, to: number): number {
   const result = getDb()
     .prepare(`UPDATE entries SET group_id = ? WHERE timestamp >= ? AND timestamp < ?`)

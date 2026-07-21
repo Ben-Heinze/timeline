@@ -4,7 +4,7 @@ test.describe('Group management', () => {
   test.beforeAll(async ({ appPage: page }) => {
     await page.evaluate(() => window.location.reload())
     await page.waitForSelector('button:has-text("+ Journal")', { timeout: 20_000 })
-    await page.getByRole('button', { name: 'Timeline' }).click()
+    await page.getByRole('button', { name: 'Timeline', exact: true }).click()
   })
 
   test('clicking + opens the new group form', async ({ appPage: page }) => {
