@@ -376,7 +376,7 @@ function Main() {
       <header style={{
         padding: '8px 16px',
         borderBottom: '1px solid var(--border)',
-        display: 'flex', alignItems: 'center', gap: 12,
+        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', rowGap: 8,
         background: 'var(--bg-surface)', flexShrink: 0,
       }}>
         <h1 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>Timeline</h1>
@@ -411,7 +411,7 @@ function Main() {
         </div>
 
         {activeView !== 'settings' && (
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, rowGap: 8 }}>
             <SearchBar />
             <button
               onClick={() => openJournalModal()}
