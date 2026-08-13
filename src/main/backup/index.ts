@@ -16,6 +16,26 @@ import type { BackupExportType, BackupManifest, BackupProgressEvent } from '../.
 const MANIFEST_FORMAT = 'timeline-backup'
 const FORMAT_VERSION = 1
 
+/**
+ * Read and sanity-check the manifest of an extracted backup archive. Throws a
+ * user-facing error when the directory doesn't hold a usable backup; does not
+ * clean anything up — the caller owns the extracted directory.
+ */
+export async function readAndValidateManifest(dir: string): Promise<BackupManifest> {
+  try {
+    const manifest: BackupManifest = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf-8'))
+    if (manifest.format !== MANIFEST_FORMAT) throw new Error('bad format')
+    if (manifest.formatVersion > FORMAT_VERSION) {
+      throw new Error('This backup was created by a newer version of the app.')
+    }
+    await fs.access(path.join(dir, 'timeline.db'))
+    return manifest
+  } catch (err) {
+    const detail = err instanceof Error && err.message.includes('newer version') ? ` ${err.message}` : ''
+    throw new Error(`This file is not a valid Timeline backup archive.${detail}`)
+  }
+}
+
 // Extensions that are already compressed — archiving them with deflate wastes
 // time for near-zero size gain, so they are stored raw in the zip.
 const STORED_EXTS = new Set([
@@ -226,18 +246,12 @@ export async function importBackup(
 
   let manifest: BackupManifest
   try {
-    manifest = JSON.parse(await fs.readFile(path.join(destDir, 'manifest.json'), 'utf-8'))
-    if (manifest.format !== MANIFEST_FORMAT) throw new Error('bad format')
-    if (manifest.formatVersion > FORMAT_VERSION) {
-      throw new Error('This backup was created by a newer version of the app.')
-    }
-    await fs.access(path.join(destDir, 'timeline.db'))
+    manifest = await readAndValidateManifest(destDir)
   } catch (err) {
     for (const name of await fs.readdir(destDir)) {
       await fs.rm(path.join(destDir, name), { recursive: true, force: true })
     }
-    const detail = err instanceof Error && err.message.includes('newer version') ? ` ${err.message}` : ''
-    throw new Error(`This file is not a valid Timeline backup archive.${detail}`)
+    throw err
   }
 
   stopWatcher()

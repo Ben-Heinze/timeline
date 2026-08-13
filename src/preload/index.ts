@@ -3,7 +3,7 @@ import type {
   IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, NewGroup, Group,
   EntryType, SearchFilters, AppSettings, Profile, ProfileList, DuplicateGroup, FileInfo,
   LifeEvent, NewLifeEvent,
-  BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
+  BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent, MergePreview, MergeResult,
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
@@ -72,6 +72,16 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('entries:listAllCount', opts),
     monthBuckets: (opts: { groupId?: number; sortDir: 'asc' | 'desc' }): Promise<MonthBucket[]> =>
       ipcRenderer.invoke('entries:monthBuckets', opts),
+    recentlyAdded: (opts: { groupId?: number; limit: number }): Promise<Entry[]> =>
+      ipcRenderer.invoke('entries:recentlyAdded', opts),
+    recentlyAddedCount: (opts: { groupId?: number }): Promise<number> =>
+      ipcRenderer.invoke('entries:recentlyAddedCount', opts),
+    references: (entryId: number): Promise<Entry[]> =>
+      ipcRenderer.invoke('entries:references', entryId),
+    setReferences: (entryId: number, refEntryIds: number[]): Promise<Entry[]> =>
+      ipcRenderer.invoke('entries:setReferences', entryId, refEntryIds),
+    referencedBy: (entryId: number): Promise<Entry[]> =>
+      ipcRenderer.invoke('entries:referencedBy', entryId),
     get: (id: number) =>
       ipcRenderer.invoke('entries:get', id),
     update: (id: number, patch: Record<string, unknown>) =>
@@ -225,6 +235,12 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('backup:pickArchive'),
     import: (zipPath: string, destDir: string): Promise<BackupImportResult> =>
       ipcRenderer.invoke('backup:import', zipPath, destDir),
+    prepareMerge: (zipPath: string): Promise<MergePreview> =>
+      ipcRenderer.invoke('backup:prepareMerge', zipPath),
+    executeMerge: (): Promise<MergeResult> =>
+      ipcRenderer.invoke('backup:executeMerge'),
+    cancelMerge: (): Promise<void> =>
+      ipcRenderer.invoke('backup:cancelMerge'),
     onProgress: (cb: (event: BackupProgressEvent) => void) => {
       const handler = (_: unknown, data: BackupProgressEvent) => cb(data)
       ipcRenderer.on('backup:progress', handler)

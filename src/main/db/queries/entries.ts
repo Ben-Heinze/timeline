@@ -133,6 +133,65 @@ export function getMonthBuckets(opts: { groupId?: number; sortDir: 'asc' | 'desc
   return rows.map(r => ({ bucketStart: r.bucket_start, count: r.count }))
 }
 
+// "Recently Added" cares about when a file entered the library (created_at),
+// not the date on the file itself (timestamp) — a decades-old scanned photo
+// imported today still belongs here.
+const RECENTLY_ADDED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+
+export function getRecentlyAdded(opts: { groupId?: number; limit: number }): Entry[] {
+  const since = Date.now() - RECENTLY_ADDED_WINDOW_MS
+  const where = [`created_at >= @since`]
+  if (opts.groupId != null) where.push(groupFilterSql(opts.groupId))
+  return getDb().prepare(`
+    SELECT * FROM entries
+    WHERE ${where.join(' AND ')}
+    ORDER BY created_at DESC
+    LIMIT @limit
+  `).all({ since, limit: opts.limit }) as Entry[]
+}
+
+export function countRecentlyAdded(opts: { groupId?: number }): number {
+  const since = Date.now() - RECENTLY_ADDED_WINDOW_MS
+  const where = [`created_at >= @since`]
+  if (opts.groupId != null) where.push(groupFilterSql(opts.groupId))
+  const row = getDb().prepare(`SELECT COUNT(*) AS count FROM entries WHERE ${where.join(' AND ')}`).get({ since }) as { count: number }
+  return row.count
+}
+
+// ─── Cross-entry references (e.g. files a journal entry calls out) ──────────
+// A lightweight link, not an attachment: the referenced entry is untouched and
+// owned by itself. Mirrors entry_people in shape.
+
+export function getEntryReferences(entryId: number): Entry[] {
+  return getDb().prepare(`
+    SELECT e.* FROM entries e
+    JOIN entry_references er ON er.ref_entry_id = e.id
+    WHERE er.entry_id = ?
+    ORDER BY e.timestamp DESC
+  `).all(entryId) as Entry[]
+}
+
+export function setEntryReferences(entryId: number, refEntryIds: number[]): Entry[] {
+  const db = getDb()
+  const ids = refEntryIds.filter(id => id !== entryId)
+  db.transaction(() => {
+    db.prepare('DELETE FROM entry_references WHERE entry_id = ?').run(entryId)
+    const ins = db.prepare('INSERT OR IGNORE INTO entry_references (entry_id, ref_entry_id) VALUES (?, ?)')
+    for (const id of ids) ins.run(entryId, id)
+  })()
+  return getEntryReferences(entryId)
+}
+
+// Back-links: entries that reference this one (e.g. "referenced in these journal entries").
+export function getEntryReferencedBy(entryId: number): Entry[] {
+  return getDb().prepare(`
+    SELECT e.* FROM entries e
+    JOIN entry_references er ON er.entry_id = e.id
+    WHERE er.ref_entry_id = ?
+    ORDER BY e.timestamp DESC
+  `).all(entryId) as Entry[]
+}
+
 function buildSearchFilterSql(filters: SearchFilters): { whereSql: string; tagJoin: string; params: Record<string, unknown> } {
   const where: string[] = []
   const params: Record<string, unknown> = {}
@@ -239,6 +298,15 @@ export function getEntriesNeedingBackfill(): Entry[] {
         OR (type = 'photo' AND (thumbnail_small IS NULL OR needs_date_review = 1 OR gps_scanned = 0))
         OR (type = 'video' AND (thumbnail_small IS NULL OR needs_date_review = 1 OR latitude IS NULL))
       )
+    ORDER BY id
+  `).all() as Entry[]
+}
+
+// Journal entries that predate on-disk text export, or whose export was never
+// written (e.g. an interrupted save) — for the rescan backfill pass.
+export function getJournalsNeedingFile(): Entry[] {
+  return getDb().prepare(`
+    SELECT * FROM entries WHERE type = 'journal' AND file_path IS NULL
     ORDER BY id
   `).all() as Entry[]
 }

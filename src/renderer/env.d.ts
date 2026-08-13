@@ -4,7 +4,7 @@ import type {
   IngestProgressEvent, IngestDoneEvent, SyncProgressEvent, Bucket, Group, GroupStats, Entry, NewGroup,
   EntryType, Tag, SearchFilters, AppSettings, Profile, ProfileList, DuplicateGroup, FileInfo,
   LifeEvent, NewLifeEvent,
-  BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent,
+  BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent, MergePreview, MergeResult,
   MapHiresLayer, MapDownloadProgressEvent,
   SpotifyPlay, SpotifyImportProgressEvent, SpotifyImportResult, ArtistPlaytime,
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
@@ -40,6 +40,11 @@ interface Api {
     listAll: (opts: { groupId?: number; sortBy: 'date' | 'title' | 'type' | 'tag'; sortDir: 'asc' | 'desc' } & PageParams) => Promise<Entry[]>
     listAllCount: (opts: { groupId?: number }) => Promise<number>
     monthBuckets: (opts: { groupId?: number; sortDir: 'asc' | 'desc' }) => Promise<MonthBucket[]>
+    recentlyAdded: (opts: { groupId?: number; limit: number }) => Promise<Entry[]>
+    recentlyAddedCount: (opts: { groupId?: number }) => Promise<number>
+    references: (entryId: number) => Promise<Entry[]>
+    setReferences: (entryId: number, refEntryIds: number[]) => Promise<Entry[]>
+    referencedBy: (entryId: number) => Promise<Entry[]>
     get: (id: number) => Promise<Entry | null>
     update: (id: number, patch: Record<string, unknown>) => Promise<void>
     rename: (id: number, title: string, renameFile: boolean) => Promise<RenameEntryResult>
@@ -124,6 +129,9 @@ interface Api {
     export: (type: BackupExportType) => Promise<BackupExportResult>
     pickArchive: () => Promise<string | null>
     import: (zipPath: string, destDir: string) => Promise<BackupImportResult>
+    prepareMerge: (zipPath: string) => Promise<MergePreview>
+    executeMerge: () => Promise<MergeResult>
+    cancelMerge: () => Promise<void>
     onProgress: (cb: (event: BackupProgressEvent) => void) => () => void
   }
   library: {

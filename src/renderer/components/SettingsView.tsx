@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
-import type { BackupExportType, BackupProgressEvent, DuplicateGroup, SpotifyImportProgressEvent, RescanProgressEvent, RescanResult } from '../../shared/types'
+import type { BackupExportType, BackupProgressEvent, DuplicateGroup, MergePreview, SpotifyImportProgressEvent, RescanProgressEvent, RescanResult } from '../../shared/types'
 import { THEMES } from '../theme'
 import { VolumeBadgeInline } from './VolumeBadge'
 
@@ -27,11 +27,12 @@ export default function SettingsView() {
   const [resetting, setResetting] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
-  const [backupBusy, setBackupBusy] = useState<null | BackupExportType | 'import'>(null)
+  const [backupBusy, setBackupBusy] = useState<null | BackupExportType | 'import' | 'merge-prepare' | 'merge'>(null)
   const [backupProgress, setBackupProgress] = useState<BackupProgressEvent | null>(null)
   const [backupMessage, setBackupMessage] = useState<string | null>(null)
   const [backupError, setBackupError] = useState<string | null>(null)
   const [pendingImport, setPendingImport] = useState<{ zipPath: string; destDir: string } | null>(null)
+  const [pendingMerge, setPendingMerge] = useState<MergePreview | null>(null)
   const [spotifyBusy, setSpotifyBusy] = useState(false)
   const [spotifyProgress, setSpotifyProgress] = useState<SpotifyImportProgressEvent | null>(null)
   const [spotifyMessage, setSpotifyMessage] = useState<string | null>(null)
@@ -111,6 +112,17 @@ export default function SettingsView() {
   useEffect(() => {
     if (typeof window.api.backup?.onProgress !== 'function') return
     return window.api.backup.onProgress(setBackupProgress)
+  }, [])
+
+  // A finished merge reloads the window (the blunt-but-reliable way the restore
+  // flow refetches everything), so its summary is parked in sessionStorage and
+  // picked up here on the other side of the reload.
+  useEffect(() => {
+    const msg = sessionStorage.getItem('timeline.mergeMessage')
+    if (msg) {
+      sessionStorage.removeItem('timeline.mergeMessage')
+      setBackupMessage(msg)
+    }
   }, [])
 
   useEffect(() => {
@@ -317,6 +329,62 @@ export default function SettingsView() {
       setBackupBusy(null)
       setBackupProgress(null)
     }
+  }
+
+  async function startMerge() {
+    setBackupError(null)
+    setBackupMessage(null)
+    setPendingMerge(null)
+    if (typeof window.api.backup?.prepareMerge !== 'function') {
+      setBackupError('Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).')
+      return
+    }
+    const zipPath = await window.api.backup.pickArchive()
+    if (!zipPath) return
+    setBackupBusy('merge-prepare')
+    setBackupProgress(null)
+    try {
+      setPendingMerge(await window.api.backup.prepareMerge(zipPath))
+    } catch (e) {
+      setBackupError(ipcErrorMessage(e))
+    } finally {
+      setBackupBusy(null)
+      setBackupProgress(null)
+    }
+  }
+
+  async function confirmMerge() {
+    if (!pendingMerge) return
+    setBackupBusy('merge')
+    setBackupError(null)
+    setBackupProgress(null)
+    try {
+      const res = await window.api.backup.executeMerge()
+      let msg = `Merged: ${res.entriesImported} entr${res.entriesImported === 1 ? 'y' : 'ies'} imported, `
+        + `${res.duplicatesSkipped} already present`
+      const extras = [
+        res.tagsCreated > 0 ? `${res.tagsCreated} new tag${res.tagsCreated === 1 ? '' : 's'}` : null,
+        res.groupsCreated > 0 ? `${res.groupsCreated} new group${res.groupsCreated === 1 ? '' : 's'}` : null,
+        res.peopleCreated > 0 ? `${res.peopleCreated} new ${res.peopleCreated === 1 ? 'person' : 'people'}` : null,
+        res.eventsCreated > 0 ? `${res.eventsCreated} new event${res.eventsCreated === 1 ? '' : 's'}` : null,
+        res.playsInserted > 0 ? `${res.playsInserted} Spotify play${res.playsInserted === 1 ? '' : 's'}` : null,
+      ].filter(Boolean)
+      if (extras.length > 0) msg += `, ${extras.join(', ')}`
+      if (res.missingFiles > 0) msg += ` — ${res.missingFiles} entr${res.missingFiles === 1 ? 'y' : 'ies'} had no file in the archive and are marked missing`
+      msg += '.'
+      sessionStorage.setItem('timeline.mergeMessage', msg)
+      window.location.reload()
+    } catch (e) {
+      setBackupError(ipcErrorMessage(e))
+      setPendingMerge(null)
+      setBackupBusy(null)
+      setBackupProgress(null)
+    }
+  }
+
+  async function cancelPendingMerge() {
+    setPendingMerge(null)
+    try { await window.api.backup.cancelMerge() } catch { /* nothing to clean up */ }
   }
 
   async function importSpotifyHistory(mode: 'files' | 'folder') {
@@ -561,7 +629,7 @@ export default function SettingsView() {
               {backupBusy === 'metadata' ? 'Exporting…' : 'Export…'}
             </button>
           </div>
-          <div style={{ ...rowLast, alignItems: 'flex-start' }}>
+          <div style={{ ...row, alignItems: 'flex-start' }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 600, marginBottom: 2 }}>Restore from backup</div>
               <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
@@ -577,6 +645,79 @@ export default function SettingsView() {
               {backupBusy === 'import' ? 'Restoring…' : 'Restore…'}
             </button>
           </div>
+          <div style={{ ...rowLast, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Merge from another library</div>
+              <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                Adds everything from a full backup made on another computer into this library —
+                entries, files, tags, groups, people, events, and listening history. Entries you
+                already have are detected by content and skipped, with their tags and people combined.
+              </div>
+            </div>
+            <button
+              style={{ ...btn('default'), flexShrink: 0, opacity: backupBusy ? 0.6 : 1 }}
+              onClick={startMerge}
+              disabled={backupBusy !== null}
+            >
+              {backupBusy === 'merge-prepare' ? 'Analyzing…' : backupBusy === 'merge' ? 'Merging…' : 'Merge…'}
+            </button>
+          </div>
+
+          {pendingMerge && (
+            <div style={{
+              ...rowLast,
+              flexDirection: 'column', alignItems: 'flex-start', gap: 10,
+              background: '#fffbeb', borderTop: '1px solid #fde68a',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <span style={{ fontSize: 16, lineHeight: 1, marginTop: 1 }}>⚠️</span>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: '#92400e', marginBottom: 4 }}>
+                    Merge this backup into your library?
+                  </div>
+                  <div style={{ fontSize: 12, color: '#78350f', lineHeight: 1.5 }}>
+                    <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{pendingMerge.zipPath}</span>
+                    <br />
+                    (exported {new Date(pendingMerge.exportedAt).toLocaleDateString()})
+                    <br />
+                    {pendingMerge.entriesNew} new entr{pendingMerge.entriesNew === 1 ? 'y' : 'ies'} will be
+                    imported; {pendingMerge.entriesDuplicate} already in this library will be skipped.
+                    {(pendingMerge.tagsNew > 0 || pendingMerge.groupsNew > 0 || pendingMerge.peopleNew > 0
+                      || pendingMerge.eventsNew > 0 || pendingMerge.playsNew > 0) && (
+                      <> Also new here: {[
+                        pendingMerge.tagsNew > 0 ? `${pendingMerge.tagsNew} tag${pendingMerge.tagsNew === 1 ? '' : 's'}` : null,
+                        pendingMerge.groupsNew > 0 ? `${pendingMerge.groupsNew} group${pendingMerge.groupsNew === 1 ? '' : 's'}` : null,
+                        pendingMerge.peopleNew > 0 ? `${pendingMerge.peopleNew} ${pendingMerge.peopleNew === 1 ? 'person' : 'people'}` : null,
+                        pendingMerge.eventsNew > 0 ? `${pendingMerge.eventsNew} event${pendingMerge.eventsNew === 1 ? '' : 's'}` : null,
+                        pendingMerge.playsNew > 0 ? `${pendingMerge.playsNew} Spotify play${pendingMerge.playsNew === 1 ? '' : 's'}` : null,
+                      ].filter(Boolean).join(', ')}.</>
+                    )}
+                    {pendingMerge.entriesMissingFile > 0 && (
+                      <> {pendingMerge.entriesMissingFile} entr{pendingMerge.entriesMissingFile === 1 ? 'y has' : 'ies have'} no
+                      file in the archive and will be marked missing.</>
+                    )}
+                    {' '}Nothing already in this library is changed or removed.
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  style={{ ...btn('danger'), background: '#b45309', color: '#fff', opacity: backupBusy ? 0.6 : 1 }}
+                  onClick={confirmMerge}
+                  disabled={backupBusy !== null}
+                >
+                  {backupBusy === 'merge' ? 'Merging…' : 'Merge into library'}
+                </button>
+                <button
+                  style={btn('ghost')}
+                  onClick={cancelPendingMerge}
+                  disabled={backupBusy !== null}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {pendingImport && (
             <div style={{
@@ -628,6 +769,9 @@ export default function SettingsView() {
               {backupProgress.phase === 'archiving' && `Archiving ${backupProgress.completed}/${backupProgress.total} — ${backupProgress.current}`}
               {backupProgress.phase === 'extracting' && `Extracting ${backupProgress.completed}/${backupProgress.total} — ${backupProgress.current}`}
               {backupProgress.phase === 'checking' && `Checking files ${backupProgress.completed}/${backupProgress.total}`}
+              {backupProgress.phase === 'analyzing' && `Comparing entries ${backupProgress.completed}/${backupProgress.total}`}
+              {backupProgress.phase === 'copying' && `Copying files ${backupProgress.completed}/${backupProgress.total} — ${backupProgress.current}`}
+              {backupProgress.phase === 'merging' && `Merging entries ${backupProgress.completed}/${backupProgress.total}`}
               {backupProgress.phase === 'done' && 'Finishing…'}
             </div>
           )}
@@ -730,7 +874,8 @@ export default function SettingsView() {
               {rescanResult.thumbnailsAdded} thumbnail{rescanResult.thumbnailsAdded === 1 ? '' : 's'},{' '}
               {rescanResult.datesUpdated} date{rescanResult.datesUpdated === 1 ? '' : 's'},{' '}
               {rescanResult.gpsAdded} location{rescanResult.gpsAdded === 1 ? '' : 's'}
-              {rescanResult.reclassified > 0 ? `, reclassified ${rescanResult.reclassified} RAW file${rescanResult.reclassified === 1 ? '' : 's'}` : ''}.
+              {rescanResult.reclassified > 0 ? `, reclassified ${rescanResult.reclassified} RAW file${rescanResult.reclassified === 1 ? '' : 's'}` : ''}
+              {rescanResult.journalFilesWritten > 0 ? `, wrote ${rescanResult.journalFilesWritten} journal text file${rescanResult.journalFilesWritten === 1 ? '' : 's'}` : ''}.
             </div>
           )}
         </div>

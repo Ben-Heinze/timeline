@@ -5,6 +5,7 @@ import * as q from '../db/queries/entries'
 import { getLibraryPath } from '../library'
 import { resolveEntryAbsolutePath } from '../volumes/paths'
 import { computeFileHash, rescanLibrary } from '../ingest'
+import { syncJournalFile, backfillJournalFiles } from '../journalExport'
 import { writePhotoDate, writePhotoGPS } from '../exif'
 import type { SetDateParams, SetDateResult, SetLocationParams, SetLocationResult, RescanResult, RenameEntryResult } from '../../shared/types'
 
@@ -46,10 +47,26 @@ export function registerEntryHandlers(): void {
     q.countAllEntries(opts ?? {}))
   ipcMain.handle('entries:monthBuckets', (_, opts) =>
     q.getMonthBuckets(opts))
+  ipcMain.handle('entries:recentlyAdded', (_, opts) =>
+    q.getRecentlyAdded(opts))
+  ipcMain.handle('entries:recentlyAddedCount', (_, opts) =>
+    q.countRecentlyAdded(opts ?? {}))
+  ipcMain.handle('entries:references', (_, entryId) =>
+    q.getEntryReferences(entryId))
+  ipcMain.handle('entries:setReferences', (_, entryId, refEntryIds) =>
+    q.setEntryReferences(entryId, refEntryIds))
+  ipcMain.handle('entries:referencedBy', (_, entryId) =>
+    q.getEntryReferencedBy(entryId))
   ipcMain.handle('entries:get', (_, id) =>
     q.getEntry(id))
-  ipcMain.handle('entries:update', (_, id, patch) =>
-    q.updateEntry(id, patch))
+  ipcMain.handle('entries:update', async (_, id, patch) => {
+    q.updateEntry(id, patch)
+    // Only journal saves touch rich_text_json; keep the on-disk .txt mirror
+    // in sync whenever the content itself changes.
+    if (patch.rich_text_json !== undefined && q.getEntry(id)?.type === 'journal') {
+      await syncJournalFile(id)
+    }
+  })
 
   // Rename an entry's display title, and — when the user opts in — the backing
   // file on disk too. The original file name is always preserved in the database
@@ -187,9 +204,11 @@ export function registerEntryHandlers(): void {
 
   ipcMain.handle('library:rescan', async (event): Promise<RescanResult> => {
     const sender = event.sender
-    return rescanLibrary(evt => {
+    const result = await rescanLibrary(evt => {
       if (!sender.isDestroyed()) sender.send('library:rescanProgress', evt)
     })
+    result.journalFilesWritten = await backfillJournalFiles()
+    return result
   })
 
   ipcMain.handle('entries:delete', async (_, ids: number[]) => {
@@ -212,8 +231,8 @@ export function registerEntryHandlers(): void {
     }
   })
 
-  ipcMain.handle('entries:create', (_, data) =>
-    q.insertEntry({
+  ipcMain.handle('entries:create', async (_, data) => {
+    const id = q.insertEntry({
       type: data.type,
       timestamp: data.timestamp,
       title: data.title ?? null,
@@ -232,5 +251,8 @@ export function registerEntryHandlers(): void {
       longitude: null,
       gps_scanned: 0,
       created_at: Date.now(),
-    }))
+    })
+    if (data.type === 'journal') await syncJournalFile(id)
+    return id
+  })
 }

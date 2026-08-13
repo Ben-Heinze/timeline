@@ -94,6 +94,7 @@ export interface RescanResult {
   thumbnailsAdded: number // entries that gained thumbnails
   datesUpdated: number    // unconfirmed dates filled from EXIF
   gpsAdded: number        // entries that gained GPS coordinates
+  journalFilesWritten: number // journal entries that gained an on-disk .txt copy
 }
 
 export interface WatchedFolder {
@@ -369,7 +370,7 @@ export interface BackupManifest {
 }
 
 export interface BackupProgressEvent {
-  phase: 'preparing' | 'archiving' | 'extracting' | 'checking' | 'done'
+  phase: 'preparing' | 'archiving' | 'extracting' | 'checking' | 'analyzing' | 'copying' | 'merging' | 'done'
   completed: number
   total: number
   current: string
@@ -388,6 +389,35 @@ export interface BackupImportResult {
   exportType: BackupExportType
   entries: number
   missingFiles: number         // entries whose file is not present yet (re-sync to relink)
+}
+
+// Counts shown before merging another library's full backup into this one.
+// "New" means not present here: entries match by content hash, tags/groups/
+// people/volumes/events by their natural keys.
+export interface MergePreview {
+  zipPath: string
+  exportedAt: number           // Unix ms, from the source manifest
+  appVersion: string           // app that made the backup
+  entriesNew: number
+  entriesDuplicate: number
+  entriesMissingFile: number   // new entries whose file is absent from the archive
+  tagsNew: number
+  groupsNew: number
+  peopleNew: number
+  eventsNew: number
+  playsNew: number
+  volumesNew: number
+}
+
+export interface MergeResult {
+  entriesImported: number
+  duplicatesSkipped: number
+  missingFiles: number
+  tagsCreated: number
+  groupsCreated: number
+  peopleCreated: number
+  eventsCreated: number
+  playsInserted: number
 }
 
 export interface SpotifyPlay {

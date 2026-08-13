@@ -183,6 +183,7 @@ function initSchema(db2) {
     CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_entries_group_id  ON entries(group_id);
     CREATE INDEX IF NOT EXISTS idx_entries_group_timestamp ON entries(group_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
 
     -- People (and animals) you can tag in photos/videos, each with an info sheet.
     CREATE TABLE IF NOT EXISTS people (
@@ -210,6 +211,17 @@ function initSchema(db2) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_entry_people_person ON entry_people(person_id);
+
+    -- Lightweight links from one entry (typically a journal) to other entries it
+    -- calls out — e.g. photos from the same day — without attaching or copying
+    -- the referenced file. Mirrors entry_people.
+    CREATE TABLE IF NOT EXISTS entry_references (
+      entry_id     INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+      ref_entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+      PRIMARY KEY (entry_id, ref_entry_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_entry_references_ref ON entry_references(ref_entry_id);
 
     CREATE TABLE IF NOT EXISTS volumes (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -609,6 +621,51 @@ function getMonthBuckets(opts) {
   `).all();
   return rows.map((r) => ({ bucketStart: r.bucket_start, count: r.count }));
 }
+const RECENTLY_ADDED_WINDOW_MS = 30 * 24 * 60 * 60 * 1e3;
+function getRecentlyAdded(opts) {
+  const since = Date.now() - RECENTLY_ADDED_WINDOW_MS;
+  const where = [`created_at >= @since`];
+  if (opts.groupId != null) where.push(groupFilterSql(opts.groupId));
+  return getDb().prepare(`
+    SELECT * FROM entries
+    WHERE ${where.join(" AND ")}
+    ORDER BY created_at DESC
+    LIMIT @limit
+  `).all({ since, limit: opts.limit });
+}
+function countRecentlyAdded(opts) {
+  const since = Date.now() - RECENTLY_ADDED_WINDOW_MS;
+  const where = [`created_at >= @since`];
+  if (opts.groupId != null) where.push(groupFilterSql(opts.groupId));
+  const row = getDb().prepare(`SELECT COUNT(*) AS count FROM entries WHERE ${where.join(" AND ")}`).get({ since });
+  return row.count;
+}
+function getEntryReferences(entryId) {
+  return getDb().prepare(`
+    SELECT e.* FROM entries e
+    JOIN entry_references er ON er.ref_entry_id = e.id
+    WHERE er.entry_id = ?
+    ORDER BY e.timestamp DESC
+  `).all(entryId);
+}
+function setEntryReferences(entryId, refEntryIds) {
+  const db2 = getDb();
+  const ids = refEntryIds.filter((id) => id !== entryId);
+  db2.transaction(() => {
+    db2.prepare("DELETE FROM entry_references WHERE entry_id = ?").run(entryId);
+    const ins = db2.prepare("INSERT OR IGNORE INTO entry_references (entry_id, ref_entry_id) VALUES (?, ?)");
+    for (const id of ids) ins.run(entryId, id);
+  })();
+  return getEntryReferences(entryId);
+}
+function getEntryReferencedBy(entryId) {
+  return getDb().prepare(`
+    SELECT e.* FROM entries e
+    JOIN entry_references er ON er.entry_id = e.id
+    WHERE er.ref_entry_id = ?
+    ORDER BY e.timestamp DESC
+  `).all(entryId);
+}
 function buildSearchFilterSql(filters) {
   const where = [];
   const params = {};
@@ -706,6 +763,12 @@ function getEntriesNeedingBackfill() {
         OR (type = 'photo' AND (thumbnail_small IS NULL OR needs_date_review = 1 OR gps_scanned = 0))
         OR (type = 'video' AND (thumbnail_small IS NULL OR needs_date_review = 1 OR latitude IS NULL))
       )
+    ORDER BY id
+  `).all();
+}
+function getJournalsNeedingFile() {
+  return getDb().prepare(`
+    SELECT * FROM entries WHERE type = 'journal' AND file_path IS NULL
     ORDER BY id
   `).all();
 }
@@ -1292,7 +1355,7 @@ async function backfillGps() {
 }
 async function rescanLibrary(onProgress) {
   const candidates = getEntriesNeedingBackfill();
-  const result = { scanned: 0, reclassified: 0, thumbnailsAdded: 0, datesUpdated: 0, gpsAdded: 0 };
+  const result = { scanned: 0, reclassified: 0, thumbnailsAdded: 0, datesUpdated: 0, gpsAdded: 0, journalFilesWritten: 0 };
   const total = candidates.length;
   for (const entry of candidates) {
     onProgress({ processed: result.scanned, total, current: path.basename(entry.file_path ?? "") });
@@ -1620,6 +1683,20 @@ function restartWatcher() {
 }
 const MANIFEST_FORMAT = "timeline-backup";
 const FORMAT_VERSION = 1;
+async function readAndValidateManifest(dir) {
+  try {
+    const manifest = JSON.parse(await fs$1.readFile(path.join(dir, "manifest.json"), "utf-8"));
+    if (manifest.format !== MANIFEST_FORMAT) throw new Error("bad format");
+    if (manifest.formatVersion > FORMAT_VERSION) {
+      throw new Error("This backup was created by a newer version of the app.");
+    }
+    await fs$1.access(path.join(dir, "timeline.db"));
+    return manifest;
+  } catch (err) {
+    const detail = err instanceof Error && err.message.includes("newer version") ? ` ${err.message}` : "";
+    throw new Error(`This file is not a valid Timeline backup archive.${detail}`);
+  }
+}
 const STORED_EXTS = /* @__PURE__ */ new Set([
   ".jpg",
   ".jpeg",
@@ -1795,18 +1872,12 @@ async function importBackup(zipPath, destDir, onProgress) {
   });
   let manifest;
   try {
-    manifest = JSON.parse(await fs$1.readFile(path.join(destDir, "manifest.json"), "utf-8"));
-    if (manifest.format !== MANIFEST_FORMAT) throw new Error("bad format");
-    if (manifest.formatVersion > FORMAT_VERSION) {
-      throw new Error("This backup was created by a newer version of the app.");
-    }
-    await fs$1.access(path.join(destDir, "timeline.db"));
+    manifest = await readAndValidateManifest(destDir);
   } catch (err) {
     for (const name of await fs$1.readdir(destDir)) {
       await fs$1.rm(path.join(destDir, name), { recursive: true, force: true });
     }
-    const detail = err instanceof Error && err.message.includes("newer version") ? ` ${err.message}` : "";
-    throw new Error(`This file is not a valid Timeline backup archive.${detail}`);
+    throw err;
   }
   stopWatcher();
   closeDb();
@@ -1842,6 +1913,777 @@ async function importBackup(zipPath, destDir, onProgress) {
     missingFiles: missingIds.length
   };
 }
+let yearlySummariesCache = null;
+const DAY_EXPR = bucketExprSql("day");
+let rollupsEnsured = false;
+function ensureRollups() {
+  if (rollupsEnsured) return;
+  const db2 = getDb();
+  const count = db2.prepare("SELECT COUNT(*) AS c FROM listening_history").get().c;
+  const marker = db2.prepare(`SELECT value FROM listening_rollup_meta WHERE key = 'source_count'`).get();
+  if (!marker || Number(marker.value) !== count) rebuildRollups(count);
+  rollupsEnsured = true;
+}
+function rebuildRollups(count) {
+  const db2 = getDb();
+  db2.transaction(() => {
+    db2.prepare("DELETE FROM listening_daily").run();
+    db2.prepare(`
+      INSERT INTO listening_daily (day, ms_played, play_count)
+      SELECT ${DAY_EXPR} AS day, SUM(ms_played), COUNT(*)
+      FROM listening_history GROUP BY day
+    `).run();
+    db2.prepare("DELETE FROM listening_artist_daily").run();
+    db2.prepare(`
+      INSERT INTO listening_artist_daily (day, artist_name, ms_played, play_count)
+      SELECT ${DAY_EXPR} AS day, artist_name, SUM(ms_played), COUNT(*)
+      FROM listening_history
+      WHERE media_type = 'track' AND artist_name IS NOT NULL
+      GROUP BY day, artist_name
+    `).run();
+    db2.prepare(`INSERT OR REPLACE INTO listening_rollup_meta (key, value) VALUES ('source_count', ?)`).run(String(count));
+  })();
+}
+function insertPlays(plays) {
+  const db2 = getDb();
+  const now = Date.now();
+  const stmt = db2.prepare(`
+    INSERT OR IGNORE INTO listening_history
+      (timestamp, track_name, artist_name, album_name, ms_played, media_type, spotify_uri, created_at)
+    VALUES
+      (@timestamp, @track_name, @artist_name, @album_name, @ms_played, @media_type, @spotify_uri, @created_at)
+  `);
+  const insertMany = db2.transaction((rows) => {
+    let inserted2 = 0;
+    for (const row of rows) {
+      const info = stmt.run({ ...row, created_at: now });
+      if (info.changes > 0) inserted2++;
+    }
+    return inserted2;
+  });
+  const inserted = insertMany(plays);
+  if (inserted > 0) {
+    yearlySummariesCache = null;
+    rollupsEnsured = false;
+  }
+  return inserted;
+}
+function getPlaysForPeriod(from, to) {
+  return getDb().prepare(
+    `SELECT * FROM listening_history WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp`
+  ).all(from, to);
+}
+function getTopArtists(from, to, limit) {
+  ensureRollups();
+  return getDb().prepare(`
+    SELECT artist_name, SUM(ms_played) AS ms_played, SUM(play_count) AS play_count
+    FROM listening_artist_daily
+    WHERE day >= ? AND day < ?
+    GROUP BY artist_name
+    ORDER BY ms_played DESC
+    LIMIT ?
+  `).all(from, to, limit);
+}
+function getListeningHistogram(from, to, zoomLevel) {
+  ensureRollups();
+  const rows = getDb().prepare(
+    `SELECT day, ms_played FROM listening_daily WHERE day >= ? AND day < ? ORDER BY day`
+  ).all(from, to);
+  if (zoomLevel === "day") {
+    return rows.map((r) => ({ bucket_start: r.day, ms_played: r.ms_played }));
+  }
+  const totals = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const d = new Date(r.day);
+    const bucket = zoomLevel === "year" ? new Date(d.getFullYear(), 0, 1).getTime() : new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+    totals.set(bucket, (totals.get(bucket) ?? 0) + r.ms_played);
+  }
+  return [...totals.entries()].map(([bucket_start, ms_played]) => ({ bucket_start, ms_played })).sort((a, b) => a.bucket_start - b.bucket_start);
+}
+function getYearlySummaries() {
+  if (yearlySummariesCache !== null) return yearlySummariesCache;
+  ensureRollups();
+  const db2 = getDb();
+  const dailyRows = db2.prepare(`SELECT day, ms_played, play_count FROM listening_daily`).all();
+  const artistDailyRows = db2.prepare(`SELECT day, artist_name, ms_played, play_count FROM listening_artist_daily`).all();
+  const yearExpr = `CAST(strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER)`;
+  const topTrackRows = db2.prepare(`
+    WITH by_track_year AS (
+      SELECT ${yearExpr} AS year, track_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+      FROM listening_history
+      WHERE media_type = 'track' AND track_name IS NOT NULL
+      GROUP BY year, track_name, artist_name
+    ), ranked AS (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY year ORDER BY ms_played DESC) AS rnk
+      FROM by_track_year
+    )
+    SELECT year, track_name, artist_name, ms_played, play_count FROM ranked WHERE rnk = 1
+  `).all();
+  const totalsByYear = /* @__PURE__ */ new Map();
+  const monthlyByYear = /* @__PURE__ */ new Map();
+  for (const r of dailyRows) {
+    const d = new Date(r.day);
+    const year = d.getFullYear();
+    const t = totalsByYear.get(year) ?? { ms_played: 0, play_count: 0 };
+    t.ms_played += r.ms_played;
+    t.play_count += r.play_count;
+    totalsByYear.set(year, t);
+    let monthly = monthlyByYear.get(year);
+    if (!monthly) {
+      monthly = new Array(12).fill(0);
+      monthlyByYear.set(year, monthly);
+    }
+    monthly[d.getMonth()] += r.ms_played;
+  }
+  const artistsByYear = /* @__PURE__ */ new Map();
+  for (const r of artistDailyRows) {
+    const year = new Date(r.day).getFullYear();
+    let byArtist = artistsByYear.get(year);
+    if (!byArtist) {
+      byArtist = /* @__PURE__ */ new Map();
+      artistsByYear.set(year, byArtist);
+    }
+    const a = byArtist.get(r.artist_name) ?? { artist_name: r.artist_name, ms_played: 0, play_count: 0 };
+    a.ms_played += r.ms_played;
+    a.play_count += r.play_count;
+    byArtist.set(r.artist_name, a);
+  }
+  const trackByYear = /* @__PURE__ */ new Map();
+  for (const r of topTrackRows) {
+    trackByYear.set(r.year, { track_name: r.track_name, artist_name: r.artist_name, ms_played: r.ms_played, play_count: r.play_count });
+  }
+  yearlySummariesCache = [...totalsByYear.entries()].sort(([a], [b]) => b - a).map(([year, totals]) => {
+    const topArtists = [...artistsByYear.get(year)?.values() ?? []].sort((a, b) => b.ms_played - a.ms_played).slice(0, 5);
+    return {
+      year,
+      msPlayed: totals.ms_played,
+      playCount: totals.play_count,
+      topArtists,
+      topTrack: trackByYear.get(year) ?? null,
+      monthly: monthlyByYear.get(year) ?? new Array(12).fill(0)
+    };
+  });
+  return yearlySummariesCache;
+}
+function getYearDetail(year) {
+  const db2 = getDb();
+  const from = new Date(year, 0, 1).getTime();
+  const to = new Date(year + 1, 0, 1).getTime();
+  const totals = db2.prepare(`
+    SELECT SUM(ms_played) AS ms_played, COUNT(*) AS play_count,
+           MIN(timestamp) AS first_play, MAX(timestamp) AS last_play
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ?
+  `).get(from, to);
+  if (!totals.play_count) return null;
+  const uniqueCounts = db2.prepare(`
+    SELECT COUNT(DISTINCT artist_name) AS artists, COUNT(DISTINCT track_name) AS tracks, COUNT(DISTINCT album_name) AS albums
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track'
+  `).get(from, to);
+  const topArtists = db2.prepare(`
+    SELECT artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND artist_name IS NOT NULL
+    GROUP BY artist_name ORDER BY ms_played DESC LIMIT 15
+  `).all(from, to);
+  const topTracks = db2.prepare(`
+    SELECT track_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND track_name IS NOT NULL
+    GROUP BY track_name, artist_name ORDER BY ms_played DESC LIMIT 15
+  `).all(from, to);
+  const topAlbums = db2.prepare(`
+    SELECT album_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND album_name IS NOT NULL
+    GROUP BY album_name, artist_name ORDER BY ms_played DESC LIMIT 15
+  `).all(from, to);
+  const monthlyRows = db2.prepare(`
+    SELECT CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
+           SUM(ms_played) AS ms_played
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY month
+  `).all(from, to);
+  const monthly = new Array(12).fill(0);
+  for (const r of monthlyRows) monthly[r.month - 1] = r.ms_played;
+  const dowRows = db2.prepare(`
+    SELECT CAST(strftime('%w', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS dow,
+           SUM(ms_played) AS ms_played
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY dow
+  `).all(from, to);
+  const dayOfWeek = new Array(7).fill(0);
+  for (const r of dowRows) dayOfWeek[r.dow] = r.ms_played;
+  const hourRows = db2.prepare(`
+    SELECT CAST(strftime('%H', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
+           SUM(ms_played) AS ms_played
+    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY hour
+  `).all(from, to);
+  const hourOfDay = new Array(24).fill(0);
+  for (const r of hourRows) hourOfDay[r.hour] = r.ms_played;
+  return {
+    year,
+    msPlayed: totals.ms_played ?? 0,
+    playCount: totals.play_count,
+    uniqueArtists: uniqueCounts.artists,
+    uniqueTracks: uniqueCounts.tracks,
+    uniqueAlbums: uniqueCounts.albums,
+    firstPlay: totals.first_play,
+    lastPlay: totals.last_play,
+    topArtists,
+    topTracks,
+    topAlbums,
+    monthly,
+    dayOfWeek,
+    hourOfDay
+  };
+}
+function getArtistMonthlyForYear(year, artistName) {
+  const db2 = getDb();
+  const from = new Date(year, 0, 1).getTime();
+  const to = new Date(year + 1, 0, 1).getTime();
+  const rows = db2.prepare(`
+    SELECT CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
+           SUM(ms_played) AS ms_played
+    FROM listening_history
+    WHERE timestamp >= ? AND timestamp < ? AND artist_name = ?
+    GROUP BY month
+  `).all(from, to, artistName);
+  const monthly = new Array(12).fill(0);
+  for (const r of rows) monthly[r.month - 1] = r.ms_played;
+  return monthly;
+}
+const JOURNAL_DIR_NAME = "Journal Entries";
+const LINE_BREAK_TYPES = /* @__PURE__ */ new Set(["paragraph", "heading", "blockquote", "codeBlock"]);
+function extractPlainText(doc) {
+  const blocks = [];
+  let current = "";
+  const walk = (node) => {
+    if (node.type === "text") {
+      current += node.text ?? "";
+      return;
+    }
+    if (node.type === "hardBreak") {
+      current += "\n";
+      return;
+    }
+    for (const child of node.content ?? []) walk(child);
+    if (LINE_BREAK_TYPES.has(node.type)) {
+      blocks.push(current);
+      current = "";
+    }
+  };
+  walk(doc);
+  if (current) blocks.push(current);
+  return blocks.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+function sanitizeFileName$1(name) {
+  return name.replace(/[\/\\:*?"<>|]/g, "").replace(/\s+/g, " ").replace(/^\.+/, "").trim().slice(0, 200).trim();
+}
+async function pathExists$2(p) {
+  try {
+    await fs$1.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function uniquePath(dir, stem, ext) {
+  let n = 1;
+  let dest = path.join(dir, `${stem}${ext}`);
+  while (await pathExists$2(dest)) {
+    n += 1;
+    dest = path.join(dir, `${stem} (${n})${ext}`);
+  }
+  return dest;
+}
+async function syncJournalFile(entryId) {
+  const entry = getEntry(entryId);
+  if (!entry || entry.type !== "journal") return;
+  const text = entry.rich_text_json ? extractPlainText(JSON.parse(entry.rich_text_json)) : "";
+  let destPath;
+  if (entry.file_path) {
+    destPath = path.join(getLibraryPath(), entry.file_path);
+  } else {
+    const dir = path.join(getFilesPath(), JOURNAL_DIR_NAME);
+    await fs$1.mkdir(dir, { recursive: true });
+    const stem = sanitizeFileName$1(entry.title ?? "") || `Journal ${new Date(entry.timestamp).toISOString().slice(0, 10)}`;
+    destPath = await uniquePath(dir, stem, ".txt");
+  }
+  await fs$1.writeFile(destPath, text, "utf8");
+  const hash = await computeFileHash(destPath);
+  const relPath = path.relative(getLibraryPath(), destPath).split(path.sep).join("/");
+  updateEntry(entryId, {
+    file_path: relPath,
+    content_hash: hash,
+    original_file_name: entry.original_file_name ?? path.basename(destPath)
+  });
+}
+async function backfillJournalFiles() {
+  const candidates = getJournalsNeedingFile();
+  for (const entry of candidates) await syncJournalFile(entry.id);
+  return candidates.length;
+}
+let session = null;
+async function disposeSession() {
+  if (!session) return;
+  const s = session;
+  session = null;
+  try {
+    s.srcDb.close();
+  } catch {
+  }
+  await fs$1.rm(s.tmpDir, { recursive: true, force: true }).catch(() => {
+  });
+}
+async function cancelMerge() {
+  await disposeSession();
+}
+async function prepareMerge(zipPath, onProgress) {
+  if (isCurrentlySyncing()) {
+    throw new Error("A library sync is in progress — wait for it to finish before merging.");
+  }
+  await disposeSession();
+  const tmpDir = await fs$1.mkdtemp(path.join(electron.app.getPath("temp"), "timeline-merge-"));
+  try {
+    let extracted = 0;
+    await extractZip(zipPath, {
+      dir: tmpDir,
+      onEntry: (entry, zipfile) => {
+        extracted++;
+        onProgress({ phase: "extracting", completed: extracted, total: zipfile.entryCount, current: entry.fileName });
+      }
+    });
+    const manifest = await readAndValidateManifest(tmpDir);
+    if (manifest.exportType !== "full") {
+      throw new Error("Only full backups can be merged — use 'Export full backup' on the other machine.");
+    }
+    const srcDb = new Database(path.join(tmpDir, "timeline.db"));
+    initSchema(srcDb);
+    session = { zipPath, tmpDir, srcDb, manifest, plan: [] };
+  } catch (err) {
+    await fs$1.rm(tmpDir, { recursive: true, force: true }).catch(() => {
+    });
+    session = null;
+    throw err;
+  }
+  return analyze(session, onProgress);
+}
+async function analyze(s, onProgress) {
+  const dest = getDb();
+  const src = s.srcDb;
+  const findByHash = dest.prepare("SELECT * FROM entries WHERE content_hash = ? LIMIT 1");
+  const findJournal = dest.prepare(
+    `SELECT * FROM entries WHERE content_hash = ? AND type = 'journal' AND timestamp = ? LIMIT 1`
+  );
+  const findByShape = dest.prepare("SELECT * FROM entries WHERE type = ? AND timestamp = ? AND title IS ? LIMIT 1");
+  const srcEntries = src.prepare("SELECT * FROM entries ORDER BY id").all();
+  const plan = [];
+  const newByKey = /* @__PURE__ */ new Map();
+  let entriesNew = 0, entriesDuplicate = 0, entriesMissingFile = 0;
+  for (let i = 0; i < srcEntries.length; i++) {
+    const e = srcEntries[i];
+    let archivePath = null;
+    if (e.file_path && e.import_mode === "copy") {
+      const cand = path.join(s.tmpDir, e.file_path);
+      try {
+        await fs$1.access(cand);
+        archivePath = cand;
+      } catch {
+      }
+    }
+    const key = e.content_hash == null ? null : e.type === "journal" ? `${e.content_hash}@${e.timestamp}` : e.content_hash;
+    const existing = e.content_hash ? e.type === "journal" ? findJournal.get(e.content_hash, e.timestamp) : findByHash.get(e.content_hash) : findByShape.get(e.type, e.timestamp, e.title);
+    if (existing) {
+      const canRelink = !!existing.is_missing && existing.import_mode === "copy" && archivePath !== null;
+      plan.push({ src: e, action: canRelink ? "relink" : "duplicate", existingId: existing.id, archivePath });
+      entriesDuplicate++;
+    } else if (key != null && newByKey.has(key)) {
+      plan.push({ src: e, action: "dup-of-new", dupOfSrcId: newByKey.get(key), archivePath });
+      entriesDuplicate++;
+    } else {
+      if (key != null) newByKey.set(key, e.id);
+      plan.push({ src: e, action: "new", archivePath });
+      entriesNew++;
+      if (e.file_path && !archivePath) entriesMissingFile++;
+    }
+    if (i % 100 === 0 || i === srcEntries.length - 1) {
+      onProgress({ phase: "analyzing", completed: i + 1, total: srcEntries.length, current: e.title ?? "" });
+    }
+  }
+  s.plan = plan;
+  const destTag = dest.prepare("SELECT id FROM tags WHERE name = ?");
+  const tagsNew = src.prepare("SELECT name FROM tags").all().filter((t) => !destTag.get(t.name)).length;
+  const destRootGroup = dest.prepare("SELECT id FROM groups WHERE parent_id IS NULL AND name = ? COLLATE NOCASE");
+  const destChildGroup = dest.prepare("SELECT id FROM groups WHERE parent_id = ? AND name = ? COLLATE NOCASE");
+  const srcGroups = src.prepare("SELECT * FROM groups ORDER BY id").all();
+  let groupsNew = 0;
+  {
+    const mapped = /* @__PURE__ */ new Map();
+    let pending = [...srcGroups];
+    while (pending.length > 0) {
+      const next = [];
+      for (const g of pending) {
+        const parent = g.parent_id == null ? null : mapped.get(g.parent_id);
+        if (g.parent_id != null && parent === void 0) {
+          next.push(g);
+          continue;
+        }
+        if (parent === "new") {
+          mapped.set(g.id, "new");
+          groupsNew++;
+          continue;
+        }
+        const hit = parent == null ? destRootGroup.get(g.name) : destChildGroup.get(parent, g.name);
+        if (hit) mapped.set(g.id, hit.id);
+        else {
+          mapped.set(g.id, "new");
+          groupsNew++;
+        }
+      }
+      if (next.length === pending.length) break;
+      pending = next;
+    }
+  }
+  const destPerson = dest.prepare("SELECT id FROM people WHERE name = ? COLLATE NOCASE AND kind = ?");
+  const peopleNew = src.prepare("SELECT name, kind FROM people").all().filter((p) => !destPerson.get(p.name, p.kind)).length;
+  const volumesNew = src.prepare("SELECT volume_serial FROM volumes").all().filter((v) => !getVolumeBySerial(v.volume_serial)).length;
+  const destEvent = dest.prepare("SELECT id FROM events WHERE title = ? AND date_from = ? AND date_to IS ?");
+  const eventsNew = src.prepare("SELECT title, date_from, date_to FROM events").all().filter((ev) => !destEvent.get(ev.title, ev.date_from, ev.date_to)).length;
+  const destPlay = dest.prepare("SELECT 1 FROM listening_history WHERE timestamp = ? AND spotify_uri IS ? AND ms_played = ?");
+  const playsNew = src.prepare("SELECT timestamp, spotify_uri, ms_played FROM listening_history").all().filter((p) => !destPlay.get(p.timestamp, p.spotify_uri, p.ms_played)).length;
+  return {
+    zipPath: s.zipPath,
+    exportedAt: s.manifest.exportedAt,
+    appVersion: s.manifest.appVersion,
+    entriesNew,
+    entriesDuplicate,
+    entriesMissingFile,
+    tagsNew,
+    groupsNew,
+    peopleNew,
+    eventsNew,
+    playsNew,
+    volumesNew
+  };
+}
+async function executeMerge(onProgress) {
+  if (!session) throw new Error("No merge in progress — pick a backup archive first.");
+  if (isCurrentlySyncing()) {
+    throw new Error("A library sync is in progress — wait for it to finish before merging.");
+  }
+  const s = session;
+  const copiedFiles = [];
+  stopWatcher();
+  try {
+    await analyze(s, onProgress);
+    const toCopy = s.plan.filter((p) => (p.action === "new" || p.action === "relink") && p.archivePath !== null);
+    for (let i = 0; i < toCopy.length; i++) {
+      const p = toCopy[i];
+      const fileName = path.basename(p.src.file_path);
+      const relDir = path.posix.dirname(p.src.file_path).replace(/^files\/?/, "");
+      const destDir = path.join(getFilesPath(), relDir);
+      await fs$1.mkdir(destDir, { recursive: true });
+      const destName = await copyWithUniqueName(p.archivePath, destDir, fileName);
+      const destAbs = path.join(destDir, destName);
+      copiedFiles.push(destAbs);
+      p.destFilePath = path.join("files", relDir, destName).split(path.sep).join("/");
+      if (p.action === "new") {
+        const stem = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
+        const thumbs = { small: null, medium: null, large: null };
+        for (const size of ["small", "medium", "large"]) {
+          const srcThumb = p.src[`thumbnail_${size}`];
+          if (!srcThumb) continue;
+          const srcAbs = path.join(s.tmpDir, srcThumb);
+          const ext = path.extname(srcThumb) || ".webp";
+          const destThumbAbs = path.join(getThumbnailPath(size), `${stem}${ext}`);
+          try {
+            await fs$1.copyFile(srcAbs, destThumbAbs, fs$1.constants.COPYFILE_EXCL);
+            copiedFiles.push(destThumbAbs);
+            thumbs[size] = `thumbnails/${size}/${stem}${ext}`;
+          } catch {
+          }
+        }
+        p.destThumbs = thumbs;
+      }
+      if (i % 20 === 0 || i === toCopy.length - 1) {
+        onProgress({ phase: "copying", completed: i + 1, total: toCopy.length, current: fileName });
+      }
+    }
+    const result = getDb().transaction(() => runMergeTransaction(s, onProgress))();
+    try {
+      const spotifySrc = path.join(s.tmpDir, "spotify");
+      for (const name of await fs$1.readdir(spotifySrc).catch(() => [])) {
+        await fs$1.copyFile(path.join(spotifySrc, name), path.join(getSpotifyPath(), name), fs$1.constants.COPYFILE_EXCL).catch(() => {
+        });
+      }
+    } catch {
+    }
+    for (const id of result.journalIdsNeedingFile) {
+      await syncJournalFile(id).catch(() => {
+      });
+    }
+    onProgress({ phase: "done", completed: 1, total: 1, current: "" });
+    return result.summary;
+  } catch (err) {
+    for (const f of copiedFiles) await fs$1.rm(f, { force: true }).catch(() => {
+    });
+    throw err;
+  } finally {
+    startWatcher();
+    await disposeSession();
+  }
+}
+function runMergeTransaction(s, onProgress) {
+  const dest = getDb();
+  const src = s.srcDb;
+  const volumeMap = /* @__PURE__ */ new Map();
+  for (const v of src.prepare("SELECT * FROM volumes").all()) {
+    const existing = getVolumeBySerial(v.volume_serial);
+    if (existing) volumeMap.set(v.id, existing.id);
+    else {
+      volumeMap.set(v.id, insertVolume({
+        label: v.label,
+        volume_serial: v.volume_serial,
+        last_mount_path: v.last_mount_path,
+        last_seen_at: v.last_seen_at,
+        created_at: v.created_at
+      }));
+    }
+  }
+  const tagMap = /* @__PURE__ */ new Map();
+  let tagsCreated = 0;
+  const destTag = dest.prepare("SELECT id FROM tags WHERE name = ?");
+  const insTag = dest.prepare("INSERT INTO tags (name) VALUES (?)");
+  for (const t of src.prepare("SELECT * FROM tags").all()) {
+    const hit = destTag.get(t.name);
+    if (hit) tagMap.set(t.id, hit.id);
+    else {
+      tagMap.set(t.id, insTag.run(t.name).lastInsertRowid);
+      tagsCreated++;
+    }
+  }
+  const groupMap = /* @__PURE__ */ new Map();
+  let groupsCreated = 0;
+  const destRootGroup = dest.prepare("SELECT * FROM groups WHERE parent_id IS NULL AND name = ? COLLATE NOCASE");
+  const destChildGroup = dest.prepare("SELECT * FROM groups WHERE parent_id = ? AND name = ? COLLATE NOCASE");
+  const insGroup = dest.prepare(`
+    INSERT INTO groups (name, parent_id, color, description, date_from, date_to, created_at)
+    VALUES (@name, @parent_id, @color, @description, @date_from, @date_to, @created_at)
+  `);
+  const fillGroup = dest.prepare(`
+    UPDATE groups SET
+      description = COALESCE(description, @description),
+      date_from   = COALESCE(date_from, @date_from),
+      date_to     = COALESCE(date_to, @date_to)
+    WHERE id = @id
+  `);
+  let pendingGroups = src.prepare("SELECT * FROM groups ORDER BY id").all();
+  while (pendingGroups.length > 0) {
+    const next = [];
+    for (const g of pendingGroups) {
+      if (g.parent_id != null && !groupMap.has(g.parent_id)) {
+        next.push(g);
+        continue;
+      }
+      const parentId = g.parent_id == null ? null : groupMap.get(g.parent_id);
+      const hit = parentId == null ? destRootGroup.get(g.name) : destChildGroup.get(parentId, g.name);
+      if (hit) {
+        groupMap.set(g.id, hit.id);
+        fillGroup.run({ id: hit.id, description: g.description, date_from: g.date_from, date_to: g.date_to });
+      } else {
+        groupMap.set(g.id, insGroup.run({
+          name: g.name,
+          parent_id: parentId,
+          color: g.color,
+          description: g.description,
+          date_from: g.date_from,
+          date_to: g.date_to,
+          created_at: g.created_at
+        }).lastInsertRowid);
+        groupsCreated++;
+      }
+    }
+    if (next.length === pendingGroups.length) break;
+    pendingGroups = next;
+  }
+  const peopleMap = /* @__PURE__ */ new Map();
+  let peopleCreated = 0;
+  const destPerson = dest.prepare("SELECT * FROM people WHERE name = ? COLLATE NOCASE AND kind = ?");
+  const insPerson = dest.prepare(`
+    INSERT INTO people (kind, name, color, relationship, birthday, notes, email, phone, address, species, breed, avatar_entry_id, created_at)
+    VALUES (@kind, @name, @color, @relationship, @birthday, @notes, @email, @phone, @address, @species, @breed, NULL, @created_at)
+  `);
+  const fillPerson = dest.prepare(`
+    UPDATE people SET
+      relationship = COALESCE(relationship, @relationship),
+      birthday     = COALESCE(birthday, @birthday),
+      notes        = COALESCE(notes, @notes),
+      email        = COALESCE(email, @email),
+      phone        = COALESCE(phone, @phone),
+      address      = COALESCE(address, @address),
+      species      = COALESCE(species, @species),
+      breed        = COALESCE(breed, @breed)
+    WHERE id = @id
+  `);
+  const srcPeople = src.prepare("SELECT * FROM people").all();
+  for (const p of srcPeople) {
+    const hit = destPerson.get(p.name, p.kind);
+    if (hit) {
+      peopleMap.set(p.id, hit.id);
+      fillPerson.run({
+        id: hit.id,
+        relationship: p.relationship,
+        birthday: p.birthday,
+        notes: p.notes,
+        email: p.email,
+        phone: p.phone,
+        address: p.address,
+        species: p.species,
+        breed: p.breed
+      });
+    } else {
+      peopleMap.set(p.id, insPerson.run({
+        kind: p.kind,
+        name: p.name,
+        color: p.color,
+        relationship: p.relationship,
+        birthday: p.birthday,
+        notes: p.notes,
+        email: p.email,
+        phone: p.phone,
+        address: p.address,
+        species: p.species,
+        breed: p.breed,
+        created_at: p.created_at
+      }).lastInsertRowid);
+      peopleCreated++;
+    }
+  }
+  const entryMap = /* @__PURE__ */ new Map();
+  const journalIdsNeedingFile = [];
+  let entriesImported = 0, duplicatesSkipped = 0, missingFiles = 0;
+  for (let i = 0; i < s.plan.length; i++) {
+    const p = s.plan[i];
+    const e = p.src;
+    if (p.action === "duplicate" || p.action === "relink") {
+      entryMap.set(e.id, p.existingId);
+      duplicatesSkipped++;
+      const destEntry = getEntry(p.existingId);
+      if (destEntry) {
+        const patch = {};
+        if (destEntry.latitude == null && e.latitude != null) {
+          patch.latitude = e.latitude;
+          patch.longitude = e.longitude;
+          patch.gps_scanned = 1;
+        }
+        if (destEntry.group_id == null && e.group_id != null && groupMap.has(e.group_id)) {
+          patch.group_id = groupMap.get(e.group_id);
+        }
+        if (p.action === "relink" && p.destFilePath) {
+          patch.file_path = p.destFilePath;
+          patch.is_missing = 0;
+        }
+        if (Object.keys(patch).length > 0) updateEntry(p.existingId, patch);
+      }
+    } else if (p.action === "dup-of-new") {
+      const mapped = entryMap.get(p.dupOfSrcId);
+      if (mapped != null) entryMap.set(e.id, mapped);
+      duplicatesSkipped++;
+    } else {
+      const fileMissing = e.file_path != null && p.destFilePath == null;
+      if (fileMissing) missingFiles++;
+      const newId = insertEntry({
+        type: e.type,
+        timestamp: e.timestamp,
+        title: e.title,
+        // Missing from the archive: keep the source path so relink-by-hash can
+        // recover it later (e.g. when the drive it lives on is attached here).
+        file_path: p.destFilePath ?? e.file_path,
+        thumbnail_small: p.destThumbs?.small ?? null,
+        thumbnail_medium: p.destThumbs?.medium ?? null,
+        thumbnail_large: p.destThumbs?.large ?? null,
+        duration_seconds: e.duration_seconds,
+        rich_text_json: e.rich_text_json,
+        group_id: e.group_id != null ? groupMap.get(e.group_id) ?? null : null,
+        needs_date_review: e.needs_date_review,
+        is_missing: fileMissing ? 1 : 0,
+        content_hash: e.content_hash,
+        original_file_name: e.original_file_name,
+        import_mode: e.import_mode,
+        volume_id: e.volume_id != null ? volumeMap.get(e.volume_id) ?? null : null,
+        latitude: e.latitude,
+        longitude: e.longitude,
+        gps_scanned: e.gps_scanned,
+        created_at: e.created_at
+        // when it was really added — just on the other machine
+      });
+      entryMap.set(e.id, newId);
+      entriesImported++;
+      if (e.type === "journal" && e.file_path == null) journalIdsNeedingFile.push(newId);
+    }
+    if (i % 100 === 0 || i === s.plan.length - 1) {
+      onProgress({ phase: "merging", completed: i + 1, total: s.plan.length, current: e.title ?? "" });
+    }
+  }
+  const insEntryTag = dest.prepare("INSERT OR IGNORE INTO entry_tags (entry_id, tag_id) VALUES (?, ?)");
+  for (const r of src.prepare("SELECT * FROM entry_tags").all()) {
+    const eId = entryMap.get(r.entry_id);
+    const tId = tagMap.get(r.tag_id);
+    if (eId != null && tId != null) insEntryTag.run(eId, tId);
+  }
+  const insEntryPerson = dest.prepare("INSERT OR IGNORE INTO entry_people (entry_id, person_id) VALUES (?, ?)");
+  for (const r of src.prepare("SELECT * FROM entry_people").all()) {
+    const eId = entryMap.get(r.entry_id);
+    const pId = peopleMap.get(r.person_id);
+    if (eId != null && pId != null) insEntryPerson.run(eId, pId);
+  }
+  const insGroupTag = dest.prepare("INSERT OR IGNORE INTO group_tags (group_id, tag_id) VALUES (?, ?)");
+  for (const r of src.prepare("SELECT * FROM group_tags").all()) {
+    const gId = groupMap.get(r.group_id);
+    const tId = tagMap.get(r.tag_id);
+    if (gId != null && tId != null) insGroupTag.run(gId, tId);
+  }
+  const insRef = dest.prepare("INSERT OR IGNORE INTO entry_references (entry_id, ref_entry_id) VALUES (?, ?)");
+  for (const r of src.prepare("SELECT * FROM entry_references").all()) {
+    const a = entryMap.get(r.entry_id);
+    const b = entryMap.get(r.ref_entry_id);
+    if (a != null && b != null && a !== b) insRef.run(a, b);
+  }
+  const setAvatar = dest.prepare("UPDATE people SET avatar_entry_id = ? WHERE id = ? AND avatar_entry_id IS NULL");
+  for (const p of srcPeople) {
+    if (p.avatar_entry_id == null) continue;
+    const avatarId = entryMap.get(p.avatar_entry_id);
+    const personId = peopleMap.get(p.id);
+    if (avatarId != null && personId != null) setAvatar.run(avatarId, personId);
+  }
+  let eventsCreated = 0;
+  const destEvent = dest.prepare("SELECT id FROM events WHERE title = ? AND date_from = ? AND date_to IS ?");
+  const insEvent = dest.prepare(`
+    INSERT INTO events (title, description, color, date_from, date_to, created_at)
+    VALUES (@title, @description, @color, @date_from, @date_to, @created_at)
+  `);
+  for (const ev of src.prepare("SELECT title, description, color, date_from, date_to, created_at FROM events").all()) {
+    if (destEvent.get(ev.title, ev.date_from, ev.date_to)) continue;
+    insEvent.run(ev);
+    eventsCreated++;
+  }
+  const srcPlays = src.prepare(`
+    SELECT timestamp, track_name, artist_name, album_name, ms_played, media_type, spotify_uri
+    FROM listening_history
+  `).all();
+  const playsInserted = srcPlays.length > 0 ? insertPlays(srcPlays) : 0;
+  return {
+    summary: {
+      entriesImported,
+      duplicatesSkipped,
+      missingFiles,
+      tagsCreated,
+      groupsCreated,
+      peopleCreated,
+      eventsCreated,
+      playsInserted
+    },
+    journalIdsNeedingFile
+  };
+}
 function progressSender$1(sender) {
   return (e) => {
     if (!sender.isDestroyed()) sender.send("backup:progress", e);
@@ -1872,6 +2714,15 @@ function registerBackupHandlers() {
   electron.ipcMain.handle("backup:import", async (event, zipPath, destDir) => {
     return importBackup(zipPath, destDir, progressSender$1(event.sender));
   });
+  electron.ipcMain.handle("backup:prepareMerge", async (event, zipPath) => {
+    return prepareMerge(zipPath, progressSender$1(event.sender));
+  });
+  electron.ipcMain.handle("backup:executeMerge", async (event) => {
+    return executeMerge(progressSender$1(event.sender));
+  });
+  electron.ipcMain.handle("backup:cancelMerge", async () => {
+    return cancelMerge();
+  });
 }
 function sanitizeFileName(name) {
   return name.replace(/[/\\:*?"<>|\u0000-\u001f]/g, "").replace(/\s+/g, " ").replace(/^\.+/, "").trim().slice(0, 200).trim();
@@ -1895,8 +2746,18 @@ function registerEntryHandlers() {
   electron.ipcMain.handle("entries:listAll", (_, opts) => listAllEntries(opts));
   electron.ipcMain.handle("entries:listAllCount", (_, opts) => countAllEntries(opts ?? {}));
   electron.ipcMain.handle("entries:monthBuckets", (_, opts) => getMonthBuckets(opts));
+  electron.ipcMain.handle("entries:recentlyAdded", (_, opts) => getRecentlyAdded(opts));
+  electron.ipcMain.handle("entries:recentlyAddedCount", (_, opts) => countRecentlyAdded(opts ?? {}));
+  electron.ipcMain.handle("entries:references", (_, entryId) => getEntryReferences(entryId));
+  electron.ipcMain.handle("entries:setReferences", (_, entryId, refEntryIds) => setEntryReferences(entryId, refEntryIds));
+  electron.ipcMain.handle("entries:referencedBy", (_, entryId) => getEntryReferencedBy(entryId));
   electron.ipcMain.handle("entries:get", (_, id) => getEntry(id));
-  electron.ipcMain.handle("entries:update", (_, id, patch) => updateEntry(id, patch));
+  electron.ipcMain.handle("entries:update", async (_, id, patch) => {
+    updateEntry(id, patch);
+    if (patch.rich_text_json !== void 0 && getEntry(id)?.type === "journal") {
+      await syncJournalFile(id);
+    }
+  });
   electron.ipcMain.handle("entries:rename", async (_, id, newTitle, renameOnDisk) => {
     const entry = getEntry(id);
     if (!entry) return { ok: false, fileRenamed: false, error: "Entry not found." };
@@ -1995,9 +2856,11 @@ function registerEntryHandlers() {
   });
   electron.ipcMain.handle("library:rescan", async (event) => {
     const sender = event.sender;
-    return rescanLibrary((evt) => {
+    const result = await rescanLibrary((evt) => {
       if (!sender.isDestroyed()) sender.send("library:rescanProgress", evt);
     });
+    result.journalFilesWritten = await backfillJournalFiles();
+    return result;
   });
   electron.ipcMain.handle("entries:delete", async (_, ids) => {
     const entries = ids.map((id) => getEntry(id)).filter(Boolean);
@@ -2020,28 +2883,32 @@ function registerEntryHandlers() {
       }
     }
   });
-  electron.ipcMain.handle("entries:create", (_, data) => insertEntry({
-    type: data.type,
-    timestamp: data.timestamp,
-    title: data.title ?? null,
-    file_path: null,
-    thumbnail_small: null,
-    thumbnail_medium: null,
-    thumbnail_large: null,
-    duration_seconds: null,
-    rich_text_json: data.rich_text_json ?? null,
-    group_id: data.group_id ?? null,
-    needs_date_review: 0,
-    is_missing: 0,
-    content_hash: null,
-    original_file_name: null,
-    import_mode: "copy",
-    volume_id: null,
-    latitude: null,
-    longitude: null,
-    gps_scanned: 0,
-    created_at: Date.now()
-  }));
+  electron.ipcMain.handle("entries:create", async (_, data) => {
+    const id = insertEntry({
+      type: data.type,
+      timestamp: data.timestamp,
+      title: data.title ?? null,
+      file_path: null,
+      thumbnail_small: null,
+      thumbnail_medium: null,
+      thumbnail_large: null,
+      duration_seconds: null,
+      rich_text_json: data.rich_text_json ?? null,
+      group_id: data.group_id ?? null,
+      needs_date_review: 0,
+      is_missing: 0,
+      content_hash: null,
+      original_file_name: null,
+      import_mode: "copy",
+      volume_id: null,
+      latitude: null,
+      longitude: null,
+      gps_scanned: 0,
+      created_at: Date.now()
+    });
+    if (data.type === "journal") await syncJournalFile(id);
+    return id;
+  });
 }
 function listEvents() {
   return getDb().prepare("SELECT * FROM events ORDER BY date_from, title").all();
@@ -3007,243 +3874,6 @@ async function parseSpotifyFile(filePath) {
     });
   }
   return plays;
-}
-let yearlySummariesCache = null;
-const DAY_EXPR = bucketExprSql("day");
-let rollupsEnsured = false;
-function ensureRollups() {
-  if (rollupsEnsured) return;
-  const db2 = getDb();
-  const count = db2.prepare("SELECT COUNT(*) AS c FROM listening_history").get().c;
-  const marker = db2.prepare(`SELECT value FROM listening_rollup_meta WHERE key = 'source_count'`).get();
-  if (!marker || Number(marker.value) !== count) rebuildRollups(count);
-  rollupsEnsured = true;
-}
-function rebuildRollups(count) {
-  const db2 = getDb();
-  db2.transaction(() => {
-    db2.prepare("DELETE FROM listening_daily").run();
-    db2.prepare(`
-      INSERT INTO listening_daily (day, ms_played, play_count)
-      SELECT ${DAY_EXPR} AS day, SUM(ms_played), COUNT(*)
-      FROM listening_history GROUP BY day
-    `).run();
-    db2.prepare("DELETE FROM listening_artist_daily").run();
-    db2.prepare(`
-      INSERT INTO listening_artist_daily (day, artist_name, ms_played, play_count)
-      SELECT ${DAY_EXPR} AS day, artist_name, SUM(ms_played), COUNT(*)
-      FROM listening_history
-      WHERE media_type = 'track' AND artist_name IS NOT NULL
-      GROUP BY day, artist_name
-    `).run();
-    db2.prepare(`INSERT OR REPLACE INTO listening_rollup_meta (key, value) VALUES ('source_count', ?)`).run(String(count));
-  })();
-}
-function insertPlays(plays) {
-  const db2 = getDb();
-  const now = Date.now();
-  const stmt = db2.prepare(`
-    INSERT OR IGNORE INTO listening_history
-      (timestamp, track_name, artist_name, album_name, ms_played, media_type, spotify_uri, created_at)
-    VALUES
-      (@timestamp, @track_name, @artist_name, @album_name, @ms_played, @media_type, @spotify_uri, @created_at)
-  `);
-  const insertMany = db2.transaction((rows) => {
-    let inserted2 = 0;
-    for (const row of rows) {
-      const info = stmt.run({ ...row, created_at: now });
-      if (info.changes > 0) inserted2++;
-    }
-    return inserted2;
-  });
-  const inserted = insertMany(plays);
-  if (inserted > 0) {
-    yearlySummariesCache = null;
-    rollupsEnsured = false;
-  }
-  return inserted;
-}
-function getPlaysForPeriod(from, to) {
-  return getDb().prepare(
-    `SELECT * FROM listening_history WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp`
-  ).all(from, to);
-}
-function getTopArtists(from, to, limit) {
-  ensureRollups();
-  return getDb().prepare(`
-    SELECT artist_name, SUM(ms_played) AS ms_played, SUM(play_count) AS play_count
-    FROM listening_artist_daily
-    WHERE day >= ? AND day < ?
-    GROUP BY artist_name
-    ORDER BY ms_played DESC
-    LIMIT ?
-  `).all(from, to, limit);
-}
-function getListeningHistogram(from, to, zoomLevel) {
-  ensureRollups();
-  const rows = getDb().prepare(
-    `SELECT day, ms_played FROM listening_daily WHERE day >= ? AND day < ? ORDER BY day`
-  ).all(from, to);
-  if (zoomLevel === "day") {
-    return rows.map((r) => ({ bucket_start: r.day, ms_played: r.ms_played }));
-  }
-  const totals = /* @__PURE__ */ new Map();
-  for (const r of rows) {
-    const d = new Date(r.day);
-    const bucket = zoomLevel === "year" ? new Date(d.getFullYear(), 0, 1).getTime() : new Date(d.getFullYear(), d.getMonth(), 1).getTime();
-    totals.set(bucket, (totals.get(bucket) ?? 0) + r.ms_played);
-  }
-  return [...totals.entries()].map(([bucket_start, ms_played]) => ({ bucket_start, ms_played })).sort((a, b) => a.bucket_start - b.bucket_start);
-}
-function getYearlySummaries() {
-  if (yearlySummariesCache !== null) return yearlySummariesCache;
-  ensureRollups();
-  const db2 = getDb();
-  const dailyRows = db2.prepare(`SELECT day, ms_played, play_count FROM listening_daily`).all();
-  const artistDailyRows = db2.prepare(`SELECT day, artist_name, ms_played, play_count FROM listening_artist_daily`).all();
-  const yearExpr = `CAST(strftime('%Y', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER)`;
-  const topTrackRows = db2.prepare(`
-    WITH by_track_year AS (
-      SELECT ${yearExpr} AS year, track_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
-      FROM listening_history
-      WHERE media_type = 'track' AND track_name IS NOT NULL
-      GROUP BY year, track_name, artist_name
-    ), ranked AS (
-      SELECT *, ROW_NUMBER() OVER (PARTITION BY year ORDER BY ms_played DESC) AS rnk
-      FROM by_track_year
-    )
-    SELECT year, track_name, artist_name, ms_played, play_count FROM ranked WHERE rnk = 1
-  `).all();
-  const totalsByYear = /* @__PURE__ */ new Map();
-  const monthlyByYear = /* @__PURE__ */ new Map();
-  for (const r of dailyRows) {
-    const d = new Date(r.day);
-    const year = d.getFullYear();
-    const t = totalsByYear.get(year) ?? { ms_played: 0, play_count: 0 };
-    t.ms_played += r.ms_played;
-    t.play_count += r.play_count;
-    totalsByYear.set(year, t);
-    let monthly = monthlyByYear.get(year);
-    if (!monthly) {
-      monthly = new Array(12).fill(0);
-      monthlyByYear.set(year, monthly);
-    }
-    monthly[d.getMonth()] += r.ms_played;
-  }
-  const artistsByYear = /* @__PURE__ */ new Map();
-  for (const r of artistDailyRows) {
-    const year = new Date(r.day).getFullYear();
-    let byArtist = artistsByYear.get(year);
-    if (!byArtist) {
-      byArtist = /* @__PURE__ */ new Map();
-      artistsByYear.set(year, byArtist);
-    }
-    const a = byArtist.get(r.artist_name) ?? { artist_name: r.artist_name, ms_played: 0, play_count: 0 };
-    a.ms_played += r.ms_played;
-    a.play_count += r.play_count;
-    byArtist.set(r.artist_name, a);
-  }
-  const trackByYear = /* @__PURE__ */ new Map();
-  for (const r of topTrackRows) {
-    trackByYear.set(r.year, { track_name: r.track_name, artist_name: r.artist_name, ms_played: r.ms_played, play_count: r.play_count });
-  }
-  yearlySummariesCache = [...totalsByYear.entries()].sort(([a], [b]) => b - a).map(([year, totals]) => {
-    const topArtists = [...artistsByYear.get(year)?.values() ?? []].sort((a, b) => b.ms_played - a.ms_played).slice(0, 5);
-    return {
-      year,
-      msPlayed: totals.ms_played,
-      playCount: totals.play_count,
-      topArtists,
-      topTrack: trackByYear.get(year) ?? null,
-      monthly: monthlyByYear.get(year) ?? new Array(12).fill(0)
-    };
-  });
-  return yearlySummariesCache;
-}
-function getYearDetail(year) {
-  const db2 = getDb();
-  const from = new Date(year, 0, 1).getTime();
-  const to = new Date(year + 1, 0, 1).getTime();
-  const totals = db2.prepare(`
-    SELECT SUM(ms_played) AS ms_played, COUNT(*) AS play_count,
-           MIN(timestamp) AS first_play, MAX(timestamp) AS last_play
-    FROM listening_history WHERE timestamp >= ? AND timestamp < ?
-  `).get(from, to);
-  if (!totals.play_count) return null;
-  const uniqueCounts = db2.prepare(`
-    SELECT COUNT(DISTINCT artist_name) AS artists, COUNT(DISTINCT track_name) AS tracks, COUNT(DISTINCT album_name) AS albums
-    FROM listening_history WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track'
-  `).get(from, to);
-  const topArtists = db2.prepare(`
-    SELECT artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
-    FROM listening_history
-    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND artist_name IS NOT NULL
-    GROUP BY artist_name ORDER BY ms_played DESC LIMIT 15
-  `).all(from, to);
-  const topTracks = db2.prepare(`
-    SELECT track_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
-    FROM listening_history
-    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND track_name IS NOT NULL
-    GROUP BY track_name, artist_name ORDER BY ms_played DESC LIMIT 15
-  `).all(from, to);
-  const topAlbums = db2.prepare(`
-    SELECT album_name, artist_name, SUM(ms_played) AS ms_played, COUNT(*) AS play_count
-    FROM listening_history
-    WHERE timestamp >= ? AND timestamp < ? AND media_type = 'track' AND album_name IS NOT NULL
-    GROUP BY album_name, artist_name ORDER BY ms_played DESC LIMIT 15
-  `).all(from, to);
-  const monthlyRows = db2.prepare(`
-    SELECT CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
-           SUM(ms_played) AS ms_played
-    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY month
-  `).all(from, to);
-  const monthly = new Array(12).fill(0);
-  for (const r of monthlyRows) monthly[r.month - 1] = r.ms_played;
-  const dowRows = db2.prepare(`
-    SELECT CAST(strftime('%w', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS dow,
-           SUM(ms_played) AS ms_played
-    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY dow
-  `).all(from, to);
-  const dayOfWeek = new Array(7).fill(0);
-  for (const r of dowRows) dayOfWeek[r.dow] = r.ms_played;
-  const hourRows = db2.prepare(`
-    SELECT CAST(strftime('%H', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
-           SUM(ms_played) AS ms_played
-    FROM listening_history WHERE timestamp >= ? AND timestamp < ? GROUP BY hour
-  `).all(from, to);
-  const hourOfDay = new Array(24).fill(0);
-  for (const r of hourRows) hourOfDay[r.hour] = r.ms_played;
-  return {
-    year,
-    msPlayed: totals.ms_played ?? 0,
-    playCount: totals.play_count,
-    uniqueArtists: uniqueCounts.artists,
-    uniqueTracks: uniqueCounts.tracks,
-    uniqueAlbums: uniqueCounts.albums,
-    firstPlay: totals.first_play,
-    lastPlay: totals.last_play,
-    topArtists,
-    topTracks,
-    topAlbums,
-    monthly,
-    dayOfWeek,
-    hourOfDay
-  };
-}
-function getArtistMonthlyForYear(year, artistName) {
-  const db2 = getDb();
-  const from = new Date(year, 0, 1).getTime();
-  const to = new Date(year + 1, 0, 1).getTime();
-  const rows = db2.prepare(`
-    SELECT CAST(strftime('%m', datetime(timestamp/1000, 'unixepoch', 'localtime')) AS INTEGER) AS month,
-           SUM(ms_played) AS ms_played
-    FROM listening_history
-    WHERE timestamp >= ? AND timestamp < ? AND artist_name = ?
-    GROUP BY month
-  `).all(from, to, artistName);
-  const monthly = new Array(12).fill(0);
-  for (const r of rows) monthly[r.month - 1] = r.ms_played;
-  return monthly;
 }
 function registerSpotifyHandlers() {
   electron.ipcMain.handle("spotify:pickExport", async (_event, mode = "files") => {

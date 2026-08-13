@@ -24,7 +24,7 @@ test.describe('Backup & restore', () => {
   test('settings shows the backup section', async ({ appPage: page }) => {
     await page.getByRole('button', { name: 'Settings' }).click()
     await expect(page.getByText('Backup & restore')).toBeVisible()
-    await expect(page.getByText('Full backup')).toBeVisible()
+    await expect(page.getByText('Full backup', { exact: true })).toBeVisible()
     await expect(page.getByText('Metadata-only backup')).toBeVisible()
     await expect(page.getByText('Restore from backup')).toBeVisible()
   })

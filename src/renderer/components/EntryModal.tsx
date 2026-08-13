@@ -7,8 +7,10 @@ import TagEditor from './TagEditor'
 import PeopleEditor from './PeopleEditor'
 import ChangeDateModal from './ChangeDateModal'
 import SetLocationModal from './SetLocationModal'
+import ReferencePickerModal from './ReferencePickerModal'
 import { useVolumeStatus, VolumeBadgeInline } from './VolumeBadge'
 import LocationMiniMap from './LocationMiniMap'
+import { Thumb } from './entryDisplay'
 
 const TYPE_COLORS: Record<string, string> = {
   photo:    '#3b82f6',
@@ -320,15 +322,24 @@ export default function EntryModal() {
   const [entry, setEntry] = useState<Entry | null>(null)
   const [entryTags, setEntryTags] = useState<Tag[]>([])
   const [entryPeople, setEntryPeople] = useState<Person[]>([])
+  const [entryReferences, setEntryReferences] = useState<Entry[]>([])
+  const [referencedBy, setReferencedBy] = useState<Entry[]>([])
   const [periodEntries, setPeriodEntries] = useState<Entry[]>([])
   const [dateModalOpen, setDateModalOpen] = useState(false)
   const [locationModalOpen, setLocationModalOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   useEffect(() => {
-    if (!activeEntryId) { setEntry(null); setEntryTags([]); setEntryPeople([]); return }
+    if (!activeEntryId) {
+      setEntry(null); setEntryTags([]); setEntryPeople([])
+      setEntryReferences([]); setReferencedBy([])
+      return
+    }
     window.api.entries.get(activeEntryId).then(setEntry)
     window.api.tags.forEntry(activeEntryId).then(setEntryTags)
     window.api.people.forEntry(activeEntryId).then(setEntryPeople)
+    window.api.entries.references(activeEntryId).then(setEntryReferences)
+    window.api.entries.referencedBy(activeEntryId).then(setReferencedBy)
   }, [activeEntryId])
 
   const handleTagsChange = useCallback(async (names: string[]) => {
@@ -344,6 +355,22 @@ export default function EntryModal() {
     // Keep the People tab's tagged-counts in sync.
     setPeople(await window.api.people.list())
   }, [activeEntryId, setPeople])
+
+  const handleReferencesChange = useCallback(async (refIds: number[]) => {
+    if (!activeEntryId) return
+    const updated = await window.api.entries.setReferences(activeEntryId, refIds)
+    setEntryReferences(updated)
+  }, [activeEntryId])
+
+  const addReferences = useCallback((added: Entry[]) => {
+    const merged = [...entryReferences]
+    for (const e of added) if (!merged.some(x => x.id === e.id)) merged.push(e)
+    handleReferencesChange(merged.map(e => e.id))
+  }, [entryReferences, handleReferencesChange])
+
+  const removeReference = useCallback((id: number) => {
+    handleReferencesChange(entryReferences.filter(e => e.id !== id).map(e => e.id))
+  }, [entryReferences, handleReferencesChange])
 
   useEffect(() => {
     if (selectedLocation) { setPeriodEntries(selectedLocation); return }
@@ -367,14 +394,14 @@ export default function EntryModal() {
     const onKey = (e: KeyboardEvent) => {
       if (!activeEntryId) return
       // While a child modal is open it owns the keyboard (Escape, typing).
-      if (dateModalOpen || locationModalOpen) return
+      if (dateModalOpen || locationModalOpen || pickerOpen) return
       if (e.key === 'Escape') setActiveEntryId(null)
       if (e.key === 'ArrowLeft') navigatePrev()
       if (e.key === 'ArrowRight') navigateNext()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId, dateModalOpen, locationModalOpen])
+  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId, dateModalOpen, locationModalOpen, pickerOpen])
 
   if (!activeEntryId) return null
 
@@ -478,6 +505,69 @@ export default function EntryModal() {
           </div>
         )}
 
+        {entry?.type === 'journal' && (
+          <div style={{
+            padding: '10px 16px', borderTop: '1px solid var(--border-light)',
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+          }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--text-4)', flexShrink: 0, paddingTop: 4 }}>
+              Files
+            </span>
+            <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              {entryReferences.map(e => (
+                <span
+                  key={e.id}
+                  onClick={() => setActiveEntryId(e.id)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                    fontSize: 11, padding: '2px 6px 2px 3px', borderRadius: 14,
+                    background: 'var(--bg-subtle)', color: 'var(--text)',
+                  }}
+                >
+                  <Thumb entry={e} size={20} />
+                  <span style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {e.title ?? e.type}
+                  </span>
+                  <button
+                    onClick={ev => { ev.stopPropagation(); removeReference(e.id) }}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-4)', fontSize: 12, cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}
+                  >×</button>
+                </span>
+              ))}
+              <button
+                onClick={() => setPickerOpen(true)}
+                style={{
+                  fontSize: 12, padding: '4px 10px', flexShrink: 0,
+                  border: '1px solid var(--border)', borderRadius: 6,
+                  background: 'none', color: 'var(--text-2)', cursor: 'pointer',
+                }}
+              >📎 Reference files</button>
+            </div>
+          </div>
+        )}
+
+        {referencedBy.length > 0 && (
+          <div style={{
+            padding: '10px 16px', borderTop: '1px solid var(--border-light)',
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+          }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--text-4)', flexShrink: 0, paddingTop: 1 }}>
+              Referenced In
+            </span>
+            <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {referencedBy.map(e => (
+                <span
+                  key={e.id}
+                  onClick={() => setActiveEntryId(e.id)}
+                  style={{ fontSize: 12, color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline' }}
+                >
+                  {e.title ?? '(untitled journal)'}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Footer nav */}
         {periodEntries.length > 1 && (
           <div style={{
@@ -532,6 +622,14 @@ export default function EntryModal() {
             window.api.entries.get(entry.id).then(setEntry)
             bumpRefreshKey()
           }}
+        />
+      )}
+
+      {pickerOpen && entry && (
+        <ReferencePickerModal
+          excludeIds={new Set([entry.id, ...entryReferences.map(e => e.id)])}
+          onAdd={addReferences}
+          onClose={() => setPickerOpen(false)}
         />
       )}
     </div>

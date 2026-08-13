@@ -43,6 +43,11 @@ electron.contextBridge.exposeInMainWorld("api", {
     listAll: (opts) => electron.ipcRenderer.invoke("entries:listAll", opts),
     listAllCount: (opts) => electron.ipcRenderer.invoke("entries:listAllCount", opts),
     monthBuckets: (opts) => electron.ipcRenderer.invoke("entries:monthBuckets", opts),
+    recentlyAdded: (opts) => electron.ipcRenderer.invoke("entries:recentlyAdded", opts),
+    recentlyAddedCount: (opts) => electron.ipcRenderer.invoke("entries:recentlyAddedCount", opts),
+    references: (entryId) => electron.ipcRenderer.invoke("entries:references", entryId),
+    setReferences: (entryId, refEntryIds) => electron.ipcRenderer.invoke("entries:setReferences", entryId, refEntryIds),
+    referencedBy: (entryId) => electron.ipcRenderer.invoke("entries:referencedBy", entryId),
     get: (id) => electron.ipcRenderer.invoke("entries:get", id),
     update: (id, patch) => electron.ipcRenderer.invoke("entries:update", id, patch),
     rename: (id, title, renameFile) => electron.ipcRenderer.invoke("entries:rename", id, title, renameFile),
@@ -131,6 +136,9 @@ electron.contextBridge.exposeInMainWorld("api", {
     export: (type) => electron.ipcRenderer.invoke("backup:export", type),
     pickArchive: () => electron.ipcRenderer.invoke("backup:pickArchive"),
     import: (zipPath, destDir) => electron.ipcRenderer.invoke("backup:import", zipPath, destDir),
+    prepareMerge: (zipPath) => electron.ipcRenderer.invoke("backup:prepareMerge", zipPath),
+    executeMerge: () => electron.ipcRenderer.invoke("backup:executeMerge"),
+    cancelMerge: () => electron.ipcRenderer.invoke("backup:cancelMerge"),
     onProgress: (cb) => {
       const handler = (_, data) => cb(data);
       electron.ipcRenderer.on("backup:progress", handler);

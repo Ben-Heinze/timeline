@@ -36,6 +36,7 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_entries_group_id  ON entries(group_id);
     CREATE INDEX IF NOT EXISTS idx_entries_group_timestamp ON entries(group_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
 
     -- People (and animals) you can tag in photos/videos, each with an info sheet.
     CREATE TABLE IF NOT EXISTS people (
@@ -63,6 +64,17 @@ export function initSchema(db: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_entry_people_person ON entry_people(person_id);
+
+    -- Lightweight links from one entry (typically a journal) to other entries it
+    -- calls out — e.g. photos from the same day — without attaching or copying
+    -- the referenced file. Mirrors entry_people.
+    CREATE TABLE IF NOT EXISTS entry_references (
+      entry_id     INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+      ref_entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+      PRIMARY KEY (entry_id, ref_entry_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_entry_references_ref ON entry_references(ref_entry_id);
 
     CREATE TABLE IF NOT EXISTS volumes (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,

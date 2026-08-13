@@ -222,7 +222,7 @@ async function generateVideoThumbnails(
  * on collision. COPYFILE_EXCL makes the claim atomic, so concurrent ingest
  * workers copying identically-named files can't overwrite each other.
  */
-async function copyWithUniqueName(sourcePath: string, destDir: string, fileName: string): Promise<string> {
+export async function copyWithUniqueName(sourcePath: string, destDir: string, fileName: string): Promise<string> {
   const ext = path.extname(fileName)
   const stem = path.basename(fileName, ext)
   for (let n = 1; ; n++) {
@@ -397,7 +397,7 @@ export async function rescanLibrary(
   onProgress: (event: RescanProgressEvent) => void,
 ): Promise<RescanResult> {
   const candidates = getEntriesNeedingBackfill()
-  const result: RescanResult = { scanned: 0, reclassified: 0, thumbnailsAdded: 0, datesUpdated: 0, gpsAdded: 0 }
+  const result: RescanResult = { scanned: 0, reclassified: 0, thumbnailsAdded: 0, datesUpdated: 0, gpsAdded: 0, journalFilesWritten: 0 }
   const total = candidates.length
 
   for (const entry of candidates) {

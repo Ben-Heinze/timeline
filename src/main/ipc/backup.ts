@@ -1,6 +1,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { exportBackup, importBackup } from '../backup'
-import type { BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent } from '../../shared/types'
+import { prepareMerge, executeMerge, cancelMerge } from '../backup/merge'
+import type { BackupExportType, BackupExportResult, BackupImportResult, BackupProgressEvent, MergePreview, MergeResult } from '../../shared/types'
 
 function progressSender(sender: Electron.WebContents): (e: BackupProgressEvent) => void {
   return (e) => {
@@ -35,5 +36,17 @@ export function registerBackupHandlers(): void {
 
   ipcMain.handle('backup:import', async (event, zipPath: string, destDir: string): Promise<BackupImportResult> => {
     return importBackup(zipPath, destDir, progressSender(event.sender))
+  })
+
+  ipcMain.handle('backup:prepareMerge', async (event, zipPath: string): Promise<MergePreview> => {
+    return prepareMerge(zipPath, progressSender(event.sender))
+  })
+
+  ipcMain.handle('backup:executeMerge', async (event): Promise<MergeResult> => {
+    return executeMerge(progressSender(event.sender))
+  })
+
+  ipcMain.handle('backup:cancelMerge', async (): Promise<void> => {
+    return cancelMerge()
   })
 }

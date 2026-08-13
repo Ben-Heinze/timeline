@@ -1,7 +1,10 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { useStore } from '../store/useStore'
+import type { Entry } from '../../shared/types'
+import { Thumb } from './entryDisplay'
+import ReferencePickerModal from './ReferencePickerModal'
 
 function toDatetimeLocal(ms: number): string {
   const d = new Date(ms)
@@ -40,6 +43,15 @@ export default function JournalModal() {
   const [dateStr, setDateStr] = useState(toDatetimeLocal(Date.now()))
   const [groupId, setGroupId] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [referencedEntries, setReferencedEntries] = useState<Entry[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false)
+
+  const isEdit = !!journalEditEntry
+
+  const initialSnapshotRef = useRef<{
+    title: string; dateStr: string; groupId: number | null; contentJSON: string; refIds: string
+  } | null>(null)
 
   const editor = useEditor({
     extensions: [StarterKit],
@@ -49,17 +61,44 @@ export default function JournalModal() {
   useEffect(() => {
     if (!journalModalOpen || !editor) return
     const e = journalEditEntry
-    setTitle(e?.title ?? '')
-    setDateStr(toDatetimeLocal(e?.timestamp ?? Date.now()))
-    setGroupId(e?.group_id ?? null)
+    const nextTitle = e?.title ?? ''
+    const nextDateStr = toDatetimeLocal(e?.timestamp ?? Date.now())
+    const nextGroupId = e?.group_id ?? null
+    setTitle(nextTitle)
+    setDateStr(nextDateStr)
+    setGroupId(nextGroupId)
     if (e?.rich_text_json) {
       try { editor.commands.setContent(JSON.parse(e.rich_text_json)) }
       catch { editor.commands.setContent(e.rich_text_json) }
     } else {
       editor.commands.setContent('')
     }
+    const loadRefs = e?.id ? window.api.entries.references(e.id) : Promise.resolve([])
+    loadRefs.then(refs => {
+      setReferencedEntries(refs)
+      initialSnapshotRef.current = {
+        title: nextTitle,
+        dateStr: nextDateStr,
+        groupId: nextGroupId,
+        contentJSON: JSON.stringify(editor.getJSON()),
+        refIds: JSON.stringify(refs.map((r: Entry) => r.id).sort()),
+      }
+    })
     setTimeout(() => editor.commands.focus(), 60)
   }, [journalModalOpen, journalEditEntry, editor])
+
+  const isDirty = useCallback(() => {
+    if (!editor) return false
+    const snap = initialSnapshotRef.current
+    if (!snap) return false
+    return (
+      title !== snap.title
+      || dateStr !== snap.dateStr
+      || groupId !== snap.groupId
+      || JSON.stringify(editor.getJSON()) !== snap.contentJSON
+      || JSON.stringify(referencedEntries.map(e => e.id).sort()) !== snap.refIds
+    )
+  }, [editor, title, dateStr, groupId, referencedEntries])
 
   const handleSave = useCallback(async () => {
     if (!editor) return
@@ -67,15 +106,17 @@ export default function JournalModal() {
     const rich_text_json = JSON.stringify(editor.getJSON())
     const timestamp = new Date(dateStr).getTime()
     try {
+      let entryId: number
       if (journalEditEntry) {
-        await window.api.entries.update(journalEditEntry.id, {
+        entryId = journalEditEntry.id
+        await window.api.entries.update(entryId, {
           title: title.trim() || null,
           timestamp,
           rich_text_json,
           group_id: groupId,
         })
       } else {
-        await window.api.entries.create({
+        entryId = await window.api.entries.create({
           type: 'journal',
           timestamp,
           title: title.trim() || null,
@@ -83,30 +124,39 @@ export default function JournalModal() {
           group_id: groupId,
         })
       }
+      await window.api.entries.setReferences(entryId, referencedEntries.map(e => e.id))
       bumpRefreshKey()
       closeJournalModal()
     } finally {
       setSaving(false)
     }
-  }, [editor, title, dateStr, groupId, journalEditEntry, bumpRefreshKey, closeJournalModal])
+  }, [editor, title, dateStr, groupId, journalEditEntry, referencedEntries, bumpRefreshKey, closeJournalModal])
+
+  const requestClose = useCallback(() => {
+    if (isDirty()) setConfirmDiscardOpen(true)
+    else closeJournalModal()
+  }, [isDirty, closeJournalModal])
 
   useEffect(() => {
     if (!journalModalOpen) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeJournalModal()
+      if (pickerOpen) return
+      if (confirmDiscardOpen) {
+        if (e.key === 'Escape') setConfirmDiscardOpen(false)
+        return
+      }
+      if (e.key === 'Escape') requestClose()
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') handleSave()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [journalModalOpen, closeJournalModal, handleSave])
+  }, [journalModalOpen, requestClose, handleSave, pickerOpen, confirmDiscardOpen])
 
   if (!journalModalOpen) return null
 
-  const isEdit = !!journalEditEntry
-
   return (
     <div
-      onClick={e => { if (e.target === e.currentTarget) closeJournalModal() }}
+      onClick={e => { if (e.target === e.currentTarget) requestClose() }}
       style={{
         position: 'fixed', inset: 0,
         background: 'rgba(0,0,0,0.55)',
@@ -135,7 +185,7 @@ export default function JournalModal() {
             {isEdit ? 'Edit Entry' : 'New Entry'}
           </span>
           <button
-            onClick={closeJournalModal}
+            onClick={requestClose}
             style={{ background: 'none', border: 'none', color: 'var(--text-4)', fontSize: 18, padding: '2px 6px', borderRadius: 4, cursor: 'pointer' }}
           >✕</button>
         </div>
@@ -180,6 +230,37 @@ export default function JournalModal() {
           </select>
         </div>
 
+        {/* References row */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          padding: '8px 16px', borderBottom: '1px solid var(--border-light)', flexShrink: 0,
+        }}>
+          <button
+            onClick={() => setPickerOpen(true)}
+            style={{
+              fontSize: 12, padding: '4px 10px', flexShrink: 0,
+              border: '1px solid var(--border)', borderRadius: 6,
+              background: 'none', color: 'var(--text-2)', cursor: 'pointer',
+            }}
+          >📎 Reference files</button>
+          {referencedEntries.map(e => (
+            <span key={e.id} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              fontSize: 11, padding: '2px 6px 2px 3px', borderRadius: 14,
+              background: 'var(--bg-subtle)', color: 'var(--text)',
+            }}>
+              <Thumb entry={e} size={20} />
+              <span style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {e.title ?? e.type}
+              </span>
+              <button
+                onClick={() => setReferencedEntries(prev => prev.filter(x => x.id !== e.id))}
+                style={{ background: 'none', border: 'none', color: 'var(--text-4)', fontSize: 12, cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}
+              >×</button>
+            </span>
+          ))}
+        </div>
+
         {/* Toolbar */}
         {editor && (
           <div style={{
@@ -221,7 +302,7 @@ export default function JournalModal() {
         }}>
           <span style={{ fontSize: 12, color: 'var(--text-4)', marginRight: 'auto' }}>⌘↵ to save · Esc to cancel</span>
           <button
-            onClick={closeJournalModal}
+            onClick={requestClose}
             style={{
               padding: '6px 16px', fontSize: 13,
               background: 'none', border: '1px solid var(--border)',
@@ -240,6 +321,72 @@ export default function JournalModal() {
           >{saving ? 'Saving…' : isEdit ? 'Save' : 'Create'}</button>
         </div>
       </div>
+
+      {pickerOpen && (
+        <ReferencePickerModal
+          excludeIds={new Set([
+            ...(journalEditEntry ? [journalEditEntry.id] : []),
+            ...referencedEntries.map(e => e.id),
+          ])}
+          onAdd={added => setReferencedEntries(prev => [...prev, ...added])}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+
+      {confirmDiscardOpen && (
+        <div
+          onClick={e => { if (e.target === e.currentTarget) setConfirmDiscardOpen(false) }}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000,
+          }}
+        >
+          <div style={{
+            width: 360, maxWidth: '90vw',
+            background: 'var(--bg-surface)',
+            borderRadius: 12, border: '1px solid var(--border)',
+            boxShadow: '0 8px 40px rgba(0,0,0,0.2)',
+            padding: 20,
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6, color: 'var(--text)' }}>
+              Unsaved changes
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 18 }}>
+              {isEdit ? 'Save your changes to this entry before closing?' : 'Save this entry before closing?'}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                onClick={() => { setConfirmDiscardOpen(false); closeJournalModal() }}
+                style={{
+                  padding: '6px 14px', fontSize: 13,
+                  background: 'none', border: '1px solid var(--border)',
+                  borderRadius: 6, color: '#ef4444', cursor: 'pointer',
+                }}
+              >Discard</button>
+              <button
+                onClick={() => setConfirmDiscardOpen(false)}
+                style={{
+                  padding: '6px 14px', fontSize: 13,
+                  background: 'none', border: '1px solid var(--border)',
+                  borderRadius: 6, color: 'var(--text-2)', cursor: 'pointer',
+                }}
+              >Cancel</button>
+              <button
+                onClick={() => { setConfirmDiscardOpen(false); handleSave() }}
+                disabled={saving}
+                style={{
+                  padding: '6px 16px', fontSize: 13, fontWeight: 600,
+                  background: saving ? 'var(--border-strong)' : 'var(--text)',
+                  border: 'none', borderRadius: 6, color: 'var(--bg-app)',
+                  cursor: saving ? 'default' : 'pointer',
+                }}
+              >{isEdit ? 'Save changes' : 'Create'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -25,6 +25,7 @@ const HEADER_ROW_HEIGHT = 34
 const OVERSCAN_PX = 600
 const PAGE_SIZE = 300
 const FETCH_OVERSCAN_ITEMS = PAGE_SIZE
+const RECENTLY_ADDED_LIMIT = 60
 function gridRowHeight(viewMode: Exclude<ViewMode, 'list'>): number {
   return THUMB_SIZE[viewMode] + 58 // thumb + label lines + cell padding, with a little headroom
 }
@@ -105,6 +106,13 @@ export default function FilesView() {
 
   const [total, setTotal] = useState(0)
   const [monthBuckets, setMonthBuckets] = useState<MonthBucket[]>([])
+
+  // "Recently Added" (files added to the library in the last 30 days, by
+  // created_at, independent of sort/filter and of the files' own dates) is a
+  // small pinned strip fetched separately from the virtualized list below.
+  const [recentEntries, setRecentEntries] = useState<Entry[]>([])
+  const [recentTotal, setRecentTotal] = useState(0)
+  const [recentCollapsed, setRecentCollapsed] = useState(false)
   // Loaded pages of entries, keyed by page index, plus a reverse id -> global-index
   // lookup (used for shift-range selection) — populated on demand, never all at once.
   const pageCacheRef = useRef<Map<number, Entry[]>>(new Map())
@@ -165,13 +173,23 @@ export default function FilesView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey])
 
+  // Independent of sortBy/sortDir/viewMode: always the last 30 days of imports,
+  // newest first. Re-fetched whenever the group scope changes or an action
+  // (import, delete, edit) bumps refreshKey.
+  useEffect(() => {
+    const groupId = selectedGroupId ?? undefined
+    window.api.entries.recentlyAdded({ groupId, limit: RECENTLY_ADDED_LIMIT }).then(setRecentEntries)
+    window.api.entries.recentlyAddedCount({ groupId }).then(setRecentTotal)
+  }, [selectedGroupId, refreshKey])
+
   const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(
     useMemo(() => {
       const out: Entry[] = []
       for (const page of pageCacheRef.current.values()) out.push(...page)
+      out.push(...recentEntries)
       return out
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [cacheVersion])
+    }, [cacheVersion, recentEntries])
   )
 
   // Stable handlers (live state read via refs) so the memoized rows below only
@@ -378,6 +396,46 @@ export default function FilesView() {
           {total} {total === 1 ? 'item' : 'items'}
         </span>
       </div>
+
+      {/* Recently Added */}
+      {recentTotal > 0 && (
+        <div style={{ borderBottom: '1px solid var(--border-light)', background: 'var(--bg-surface)', flexShrink: 0 }}>
+          <header
+            onClick={() => setRecentCollapsed(c => !c)}
+            title={recentCollapsed ? 'Expand' : 'Collapse'}
+            style={{
+              padding: '10px 14px 6px', fontSize: 12, fontWeight: 700,
+              color: 'var(--text-2)', letterSpacing: 0.4,
+              cursor: 'pointer', userSelect: 'none',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            <span style={{
+              display: 'inline-block', fontSize: 10, color: 'var(--text-4)',
+              transform: recentCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+              transition: 'transform 0.12s ease',
+            }}>▾</span>
+            Recently Added
+            <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>{recentTotal}</span>
+          </header>
+          {!recentCollapsed && (
+            <div style={{ display: 'flex', gap: ROW_GAP, overflowX: 'auto', padding: `0 ${H_PADDING}px 10px` }}>
+              {recentEntries.map(entry => (
+                <div key={entry.id} style={{ flexShrink: 0 }}>
+                  <GridCell
+                    entry={entry}
+                    selected={selectedIds.has(entry.id)}
+                    onSelect={onSelect}
+                    onActivate={onActivate}
+                    onContextMenu={onEntryContextMenu}
+                    size={THUMB_SIZE.small}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Body */}
       <div ref={scrollRef} onScroll={onScroll} style={{ flex: 1, overflowY: 'auto', minHeight: 0, position: 'relative' }}>

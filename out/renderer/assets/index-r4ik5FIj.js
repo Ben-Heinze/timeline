@@ -342540,6 +342540,7 @@ const HEADER_ROW_HEIGHT = 34;
 const OVERSCAN_PX$1 = 600;
 const PAGE_SIZE$1 = 300;
 const FETCH_OVERSCAN_ITEMS = PAGE_SIZE$1;
+const RECENTLY_ADDED_LIMIT = 60;
 function gridRowHeight(viewMode) {
   return THUMB_SIZE[viewMode] + 58;
 }
@@ -342601,6 +342602,9 @@ function FilesView() {
   }, []);
   const [total, setTotal] = reactExports.useState(0);
   const [monthBuckets, setMonthBuckets] = reactExports.useState([]);
+  const [recentEntries, setRecentEntries] = reactExports.useState([]);
+  const [recentTotal, setRecentTotal] = reactExports.useState(0);
+  const [recentCollapsed, setRecentCollapsed] = reactExports.useState(false);
   const pageCacheRef = reactExports.useRef(/* @__PURE__ */ new Map());
   const idToIndexRef = reactExports.useRef(/* @__PURE__ */ new Map());
   const inFlightRef = reactExports.useRef(/* @__PURE__ */ new Set());
@@ -342644,12 +342648,18 @@ function FilesView() {
     }
     reload();
   }, [refreshKey]);
+  reactExports.useEffect(() => {
+    const groupId = selectedGroupId ?? void 0;
+    window.api.entries.recentlyAdded({ groupId, limit: RECENTLY_ADDED_LIMIT }).then(setRecentEntries);
+    window.api.entries.recentlyAddedCount({ groupId }).then(setRecentTotal);
+  }, [selectedGroupId, refreshKey]);
   const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(
     reactExports.useMemo(() => {
       const out = [];
       for (const page of pageCacheRef.current.values()) out.push(...page);
+      out.push(...recentEntries);
       return out;
-    }, [cacheVersion])
+    }, [cacheVersion, recentEntries])
   );
   const selectedIdsRef = reactExports.useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
@@ -342829,6 +342839,49 @@ function FilesView() {
         " ",
         total === 1 ? "item" : "items"
       ] })
+    ] }),
+    recentTotal > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { borderBottom: "1px solid var(--border-light)", background: "var(--bg-surface)", flexShrink: 0 }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "header",
+        {
+          onClick: () => setRecentCollapsed((c) => !c),
+          title: recentCollapsed ? "Expand" : "Collapse",
+          style: {
+            padding: "10px 14px 6px",
+            fontSize: 12,
+            fontWeight: 700,
+            color: "var(--text-2)",
+            letterSpacing: 0.4,
+            cursor: "pointer",
+            userSelect: "none",
+            display: "flex",
+            alignItems: "center",
+            gap: 6
+          },
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+              display: "inline-block",
+              fontSize: 10,
+              color: "var(--text-4)",
+              transform: recentCollapsed ? "rotate(-90deg)" : "rotate(0deg)",
+              transition: "transform 0.12s ease"
+            }, children: "▾" }),
+            "Recently Added",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--text-4)", fontWeight: 400 }, children: recentTotal })
+          ]
+        }
+      ),
+      !recentCollapsed && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", gap: ROW_GAP, overflowX: "auto", padding: `0 ${H_PADDING$1}px 10px` }, children: recentEntries.map((entry) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flexShrink: 0 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+        GridCell,
+        {
+          entry,
+          selected: selectedIds.has(entry.id),
+          onSelect,
+          onActivate,
+          onContextMenu: onEntryContextMenu,
+          size: THUMB_SIZE.small
+        }
+      ) }, entry.id)) })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { ref: scrollRef, onScroll, style: { flex: 1, overflowY: "auto", minHeight: 0, position: "relative" }, children: total === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
       height: "100%",
@@ -363106,6 +363159,191 @@ const StarterKit = Extension.create({
     return extensions;
   }
 });
+const PAGE_LIMIT = 60;
+function ReferencePickerModal({ excludeIds, onAdd, onClose }) {
+  const [query, setQuery] = reactExports.useState("");
+  const [results, setResults] = reactExports.useState([]);
+  const [loading, setLoading] = reactExports.useState(true);
+  const [selected, setSelected] = reactExports.useState(/* @__PURE__ */ new Map());
+  const inputRef = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  reactExports.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const t2 = setTimeout(() => {
+      window.api.entries.search({ text: query.trim() || void 0 }, { limit: PAGE_LIMIT, offset: 0 }).then((res) => {
+        if (!cancelled) {
+          setResults(res);
+          setLoading(false);
+        }
+      });
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t2);
+    };
+  }, [query]);
+  const toggle = reactExports.useCallback((entry) => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(entry.id)) next.delete(entry.id);
+      else next.set(entry.id, entry);
+      return next;
+    });
+  }, []);
+  reactExports.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const visible = results.filter((e) => !excludeIds.has(e.id));
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      onClick: (e) => {
+        if (e.target === e.currentTarget) onClose();
+      },
+      style: {
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 300
+      },
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        width: 480,
+        maxWidth: "90vw",
+        maxHeight: "80vh",
+        background: "var(--bg-surface)",
+        borderRadius: 12,
+        border: "1px solid var(--border)",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.14)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden"
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { padding: "12px 16px", borderBottom: "1px solid var(--border-light)", flexShrink: 0 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 8 }, children: "Reference Files" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              ref: inputRef,
+              value: query,
+              onChange: (e) => setQuery(e.target.value),
+              placeholder: "Search library…",
+              style: {
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "7px 10px",
+                fontSize: 13,
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                background: "var(--bg-muted)",
+                outline: "none",
+                color: "var(--text)"
+              }
+            }
+          )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, overflowY: "auto", padding: 12, minHeight: 200 }, children: loading && visible.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { textAlign: "center", color: "var(--text-4)", fontSize: 13, padding: 24 }, children: "Searching…" }) : visible.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { textAlign: "center", color: "var(--text-4)", fontSize: 13, padding: 24 }, children: "No matching files" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: visible.map((entry) => {
+          const isSelected = selected.has(entry.id);
+          return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "div",
+            {
+              onClick: () => toggle(entry),
+              title: entry.title ?? entry.type,
+              style: {
+                width: 100,
+                padding: 8,
+                borderRadius: 8,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 4,
+                cursor: "pointer",
+                userSelect: "none",
+                background: isSelected ? "var(--bg-entry-sel)" : "transparent",
+                outline: isSelected ? "2px solid var(--accent)" : "2px solid transparent"
+              },
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(Thumb, { entry, size: 84 }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: {
+                  fontSize: 11,
+                  color: "var(--text)",
+                  maxWidth: 96,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap"
+                }, children: entry.title ?? entry.type })
+              ]
+            },
+            entry.id
+          );
+        }) }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "10px 16px",
+          borderTop: "1px solid var(--border-light)",
+          flexShrink: 0,
+          background: "var(--bg-muted)"
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-4)", marginRight: "auto" }, children: [
+            selected.size,
+            " selected"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              onClick: onClose,
+              style: {
+                padding: "6px 16px",
+                fontSize: 13,
+                background: "none",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                color: "var(--text-2)",
+                cursor: "pointer"
+              },
+              children: "Cancel"
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "button",
+            {
+              onClick: () => {
+                onAdd([...selected.values()]);
+                onClose();
+              },
+              disabled: selected.size === 0,
+              style: {
+                padding: "6px 20px",
+                fontSize: 13,
+                fontWeight: 600,
+                background: selected.size ? "var(--text)" : "var(--border-strong)",
+                border: "none",
+                borderRadius: 6,
+                color: selected.size ? "var(--bg-app)" : "var(--text-4)",
+                cursor: selected.size ? "pointer" : "default"
+              },
+              children: [
+                "Add",
+                selected.size ? ` (${selected.size})` : ""
+              ]
+            }
+          )
+        ] })
+      ] })
+    }
+  );
+}
 const OCEAN = "#aad3df";
 const LAND_STYLE = { fillColor: "#ece7d8", fillOpacity: 1, color: "#998f7a", weight: 0.8 };
 const PIN_STYLE = { weight: 2, color: "#fff", fillColor: "#3b82f6", fillOpacity: 1 };
@@ -363439,19 +363677,26 @@ function EntryModal() {
   const [entry, setEntry] = reactExports.useState(null);
   const [entryTags, setEntryTags] = reactExports.useState([]);
   const [entryPeople, setEntryPeople] = reactExports.useState([]);
+  const [entryReferences, setEntryReferences] = reactExports.useState([]);
+  const [referencedBy, setReferencedBy] = reactExports.useState([]);
   const [periodEntries, setPeriodEntries] = reactExports.useState([]);
   const [dateModalOpen, setDateModalOpen] = reactExports.useState(false);
   const [locationModalOpen, setLocationModalOpen] = reactExports.useState(false);
+  const [pickerOpen, setPickerOpen] = reactExports.useState(false);
   reactExports.useEffect(() => {
     if (!activeEntryId) {
       setEntry(null);
       setEntryTags([]);
       setEntryPeople([]);
+      setEntryReferences([]);
+      setReferencedBy([]);
       return;
     }
     window.api.entries.get(activeEntryId).then(setEntry);
     window.api.tags.forEntry(activeEntryId).then(setEntryTags);
     window.api.people.forEntry(activeEntryId).then(setEntryPeople);
+    window.api.entries.references(activeEntryId).then(setEntryReferences);
+    window.api.entries.referencedBy(activeEntryId).then(setReferencedBy);
   }, [activeEntryId]);
   const handleTagsChange = reactExports.useCallback(async (names) => {
     if (!activeEntryId) return;
@@ -363464,6 +363709,19 @@ function EntryModal() {
     setEntryPeople(updated);
     setPeople(await window.api.people.list());
   }, [activeEntryId, setPeople]);
+  const handleReferencesChange = reactExports.useCallback(async (refIds) => {
+    if (!activeEntryId) return;
+    const updated = await window.api.entries.setReferences(activeEntryId, refIds);
+    setEntryReferences(updated);
+  }, [activeEntryId]);
+  const addReferences = reactExports.useCallback((added) => {
+    const merged = [...entryReferences];
+    for (const e of added) if (!merged.some((x2) => x2.id === e.id)) merged.push(e);
+    handleReferencesChange(merged.map((e) => e.id));
+  }, [entryReferences, handleReferencesChange]);
+  const removeReference = reactExports.useCallback((id2) => {
+    handleReferencesChange(entryReferences.filter((e) => e.id !== id2).map((e) => e.id));
+  }, [entryReferences, handleReferencesChange]);
   reactExports.useEffect(() => {
     if (selectedLocation) {
       setPeriodEntries(selectedLocation);
@@ -363487,14 +363745,14 @@ function EntryModal() {
   reactExports.useEffect(() => {
     const onKey = (e) => {
       if (!activeEntryId) return;
-      if (dateModalOpen || locationModalOpen) return;
+      if (dateModalOpen || locationModalOpen || pickerOpen) return;
       if (e.key === "Escape") setActiveEntryId(null);
       if (e.key === "ArrowLeft") navigatePrev();
       if (e.key === "ArrowRight") navigateNext();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId, dateModalOpen, locationModalOpen]);
+  }, [activeEntryId, navigatePrev, navigateNext, setActiveEntryId, dateModalOpen, locationModalOpen, pickerOpen]);
   if (!activeEntryId) return null;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "div",
@@ -363597,6 +363855,85 @@ function EntryModal() {
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0 }, children: "People" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(PeopleEditor, { people: entryPeople, onChange: handlePeopleChange }) })
           ] }),
+          entry?.type === "journal" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            padding: "10px 16px",
+            borderTop: "1px solid var(--border-light)",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0, paddingTop: 4 }, children: "Files" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }, children: [
+              entryReferences.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "span",
+                {
+                  onClick: () => setActiveEntryId(e.id),
+                  style: {
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    cursor: "pointer",
+                    fontSize: 11,
+                    padding: "2px 6px 2px 3px",
+                    borderRadius: 14,
+                    background: "var(--bg-subtle)",
+                    color: "var(--text)"
+                  },
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(Thumb, { entry: e, size: 20 }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: e.title ?? e.type }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "button",
+                      {
+                        onClick: (ev) => {
+                          ev.stopPropagation();
+                          removeReference(e.id);
+                        },
+                        style: { background: "none", border: "none", color: "var(--text-4)", fontSize: 12, cursor: "pointer", padding: "0 2px", lineHeight: 1 },
+                        children: "×"
+                      }
+                    )
+                  ]
+                },
+                e.id
+              )),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "button",
+                {
+                  onClick: () => setPickerOpen(true),
+                  style: {
+                    fontSize: 12,
+                    padding: "4px 10px",
+                    flexShrink: 0,
+                    border: "1px solid var(--border)",
+                    borderRadius: 6,
+                    background: "none",
+                    color: "var(--text-2)",
+                    cursor: "pointer"
+                  },
+                  children: "📎 Reference files"
+                }
+              )
+            ] })
+          ] }),
+          referencedBy.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            padding: "10px 16px",
+            borderTop: "1px solid var(--border-light)",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0, paddingTop: 1 }, children: "Referenced In" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, display: "flex", flexWrap: "wrap", gap: 8 }, children: referencedBy.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "span",
+              {
+                onClick: () => setActiveEntryId(e.id),
+                style: { fontSize: 12, color: "var(--accent)", cursor: "pointer", textDecoration: "underline" },
+                children: e.title ?? "(untitled journal)"
+              },
+              e.id
+            )) })
+          ] }),
           periodEntries.length > 1 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
             display: "flex",
             alignItems: "center",
@@ -363664,6 +364001,14 @@ function EntryModal() {
               window.api.entries.get(entry.id).then(setEntry);
               bumpRefreshKey();
             }
+          }
+        ),
+        pickerOpen && entry && /* @__PURE__ */ jsxRuntimeExports.jsx(
+          ReferencePickerModal,
+          {
+            excludeIds: /* @__PURE__ */ new Set([entry.id, ...entryReferences.map((e) => e.id)]),
+            onAdd: addReferences,
+            onClose: () => setPickerOpen(false)
           }
         )
       ]
@@ -364510,6 +364855,11 @@ function JournalModal() {
   const [dateStr, setDateStr] = reactExports.useState(toDatetimeLocal(Date.now()));
   const [groupId, setGroupId] = reactExports.useState(null);
   const [saving, setSaving] = reactExports.useState(false);
+  const [referencedEntries, setReferencedEntries] = reactExports.useState([]);
+  const [pickerOpen, setPickerOpen] = reactExports.useState(false);
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = reactExports.useState(false);
+  const isEdit = !!journalEditEntry;
+  const initialSnapshotRef = reactExports.useRef(null);
   const editor = useEditor({
     extensions: [StarterKit],
     content: ""
@@ -364517,9 +364867,12 @@ function JournalModal() {
   reactExports.useEffect(() => {
     if (!journalModalOpen || !editor) return;
     const e = journalEditEntry;
-    setTitle(e?.title ?? "");
-    setDateStr(toDatetimeLocal(e?.timestamp ?? Date.now()));
-    setGroupId(e?.group_id ?? null);
+    const nextTitle = e?.title ?? "";
+    const nextDateStr = toDatetimeLocal(e?.timestamp ?? Date.now());
+    const nextGroupId = e?.group_id ?? null;
+    setTitle(nextTitle);
+    setDateStr(nextDateStr);
+    setGroupId(nextGroupId);
     if (e?.rich_text_json) {
       try {
         editor.commands.setContent(JSON.parse(e.rich_text_json));
@@ -364529,23 +364882,42 @@ function JournalModal() {
     } else {
       editor.commands.setContent("");
     }
+    const loadRefs = e?.id ? window.api.entries.references(e.id) : Promise.resolve([]);
+    loadRefs.then((refs) => {
+      setReferencedEntries(refs);
+      initialSnapshotRef.current = {
+        title: nextTitle,
+        dateStr: nextDateStr,
+        groupId: nextGroupId,
+        contentJSON: JSON.stringify(editor.getJSON()),
+        refIds: JSON.stringify(refs.map((r2) => r2.id).sort())
+      };
+    });
     setTimeout(() => editor.commands.focus(), 60);
   }, [journalModalOpen, journalEditEntry, editor]);
+  const isDirty = reactExports.useCallback(() => {
+    if (!editor) return false;
+    const snap = initialSnapshotRef.current;
+    if (!snap) return false;
+    return title !== snap.title || dateStr !== snap.dateStr || groupId !== snap.groupId || JSON.stringify(editor.getJSON()) !== snap.contentJSON || JSON.stringify(referencedEntries.map((e) => e.id).sort()) !== snap.refIds;
+  }, [editor, title, dateStr, groupId, referencedEntries]);
   const handleSave = reactExports.useCallback(async () => {
     if (!editor) return;
     setSaving(true);
     const rich_text_json = JSON.stringify(editor.getJSON());
     const timestamp = new Date(dateStr).getTime();
     try {
+      let entryId;
       if (journalEditEntry) {
-        await window.api.entries.update(journalEditEntry.id, {
+        entryId = journalEditEntry.id;
+        await window.api.entries.update(entryId, {
           title: title.trim() || null,
           timestamp,
           rich_text_json,
           group_id: groupId
         });
       } else {
-        await window.api.entries.create({
+        entryId = await window.api.entries.create({
           type: "journal",
           timestamp,
           title: title.trim() || null,
@@ -364553,28 +364925,37 @@ function JournalModal() {
           group_id: groupId
         });
       }
+      await window.api.entries.setReferences(entryId, referencedEntries.map((e) => e.id));
       bumpRefreshKey();
       closeJournalModal();
     } finally {
       setSaving(false);
     }
-  }, [editor, title, dateStr, groupId, journalEditEntry, bumpRefreshKey, closeJournalModal]);
+  }, [editor, title, dateStr, groupId, journalEditEntry, referencedEntries, bumpRefreshKey, closeJournalModal]);
+  const requestClose = reactExports.useCallback(() => {
+    if (isDirty()) setConfirmDiscardOpen(true);
+    else closeJournalModal();
+  }, [isDirty, closeJournalModal]);
   reactExports.useEffect(() => {
     if (!journalModalOpen) return;
     const handler = (e) => {
-      if (e.key === "Escape") closeJournalModal();
+      if (pickerOpen) return;
+      if (confirmDiscardOpen) {
+        if (e.key === "Escape") setConfirmDiscardOpen(false);
+        return;
+      }
+      if (e.key === "Escape") requestClose();
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") handleSave();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [journalModalOpen, closeJournalModal, handleSave]);
+  }, [journalModalOpen, requestClose, handleSave, pickerOpen, confirmDiscardOpen]);
   if (!journalModalOpen) return null;
-  const isEdit = !!journalEditEntry;
-  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "div",
     {
       onClick: (e) => {
-        if (e.target === e.currentTarget) closeJournalModal();
+        if (e.target === e.currentTarget) requestClose();
       },
       style: {
         position: "fixed",
@@ -364585,189 +364966,337 @@ function JournalModal() {
         justifyContent: "center",
         zIndex: 200
       },
-      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-        width: 660,
-        maxWidth: "92vw",
-        maxHeight: "88vh",
-        background: "var(--bg-surface)",
-        borderRadius: 12,
-        border: "1px solid var(--border)",
-        boxShadow: "0 8px 40px rgba(0,0,0,0.14)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden"
-      }, children: [
+      children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          width: 660,
+          maxWidth: "92vw",
+          maxHeight: "88vh",
+          background: "var(--bg-surface)",
+          borderRadius: 12,
+          border: "1px solid var(--border)",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.14)",
           display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "12px 16px",
-          borderBottom: "1px solid var(--border-light)",
-          flexShrink: 0
+          flexDirection: "column",
+          overflow: "hidden"
         }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: 0.8,
-            textTransform: "uppercase",
-            background: "#ec4899",
-            color: "#fff",
-            borderRadius: 4,
-            padding: "2px 6px"
-          }, children: "Journal" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text-2)", flex: 1 }, children: isEdit ? "Edit Entry" : "New Entry" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              onClick: closeJournalModal,
-              style: { background: "none", border: "none", color: "var(--text-4)", fontSize: 18, padding: "2px 6px", borderRadius: 4, cursor: "pointer" },
-              children: "✕"
-            }
-          )
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-          display: "grid",
-          gridTemplateColumns: "1fr auto auto",
-          gap: 8,
-          padding: "10px 16px",
-          borderBottom: "1px solid var(--border-light)",
-          flexShrink: 0,
-          alignItems: "center"
-        }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "input",
-            {
-              value: title,
-              onChange: (e) => setTitle(e.target.value),
-              placeholder: "Title (optional)",
-              style: {
-                padding: "6px 10px",
-                fontSize: 14,
-                fontWeight: 500,
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                background: "var(--bg-muted)",
-                outline: "none",
-                color: "var(--text)"
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "12px 16px",
+            borderBottom: "1px solid var(--border-light)",
+            flexShrink: 0
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: {
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.8,
+              textTransform: "uppercase",
+              background: "#ec4899",
+              color: "#fff",
+              borderRadius: 4,
+              padding: "2px 6px"
+            }, children: "Journal" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 14, fontWeight: 600, color: "var(--text-2)", flex: 1 }, children: isEdit ? "Edit Entry" : "New Entry" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: requestClose,
+                style: { background: "none", border: "none", color: "var(--text-4)", fontSize: 18, padding: "2px 6px", borderRadius: 4, cursor: "pointer" },
+                children: "✕"
               }
+            )
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            display: "grid",
+            gridTemplateColumns: "1fr auto auto",
+            gap: 8,
+            padding: "10px 16px",
+            borderBottom: "1px solid var(--border-light)",
+            flexShrink: 0,
+            alignItems: "center"
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                value: title,
+                onChange: (e) => setTitle(e.target.value),
+                placeholder: "Title (optional)",
+                style: {
+                  padding: "6px 10px",
+                  fontSize: 14,
+                  fontWeight: 500,
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  background: "var(--bg-muted)",
+                  outline: "none",
+                  color: "var(--text)"
+                }
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "datetime-local",
+                value: dateStr,
+                onChange: (e) => setDateStr(e.target.value),
+                style: {
+                  padding: "6px 8px",
+                  fontSize: 13,
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  background: "var(--bg-muted)",
+                  outline: "none",
+                  color: "var(--text-2)"
+                }
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "select",
+              {
+                value: groupId ?? "",
+                onChange: (e) => setGroupId(e.target.value ? Number(e.target.value) : null),
+                style: {
+                  padding: "6px 8px",
+                  fontSize: 13,
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  background: "var(--bg-muted)",
+                  color: "var(--text-2)"
+                },
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "No group" }),
+                  groups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: g.id, children: g.name }, g.id))
+                ]
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            padding: "8px 16px",
+            borderBottom: "1px solid var(--border-light)",
+            flexShrink: 0
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: () => setPickerOpen(true),
+                style: {
+                  fontSize: 12,
+                  padding: "4px 10px",
+                  flexShrink: 0,
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  background: "none",
+                  color: "var(--text-2)",
+                  cursor: "pointer"
+                },
+                children: "📎 Reference files"
+              }
+            ),
+            referencedEntries.map((e) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: {
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              fontSize: 11,
+              padding: "2px 6px 2px 3px",
+              borderRadius: 14,
+              background: "var(--bg-subtle)",
+              color: "var(--text)"
+            }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(Thumb, { entry: e, size: 20 }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: e.title ?? e.type }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "button",
+                {
+                  onClick: () => setReferencedEntries((prev) => prev.filter((x2) => x2.id !== e.id)),
+                  style: { background: "none", border: "none", color: "var(--text-4)", fontSize: 12, cursor: "pointer", padding: "0 2px", lineHeight: 1 },
+                  children: "×"
+                }
+              )
+            ] }, e.id))
+          ] }),
+          editor && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            padding: "5px 10px",
+            borderBottom: "1px solid var(--border-light)",
+            flexShrink: 0,
+            background: "var(--bg-muted)"
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("bold"), onPress: () => editor.chain().focus().toggleBold().run(), title: "Bold", children: /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "B" }) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("italic"), onPress: () => editor.chain().focus().toggleItalic().run(), title: "Italic", children: /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "I" }) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("strike"), onPress: () => editor.chain().focus().toggleStrike().run(), title: "Strikethrough", children: /* @__PURE__ */ jsxRuntimeExports.jsx("s", { children: "S" }) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "var(--border)", margin: "2px 4px", alignSelf: "stretch" } }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("heading", { level: 1 }), onPress: () => editor.chain().focus().toggleHeading({ level: 1 }).run(), title: "Heading 1", children: "H1" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("heading", { level: 2 }), onPress: () => editor.chain().focus().toggleHeading({ level: 2 }).run(), title: "Heading 2", children: "H2" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "var(--border)", margin: "2px 4px", alignSelf: "stretch" } }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("bulletList"), onPress: () => editor.chain().focus().toggleBulletList().run(), title: "Bullet list", children: "• List" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("orderedList"), onPress: () => editor.chain().focus().toggleOrderedList().run(), title: "Numbered list", children: "1. List" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "var(--border)", margin: "2px 4px", alignSelf: "stretch" } }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("blockquote"), onPress: () => editor.chain().focus().toggleBlockquote().run(), title: "Blockquote", children: '"' }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("code"), onPress: () => editor.chain().focus().toggleCode().run(), title: "Inline code", children: "`" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { flex: 1 } }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: false, onPress: () => editor.chain().focus().undo().run(), title: "Undo", children: "↩" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: false, onPress: () => editor.chain().focus().redo().run(), title: "Redo", children: "↪" })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "div",
+            {
+              style: { flex: 1, overflowY: "auto", padding: "16px 20px", cursor: "text", minHeight: 0 },
+              onClick: () => editor?.commands.focus(),
+              children: /* @__PURE__ */ jsxRuntimeExports.jsx(EditorContent, { editor })
             }
           ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "input",
-            {
-              type: "datetime-local",
-              value: dateStr,
-              onChange: (e) => setDateStr(e.target.value),
-              style: {
-                padding: "6px 8px",
-                fontSize: 13,
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                background: "var(--bg-muted)",
-                outline: "none",
-                color: "var(--text-2)"
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "10px 16px",
+            borderTop: "1px solid var(--border-light)",
+            flexShrink: 0,
+            background: "var(--bg-muted)"
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 12, color: "var(--text-4)", marginRight: "auto" }, children: "⌘↵ to save · Esc to cancel" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: requestClose,
+                style: {
+                  padding: "6px 16px",
+                  fontSize: 13,
+                  background: "none",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  color: "var(--text-2)",
+                  cursor: "pointer"
+                },
+                children: "Cancel"
               }
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs(
-            "select",
-            {
-              value: groupId ?? "",
-              onChange: (e) => setGroupId(e.target.value ? Number(e.target.value) : null),
-              style: {
-                padding: "6px 8px",
-                fontSize: 13,
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                background: "var(--bg-muted)",
-                color: "var(--text-2)"
-              },
-              children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "No group" }),
-                groups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: g.id, children: g.name }, g.id))
-              ]
-            }
-          )
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: handleSave,
+                disabled: saving,
+                style: {
+                  padding: "6px 20px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: saving ? "var(--border-strong)" : "var(--text)",
+                  border: "none",
+                  borderRadius: 6,
+                  color: "var(--bg-app)",
+                  cursor: saving ? "default" : "pointer"
+                },
+                children: saving ? "Saving…" : isEdit ? "Save" : "Create"
+              }
+            )
+          ] })
         ] }),
-        editor && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-          padding: "5px 10px",
-          borderBottom: "1px solid var(--border-light)",
-          flexShrink: 0,
-          background: "var(--bg-muted)"
-        }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("bold"), onPress: () => editor.chain().focus().toggleBold().run(), title: "Bold", children: /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "B" }) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("italic"), onPress: () => editor.chain().focus().toggleItalic().run(), title: "Italic", children: /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "I" }) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("strike"), onPress: () => editor.chain().focus().toggleStrike().run(), title: "Strikethrough", children: /* @__PURE__ */ jsxRuntimeExports.jsx("s", { children: "S" }) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "var(--border)", margin: "2px 4px", alignSelf: "stretch" } }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("heading", { level: 1 }), onPress: () => editor.chain().focus().toggleHeading({ level: 1 }).run(), title: "Heading 1", children: "H1" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("heading", { level: 2 }), onPress: () => editor.chain().focus().toggleHeading({ level: 2 }).run(), title: "Heading 2", children: "H2" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "var(--border)", margin: "2px 4px", alignSelf: "stretch" } }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("bulletList"), onPress: () => editor.chain().focus().toggleBulletList().run(), title: "Bullet list", children: "• List" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("orderedList"), onPress: () => editor.chain().focus().toggleOrderedList().run(), title: "Numbered list", children: "1. List" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { width: 1, background: "var(--border)", margin: "2px 4px", alignSelf: "stretch" } }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("blockquote"), onPress: () => editor.chain().focus().toggleBlockquote().run(), title: "Blockquote", children: '"' }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: editor.isActive("code"), onPress: () => editor.chain().focus().toggleCode().run(), title: "Inline code", children: "`" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { flex: 1 } }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: false, onPress: () => editor.chain().focus().undo().run(), title: "Undo", children: "↩" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(TBtn, { active: false, onPress: () => editor.chain().focus().redo().run(), title: "Redo", children: "↪" })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "div",
+        pickerOpen && /* @__PURE__ */ jsxRuntimeExports.jsx(
+          ReferencePickerModal,
           {
-            style: { flex: 1, overflowY: "auto", padding: "16px 20px", cursor: "text", minHeight: 0 },
-            onClick: () => editor?.commands.focus(),
-            children: /* @__PURE__ */ jsxRuntimeExports.jsx(EditorContent, { editor })
+            excludeIds: /* @__PURE__ */ new Set([
+              ...journalEditEntry ? [journalEditEntry.id] : [],
+              ...referencedEntries.map((e) => e.id)
+            ]),
+            onAdd: (added) => setReferencedEntries((prev) => [...prev, ...added]),
+            onClose: () => setPickerOpen(false)
           }
         ),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "10px 16px",
-          borderTop: "1px solid var(--border-light)",
-          flexShrink: 0,
-          background: "var(--bg-muted)"
-        }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 12, color: "var(--text-4)", marginRight: "auto" }, children: "⌘↵ to save · Esc to cancel" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              onClick: closeJournalModal,
-              style: {
-                padding: "6px 16px",
-                fontSize: 13,
-                background: "none",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                color: "var(--text-2)",
-                cursor: "pointer"
-              },
-              children: "Cancel"
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              onClick: handleSave,
-              disabled: saving,
-              style: {
-                padding: "6px 20px",
-                fontSize: 13,
-                fontWeight: 600,
-                background: saving ? "var(--border-strong)" : "var(--text)",
-                border: "none",
-                borderRadius: 6,
-                color: "var(--bg-app)",
-                cursor: saving ? "default" : "pointer"
-              },
-              children: saving ? "Saving…" : isEdit ? "Save" : "Create"
-            }
-          )
-        ] })
-      ] })
+        confirmDiscardOpen && /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "div",
+          {
+            onClick: (e) => {
+              if (e.target === e.currentTarget) setConfirmDiscardOpen(false);
+            },
+            style: {
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.4)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 1e3
+            },
+            children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+              width: 360,
+              maxWidth: "90vw",
+              background: "var(--bg-surface)",
+              borderRadius: 12,
+              border: "1px solid var(--border)",
+              boxShadow: "0 8px 40px rgba(0,0,0,0.2)",
+              padding: 20
+            }, children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 14, fontWeight: 600, marginBottom: 6, color: "var(--text)" }, children: "Unsaved changes" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 13, color: "var(--text-2)", marginBottom: 18 }, children: isEdit ? "Save your changes to this entry before closing?" : "Save this entry before closing?" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "button",
+                  {
+                    onClick: () => {
+                      setConfirmDiscardOpen(false);
+                      closeJournalModal();
+                    },
+                    style: {
+                      padding: "6px 14px",
+                      fontSize: 13,
+                      background: "none",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      color: "#ef4444",
+                      cursor: "pointer"
+                    },
+                    children: "Discard"
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "button",
+                  {
+                    onClick: () => setConfirmDiscardOpen(false),
+                    style: {
+                      padding: "6px 14px",
+                      fontSize: 13,
+                      background: "none",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      color: "var(--text-2)",
+                      cursor: "pointer"
+                    },
+                    children: "Cancel"
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "button",
+                  {
+                    onClick: () => {
+                      setConfirmDiscardOpen(false);
+                      handleSave();
+                    },
+                    disabled: saving,
+                    style: {
+                      padding: "6px 16px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      background: saving ? "var(--border-strong)" : "var(--text)",
+                      border: "none",
+                      borderRadius: 6,
+                      color: "var(--bg-app)",
+                      cursor: saving ? "default" : "pointer"
+                    },
+                    children: isEdit ? "Save changes" : "Create"
+                  }
+                )
+              ] })
+            ] })
+          }
+        )
+      ]
     }
   );
 }
@@ -365623,6 +366152,7 @@ function SettingsView() {
   const [backupMessage, setBackupMessage] = reactExports.useState(null);
   const [backupError, setBackupError] = reactExports.useState(null);
   const [pendingImport, setPendingImport] = reactExports.useState(null);
+  const [pendingMerge, setPendingMerge] = reactExports.useState(null);
   const [spotifyBusy, setSpotifyBusy] = reactExports.useState(false);
   const [spotifyProgress, setSpotifyProgress] = reactExports.useState(null);
   const [spotifyMessage, setSpotifyMessage] = reactExports.useState(null);
@@ -365688,6 +366218,13 @@ function SettingsView() {
   reactExports.useEffect(() => {
     if (typeof window.api.backup?.onProgress !== "function") return;
     return window.api.backup.onProgress(setBackupProgress);
+  }, []);
+  reactExports.useEffect(() => {
+    const msg = sessionStorage.getItem("timeline.mergeMessage");
+    if (msg) {
+      sessionStorage.removeItem("timeline.mergeMessage");
+      setBackupMessage(msg);
+    }
   }, []);
   reactExports.useEffect(() => {
     if (typeof window.api.spotify?.onProgress !== "function") return;
@@ -365873,6 +366410,61 @@ function SettingsView() {
       setBackupError(ipcErrorMessage(e));
       setBackupBusy(null);
       setBackupProgress(null);
+    }
+  }
+  async function startMerge() {
+    setBackupError(null);
+    setBackupMessage(null);
+    setPendingMerge(null);
+    if (typeof window.api.backup?.prepareMerge !== "function") {
+      setBackupError("Not available in the running app yet — restart the dev server (main process and preload are only rebuilt on startup).");
+      return;
+    }
+    const zipPath = await window.api.backup.pickArchive();
+    if (!zipPath) return;
+    setBackupBusy("merge-prepare");
+    setBackupProgress(null);
+    try {
+      setPendingMerge(await window.api.backup.prepareMerge(zipPath));
+    } catch (e) {
+      setBackupError(ipcErrorMessage(e));
+    } finally {
+      setBackupBusy(null);
+      setBackupProgress(null);
+    }
+  }
+  async function confirmMerge() {
+    if (!pendingMerge) return;
+    setBackupBusy("merge");
+    setBackupError(null);
+    setBackupProgress(null);
+    try {
+      const res = await window.api.backup.executeMerge();
+      let msg = `Merged: ${res.entriesImported} entr${res.entriesImported === 1 ? "y" : "ies"} imported, ${res.duplicatesSkipped} already present`;
+      const extras = [
+        res.tagsCreated > 0 ? `${res.tagsCreated} new tag${res.tagsCreated === 1 ? "" : "s"}` : null,
+        res.groupsCreated > 0 ? `${res.groupsCreated} new group${res.groupsCreated === 1 ? "" : "s"}` : null,
+        res.peopleCreated > 0 ? `${res.peopleCreated} new ${res.peopleCreated === 1 ? "person" : "people"}` : null,
+        res.eventsCreated > 0 ? `${res.eventsCreated} new event${res.eventsCreated === 1 ? "" : "s"}` : null,
+        res.playsInserted > 0 ? `${res.playsInserted} Spotify play${res.playsInserted === 1 ? "" : "s"}` : null
+      ].filter(Boolean);
+      if (extras.length > 0) msg += `, ${extras.join(", ")}`;
+      if (res.missingFiles > 0) msg += ` — ${res.missingFiles} entr${res.missingFiles === 1 ? "y" : "ies"} had no file in the archive and are marked missing`;
+      msg += ".";
+      sessionStorage.setItem("timeline.mergeMessage", msg);
+      window.location.reload();
+    } catch (e) {
+      setBackupError(ipcErrorMessage(e));
+      setPendingMerge(null);
+      setBackupBusy(null);
+      setBackupProgress(null);
+    }
+  }
+  async function cancelPendingMerge() {
+    setPendingMerge(null);
+    try {
+      await window.api.backup.cancelMerge();
+    } catch {
     }
   }
   async function importSpotifyHistory(mode2) {
@@ -366125,7 +366717,7 @@ function SettingsView() {
             }
           )
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, alignItems: "flex-start" }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...row, alignItems: "flex-start" }, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Restore from backup" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Unpacks a backup archive into an empty folder and switches the app to it. Your current library is left untouched on disk." })
@@ -366139,6 +366731,90 @@ function SettingsView() {
               children: backupBusy === "import" ? "Restoring…" : "Restore…"
             }
           )
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { ...rowLast, alignItems: "flex-start" }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, marginBottom: 2 }, children: "Merge from another library" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { color: "var(--text-3)", fontSize: 12 }, children: "Adds everything from a full backup made on another computer into this library — entries, files, tags, groups, people, events, and listening history. Entries you already have are detected by content and skipped, with their tags and people combined." })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              style: { ...btn("default"), flexShrink: 0, opacity: backupBusy ? 0.6 : 1 },
+              onClick: startMerge,
+              disabled: backupBusy !== null,
+              children: backupBusy === "merge-prepare" ? "Analyzing…" : backupBusy === "merge" ? "Merging…" : "Merge…"
+            }
+          )
+        ] }),
+        pendingMerge && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+          ...rowLast,
+          flexDirection: "column",
+          alignItems: "flex-start",
+          gap: 10,
+          background: "#fffbeb",
+          borderTop: "1px solid #fde68a"
+        }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", alignItems: "flex-start", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 16, lineHeight: 1, marginTop: 1 }, children: "⚠️" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontWeight: 600, fontSize: 13, color: "#92400e", marginBottom: 4 }, children: "Merge this backup into your library?" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { fontSize: 12, color: "#78350f", lineHeight: 1.5 }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontFamily: "monospace", wordBreak: "break-all" }, children: pendingMerge.zipPath }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("br", {}),
+                "(exported ",
+                new Date(pendingMerge.exportedAt).toLocaleDateString(),
+                ")",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("br", {}),
+                pendingMerge.entriesNew,
+                " new entr",
+                pendingMerge.entriesNew === 1 ? "y" : "ies",
+                " will be imported; ",
+                pendingMerge.entriesDuplicate,
+                " already in this library will be skipped.",
+                (pendingMerge.tagsNew > 0 || pendingMerge.groupsNew > 0 || pendingMerge.peopleNew > 0 || pendingMerge.eventsNew > 0 || pendingMerge.playsNew > 0) && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                  " Also new here: ",
+                  [
+                    pendingMerge.tagsNew > 0 ? `${pendingMerge.tagsNew} tag${pendingMerge.tagsNew === 1 ? "" : "s"}` : null,
+                    pendingMerge.groupsNew > 0 ? `${pendingMerge.groupsNew} group${pendingMerge.groupsNew === 1 ? "" : "s"}` : null,
+                    pendingMerge.peopleNew > 0 ? `${pendingMerge.peopleNew} ${pendingMerge.peopleNew === 1 ? "person" : "people"}` : null,
+                    pendingMerge.eventsNew > 0 ? `${pendingMerge.eventsNew} event${pendingMerge.eventsNew === 1 ? "" : "s"}` : null,
+                    pendingMerge.playsNew > 0 ? `${pendingMerge.playsNew} Spotify play${pendingMerge.playsNew === 1 ? "" : "s"}` : null
+                  ].filter(Boolean).join(", "),
+                  "."
+                ] }),
+                pendingMerge.entriesMissingFile > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                  " ",
+                  pendingMerge.entriesMissingFile,
+                  " entr",
+                  pendingMerge.entriesMissingFile === 1 ? "y has" : "ies have",
+                  " no file in the archive and will be marked missing."
+                ] }),
+                " ",
+                "Nothing already in this library is changed or removed."
+              ] })
+            ] })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", gap: 8 }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: { ...btn("danger"), background: "#b45309", color: "#fff", opacity: backupBusy ? 0.6 : 1 },
+                onClick: confirmMerge,
+                disabled: backupBusy !== null,
+                children: backupBusy === "merge" ? "Merging…" : "Merge into library"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                style: btn("ghost"),
+                onClick: cancelPendingMerge,
+                disabled: backupBusy !== null,
+                children: "Cancel"
+              }
+            )
+          ] })
         ] }),
         pendingImport && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
           ...rowLast,
@@ -366192,6 +366868,9 @@ function SettingsView() {
           backupProgress.phase === "archiving" && `Archiving ${backupProgress.completed}/${backupProgress.total} — ${backupProgress.current}`,
           backupProgress.phase === "extracting" && `Extracting ${backupProgress.completed}/${backupProgress.total} — ${backupProgress.current}`,
           backupProgress.phase === "checking" && `Checking files ${backupProgress.completed}/${backupProgress.total}`,
+          backupProgress.phase === "analyzing" && `Comparing entries ${backupProgress.completed}/${backupProgress.total}`,
+          backupProgress.phase === "copying" && `Copying files ${backupProgress.completed}/${backupProgress.total} — ${backupProgress.current}`,
+          backupProgress.phase === "merging" && `Merging entries ${backupProgress.completed}/${backupProgress.total}`,
           backupProgress.phase === "done" && "Finishing…"
         ] }),
         backupMessage && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { ...rowLast, borderTop: "1px solid var(--border-light)", fontSize: 12, color: "#16a34a", wordBreak: "break-all" }, children: backupMessage }),
@@ -366285,6 +366964,7 @@ function SettingsView() {
           " location",
           rescanResult.gpsAdded === 1 ? "" : "s",
           rescanResult.reclassified > 0 ? `, reclassified ${rescanResult.reclassified} RAW file${rescanResult.reclassified === 1 ? "" : "s"}` : "",
+          rescanResult.journalFilesWritten > 0 ? `, wrote ${rescanResult.journalFilesWritten} journal text file${rescanResult.journalFilesWritten === 1 ? "" : "s"}` : "",
           "."
         ] })
       ] })
