@@ -1,5 +1,5 @@
 * Features to add
 ** TODO Allow files to be referenced in journal entries. 
 ** TODO When a name is used within a Journal entry and it exists in the People tab, it highlights the names within the journal entry that will redirect you to the person's People profile.
-** TODO check if sync breaks with the new journal locations
 * Bugs
+** TODO fix importing from phone; it always has 1/1, doesnt tell you how many duplicates, maybe other stuff too
