@@ -155,6 +155,31 @@ export function initSchema(db: Database.Database): void {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    -- Books & Recipes categories. folder_name is the sanitized lowercase
+    -- subfolder under files/books/ or files/recipes/ that copy-mode items in
+    -- the category live in; stored (not derived) so on-disk names adopted by
+    -- the books-folder import are preserved verbatim.
+    CREATE TABLE IF NOT EXISTS shelf_categories (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind        TEXT    NOT NULL CHECK(kind IN ('book','recipe')),
+      name        TEXT    NOT NULL COLLATE NOCASE,
+      folder_name TEXT    NOT NULL COLLATE NOCASE,
+      created_at  INTEGER NOT NULL,
+      UNIQUE(kind, name),
+      UNIQUE(kind, folder_name)
+    );
+
+    -- Entries marked as a book or recipe. entry_id as PK makes the kinds
+    -- mutually exclusive; marking as the other kind is an upsert.
+    CREATE TABLE IF NOT EXISTS shelf_items (
+      entry_id    INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+      kind        TEXT    NOT NULL CHECK(kind IN ('book','recipe')),
+      category_id INTEGER REFERENCES shelf_categories(id) ON DELETE SET NULL,
+      added_at    INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_shelf_items_kind ON shelf_items(kind, category_id);
   `)
 
   applyMigrations(db)

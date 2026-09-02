@@ -10,6 +10,7 @@ import type {
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
   SetDateParams, SetDateResult, SetLocationParams, SetLocationResult, GeocodeResult, RescanProgressEvent, RescanResult, ImportPreview,
   PageParams, MonthBucket, RenameEntryResult, Person, PersonListItem, NewPerson,
+  ShelfKind, ShelfCategory, ShelfItemInfo, ShelfMoveResult, ShelfImportResult,
   PhoneStartResult, PhoneUploadProgressEvent, PhoneUploadDoneEvent,
 } from '../shared/types'
 
@@ -97,6 +98,17 @@ interface Api {
     setForEntry: (entryId: number, personIds: number[]) => Promise<Person[]>
     addToEntries: (entryIds: number[], personIds: number[]) => Promise<void>
     entries: (personId: number) => Promise<Entry[]>
+  }
+  shelf: {
+    listCategories: (kind: ShelfKind) => Promise<ShelfCategory[]>
+    createCategory: (kind: ShelfKind, name: string) => Promise<ShelfCategory>
+    renameCategory: (id: number, name: string) => Promise<ShelfCategory>
+    deleteCategory: (id: number) => Promise<ShelfMoveResult>
+    listEntries: (kind: ShelfKind, filter: number | 'all' | 'uncategorized') => Promise<(Entry & { category_id: number | null })[]>
+    markEntries: (entryIds: number[], kind: ShelfKind, categoryId: number | null) => Promise<ShelfMoveResult>
+    unmarkEntries: (entryIds: number[]) => Promise<void>
+    forEntries: (entryIds: number[]) => Promise<ShelfItemInfo[]>
+    importBooksFolder: () => Promise<ShelfImportResult>
   }
   files: {
     getMediaUrl: (entryId: number) => Promise<string | null>

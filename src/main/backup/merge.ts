@@ -213,12 +213,31 @@ async function analyze(s: MergeSession, onProgress: (e: BackupProgressEvent) => 
     { timestamp: number; spotify_uri: string | null; ms_played: number }[])
     .filter(p => !destPlay.get(p.timestamp, p.spotify_uri, p.ms_played)).length
 
+  // Shelf categories match by (kind, name); items count as new when the entry
+  // they mark either lands as a new entry here or maps onto a dest entry that
+  // has no shelf row yet (dest's row wins on conflict, mirroring the commit).
+  const destShelfCat = dest.prepare('SELECT id FROM shelf_categories WHERE kind = ? AND name = ? COLLATE NOCASE')
+  const shelfCategoriesNew = (src.prepare('SELECT kind, name FROM shelf_categories').all() as
+    { kind: string; name: string }[])
+    .filter(c => !destShelfCat.get(c.kind, c.name)).length
+
+  const planBySrcId = new Map(plan.map(p => [p.src.id, p]))
+  const destShelfItem = dest.prepare('SELECT 1 FROM shelf_items WHERE entry_id = ?')
+  let shelfItemsNew = 0
+  for (const r of src.prepare('SELECT entry_id FROM shelf_items').all() as { entry_id: number }[]) {
+    const p = planBySrcId.get(r.entry_id)
+    if (!p) continue
+    if (p.action === 'new' || p.action === 'dup-of-new') shelfItemsNew++
+    else if (!destShelfItem.get(p.existingId!)) shelfItemsNew++
+  }
+
   return {
     zipPath: s.zipPath,
     exportedAt: s.manifest.exportedAt,
     appVersion: s.manifest.appVersion,
     entriesNew, entriesDuplicate, entriesMissingFile,
     tagsNew, groupsNew, peopleNew, eventsNew, playsNew, volumesNew,
+    shelfCategoriesNew, shelfItemsNew,
   }
 }
 
@@ -513,6 +532,40 @@ function runMergeTransaction(
     if (gId != null && tId != null) insGroupTag.run(gId, tId)
   }
 
+  // 6b. Shelf (Books & Recipes) — categories match by (kind, name) like tags;
+  // a missing one is created, reusing the source folder_name when it's free
+  // and suffixing it otherwise. Items copy with OR IGNORE so a dest entry
+  // already on a shelf keeps its kind/category (local wins). Files aren't
+  // moved here: entries new to this library land wherever the merge copied
+  // them, and recategorizing later moves them into the shelf folder.
+  const shelfCatMap = new Map<number, number>()
+  let shelfCategoriesCreated = 0
+  const destShelfCat = dest.prepare('SELECT id FROM shelf_categories WHERE kind = ? AND name = ? COLLATE NOCASE')
+  const destShelfCatByFolder = dest.prepare('SELECT id FROM shelf_categories WHERE kind = ? AND folder_name = ? COLLATE NOCASE')
+  const insShelfCat = dest.prepare(`
+    INSERT INTO shelf_categories (kind, name, folder_name, created_at) VALUES (?, ?, ?, ?)
+  `)
+  for (const c of src.prepare('SELECT * FROM shelf_categories').all() as
+    { id: number; kind: string; name: string; folder_name: string; created_at: number }[]) {
+    const hit = destShelfCat.get(c.kind, c.name) as { id: number } | undefined
+    if (hit) { shelfCatMap.set(c.id, hit.id); continue }
+    let folderName = c.folder_name
+    for (let n = 2; destShelfCatByFolder.get(c.kind, folderName); n++) folderName = `${c.folder_name}_${n}`
+    shelfCatMap.set(c.id, insShelfCat.run(c.kind, c.name, folderName, c.created_at).lastInsertRowid as number)
+    shelfCategoriesCreated++
+  }
+  let shelfItemsImported = 0
+  const insShelfItem = dest.prepare(`
+    INSERT OR IGNORE INTO shelf_items (entry_id, kind, category_id, added_at) VALUES (?, ?, ?, ?)
+  `)
+  for (const r of src.prepare('SELECT * FROM shelf_items').all() as
+    { entry_id: number; kind: string; category_id: number | null; added_at: number }[]) {
+    const eId = entryMap.get(r.entry_id)
+    if (eId == null) continue
+    const cId = r.category_id != null ? shelfCatMap.get(r.category_id) ?? null : null
+    shelfItemsImported += insShelfItem.run(eId, r.kind, cId, r.added_at).changes
+  }
+
   // 7. Cross-entry references. Dedup can collapse two source entries onto one
   // destination entry, which would produce a self-reference — drop those.
   const insRef = dest.prepare('INSERT OR IGNORE INTO entry_references (entry_id, ref_entry_id) VALUES (?, ?)')
@@ -557,6 +610,7 @@ function runMergeTransaction(
     summary: {
       entriesImported, duplicatesSkipped, missingFiles,
       tagsCreated, groupsCreated, peopleCreated, eventsCreated, playsInserted,
+      shelfCategoriesCreated, shelfItemsImported,
     },
     journalIdsNeedingFile,
   }

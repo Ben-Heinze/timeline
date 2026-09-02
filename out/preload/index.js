@@ -105,6 +105,17 @@ electron.contextBridge.exposeInMainWorld("api", {
     addToEntries: (entryIds, personIds) => electron.ipcRenderer.invoke("people:addToEntries", entryIds, personIds),
     entries: (personId) => electron.ipcRenderer.invoke("people:entries", personId)
   },
+  shelf: {
+    listCategories: (kind) => electron.ipcRenderer.invoke("shelf:listCategories", kind),
+    createCategory: (kind, name) => electron.ipcRenderer.invoke("shelf:createCategory", kind, name),
+    renameCategory: (id, name) => electron.ipcRenderer.invoke("shelf:renameCategory", id, name),
+    deleteCategory: (id) => electron.ipcRenderer.invoke("shelf:deleteCategory", id),
+    listEntries: (kind, filter) => electron.ipcRenderer.invoke("shelf:listEntries", kind, filter),
+    markEntries: (entryIds, kind, categoryId) => electron.ipcRenderer.invoke("shelf:markEntries", entryIds, kind, categoryId),
+    unmarkEntries: (entryIds) => electron.ipcRenderer.invoke("shelf:unmarkEntries", entryIds),
+    forEntries: (entryIds) => electron.ipcRenderer.invoke("shelf:forEntries", entryIds),
+    importBooksFolder: () => electron.ipcRenderer.invoke("shelf:importBooksFolder")
+  },
   files: {
     getMediaUrl: (entryId) => electron.ipcRenderer.invoke("files:getMediaUrl", entryId),
     getFileInfo: (entryId) => electron.ipcRenderer.invoke("files:getFileInfo", entryId),

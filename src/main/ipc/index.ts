@@ -5,6 +5,7 @@ import { registerGroupHandlers } from './groups'
 import { registerIngestHandlers } from './ingest'
 import { registerMapHandlers } from './map'
 import { registerPeopleHandlers } from './people'
+import { registerShelfHandlers } from './shelf'
 import { registerTagHandlers } from './tags'
 import { registerSettingsHandlers } from './settings'
 import { registerProfileHandlers } from './profiles'
@@ -22,6 +23,7 @@ export function registerAllHandlers(): void {
   registerIngestHandlers()
   registerMapHandlers()
   registerPeopleHandlers()
+  registerShelfHandlers()
   registerTagHandlers()
   registerSettingsHandlers()
   registerProfileHandlers()

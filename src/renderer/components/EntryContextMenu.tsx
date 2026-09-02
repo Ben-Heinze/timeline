@@ -5,7 +5,7 @@ import PeopleEditor from './PeopleEditor'
 import { GroupPickerList } from './GroupPicker'
 import ChangeDateModal from './ChangeDateModal'
 import SetLocationModal from './SetLocationModal'
-import type { Entry, Tag } from '../../shared/types'
+import type { Entry, ShelfCategory, ShelfItemInfo, ShelfKind, Tag } from '../../shared/types'
 
 interface ContextMenuState {
   x: number
@@ -37,6 +37,15 @@ export function useEntryContextMenu(entries: Entry[]) {
   // menu's scroll container (which clips overflow), so it's positioned in
   // viewport coords from the anchor row and flipped/clamped to stay on-screen.
   const [groupSubPos, setGroupSubPos] = useState<{ left: number; top: number } | null>(null)
+  // Books/Recipes flyouts, mirroring the group flyout machinery above.
+  const [shelfSubOpen, setShelfSubOpen] = useState<ShelfKind | null>(null)
+  const bookRowRef = useRef<HTMLDivElement>(null)
+  const recipeRowRef = useRef<HTMLDivElement>(null)
+  const shelfSubRef = useRef<HTMLDivElement>(null)
+  const [shelfSubPos, setShelfSubPos] = useState<{ left: number; top: number } | null>(null)
+  const [shelfCats, setShelfCats] = useState<Record<ShelfKind, ShelfCategory[]>>({ book: [], recipe: [] })
+  const [shelfInfo, setShelfInfo] = useState<ShelfItemInfo[]>([])
+  const [newShelfCatName, setNewShelfCatName] = useState('')
   const [tagModalIds, setTagModalIds] = useState<number[] | null>(null)
   const [peopleModalIds, setPeopleModalIds] = useState<number[] | null>(null)
   const [pendingPersonIds, setPendingPersonIds] = useState<number[]>([])
@@ -92,6 +101,7 @@ export function useEntryContextMenu(entries: Entry[]) {
       setSelection(new Set([entry.id]), entry.id)
     }
     setGroupSubOpen(false)
+    setShelfSubOpen(null)
     setMenuPos(null)
     setMenu({ x: e.clientX, y: e.clientY, ids })
   }, [setSelection])
@@ -109,6 +119,34 @@ export function useEntryContextMenu(entries: Entry[]) {
     const top = Math.max(margin, Math.min(menu.y, window.innerHeight - height - margin))
     setMenuPos({ left, top })
   }, [menu])
+
+  // Shelf state for the targeted entries + category lists for the flyouts,
+  // loaded when the menu opens so both render instantly.
+  useEffect(() => {
+    if (!menu) { setShelfInfo([]); return }
+    let cancelled = false
+    window.api.shelf.forEntries(menu.ids).then(info => { if (!cancelled) setShelfInfo(info) })
+    Promise.all([window.api.shelf.listCategories('book'), window.api.shelf.listCategories('recipe')])
+      .then(([book, recipe]) => { if (!cancelled) setShelfCats({ book, recipe }) })
+    return () => { cancelled = true }
+  }, [menu])
+
+  // Position the shelf flyout next to its anchor row (same rules as the group
+  // flyout below).
+  useLayoutEffect(() => {
+    if (!shelfSubOpen) { setShelfSubPos(null); return }
+    const row = (shelfSubOpen === 'book' ? bookRowRef : recipeRowRef).current
+    const sub = shelfSubRef.current
+    if (!row || !sub) return
+    const anchor = row.getBoundingClientRect()
+    const { width, height } = sub.getBoundingClientRect()
+    const margin = 8
+    let left = anchor.right - 2
+    if (left + width + margin > window.innerWidth) left = anchor.left - width + 2
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin))
+    const top = Math.max(margin, Math.min(anchor.top - 4, window.innerHeight - height - margin))
+    setShelfSubPos({ left, top })
+  }, [shelfSubOpen, shelfCats])
 
   // Position the group flyout next to its anchor row, flipping to the left side
   // when it would overflow the right edge and clamping vertically.
@@ -130,6 +168,8 @@ export function useEntryContextMenu(entries: Entry[]) {
   const closeMenu = useCallback(() => {
     setMenu(null)
     setGroupSubOpen(false)
+    setShelfSubOpen(null)
+    setNewShelfCatName('')
   }, [])
 
   useEffect(() => {
@@ -267,6 +307,52 @@ export function useEntryContextMenu(entries: Entry[]) {
     }
   }, [menu, entries, groups])
 
+  // Mark the targeted entries as books/recipes. Copy-mode files move into the
+  // shelf folder on disk; the main process reports files it couldn't move.
+  const markAsShelf = useCallback(async (kind: ShelfKind, categoryId: number | null) => {
+    if (!menu) return
+    const ids = menu.ids
+    closeMenu()
+    try {
+      const r = await window.api.shelf.markEntries(ids, kind, categoryId)
+      if (r.failures.length > 0) {
+        window.alert(`Marked, but ${r.failures.length} file${r.failures.length === 1 ? '' : 's'} could not be moved: ${r.failures[0].error}`)
+      }
+    } catch (e) {
+      window.alert((e as Error).message ?? String(e))
+    }
+    bumpRefreshKey()
+  }, [menu, closeMenu, bumpRefreshKey])
+
+  const createShelfCategoryAndMark = useCallback(async (kind: ShelfKind) => {
+    const name = newShelfCatName.trim()
+    if (!name || !menu) return
+    try {
+      const cat = await window.api.shelf.createCategory(kind, name)
+      await markAsShelf(kind, cat.id)
+    } catch (e) {
+      window.alert((e as Error).message ?? String(e))
+    }
+  }, [newShelfCatName, menu, markAsShelf])
+
+  // "Remove from Books/Recipes", shown only when every targeted entry is marked.
+  const removeShelfInfo = useMemo(() => {
+    if (!menu || shelfInfo.length < menu.ids.length) return null
+    const kinds = new Set(shelfInfo.map(i => i.kind))
+    const label = kinds.size === 1
+      ? `Remove from ${kinds.has('book') ? 'Books' : 'Recipes'}`
+      : 'Remove from Books/Recipes'
+    return { label }
+  }, [menu, shelfInfo])
+
+  const removeFromShelf = useCallback(async () => {
+    if (!menu) return
+    const ids = menu.ids
+    closeMenu()
+    await window.api.shelf.unmarkEntries(ids)
+    bumpRefreshKey()
+  }, [menu, closeMenu, bumpRefreshKey])
+
   const deleteSelected = useCallback(async () => {
     if (!menu) return
     const ids = menu.ids
@@ -316,7 +402,7 @@ export function useEntryContextMenu(entries: Entry[]) {
             <MenuItem label="Tag people…" onClick={openPeopleModal} />
             <div
               ref={groupRowRef}
-              onMouseEnter={() => setGroupSubOpen(true)}
+              onMouseEnter={() => { setGroupSubOpen(true); setShelfSubOpen(null) }}
               onMouseLeave={() => setGroupSubOpen(false)}
             >
               <MenuItem label="Add to group" trailing="›" onClick={() => setGroupSubOpen(o => !o)} />
@@ -346,6 +432,58 @@ export function useEntryContextMenu(entries: Entry[]) {
             </div>
             {removeInfo && (
               <MenuItem label={removeInfo.label} sublabel={removeInfo.hint ?? undefined} onClick={removeFromGroup} />
+            )}
+            {(['book', 'recipe'] as ShelfKind[]).map(kind => (
+              <div
+                key={kind}
+                ref={kind === 'book' ? bookRowRef : recipeRowRef}
+                onMouseEnter={() => { setShelfSubOpen(kind); setGroupSubOpen(false) }}
+                onMouseLeave={() => setShelfSubOpen(open => open === kind ? null : open)}
+              >
+                <MenuItem
+                  label={`Add to ${kind === 'book' ? 'Books' : 'Recipes'}`}
+                  trailing="›"
+                  onClick={() => setShelfSubOpen(open => open === kind ? null : kind)}
+                />
+                {shelfSubOpen === kind && (
+                  <div
+                    ref={shelfSubRef}
+                    onMouseEnter={() => setShelfSubOpen(kind)}
+                    onMouseLeave={() => setShelfSubOpen(open => open === kind ? null : open)}
+                    style={{
+                      position: 'fixed', zIndex: 102,
+                      left: shelfSubPos ? shelfSubPos.left : 0,
+                      top: shelfSubPos ? shelfSubPos.top : 0,
+                      visibility: shelfSubPos ? 'visible' : 'hidden',
+                      minWidth: 200, maxHeight: 'calc(100vh - 16px)', overflowY: 'auto',
+                      background: 'var(--bg-surface)', border: '1px solid var(--border)',
+                      borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+                      padding: 4,
+                    }}
+                  >
+                    <MenuItem label="Uncategorized" onClick={() => markAsShelf(kind, null)} />
+                    {shelfCats[kind].map(c => (
+                      <MenuItem key={c.id} label={c.name} onClick={() => markAsShelf(kind, c.id)} />
+                    ))}
+                    <div style={{ height: 1, background: 'var(--border-light)', margin: '4px 0' }} />
+                    <input
+                      value={newShelfCatName}
+                      onChange={e => setNewShelfCatName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') createShelfCategoryAndMark(kind) }}
+                      onClick={e => e.stopPropagation()}
+                      placeholder="New category…"
+                      style={{
+                        width: '100%', boxSizing: 'border-box', margin: '2px 0',
+                        padding: '5px 8px', fontSize: 12, border: '1px solid var(--border)',
+                        borderRadius: 5, background: 'var(--bg-input)', outline: 'none', color: 'var(--text)',
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+            {removeShelfInfo && (
+              <MenuItem label={removeShelfInfo.label} onClick={removeFromShelf} />
             )}
             <MenuItem label="Change date…" onClick={openDateModal} />
             <MenuItem label="Set location…" onClick={openLocationModal} />

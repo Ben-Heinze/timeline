@@ -368,6 +368,8 @@ export default function SettingsView() {
         res.peopleCreated > 0 ? `${res.peopleCreated} new ${res.peopleCreated === 1 ? 'person' : 'people'}` : null,
         res.eventsCreated > 0 ? `${res.eventsCreated} new event${res.eventsCreated === 1 ? '' : 's'}` : null,
         res.playsInserted > 0 ? `${res.playsInserted} Spotify play${res.playsInserted === 1 ? '' : 's'}` : null,
+        res.shelfCategoriesCreated > 0 ? `${res.shelfCategoriesCreated} new shelf categor${res.shelfCategoriesCreated === 1 ? 'y' : 'ies'}` : null,
+        res.shelfItemsImported > 0 ? `${res.shelfItemsImported} book/recipe mark${res.shelfItemsImported === 1 ? '' : 's'}` : null,
       ].filter(Boolean)
       if (extras.length > 0) msg += `, ${extras.join(', ')}`
       if (res.missingFiles > 0) msg += ` — ${res.missingFiles} entr${res.missingFiles === 1 ? 'y' : 'ies'} had no file in the archive and are marked missing`
@@ -683,13 +685,16 @@ export default function SettingsView() {
                     {pendingMerge.entriesNew} new entr{pendingMerge.entriesNew === 1 ? 'y' : 'ies'} will be
                     imported; {pendingMerge.entriesDuplicate} already in this library will be skipped.
                     {(pendingMerge.tagsNew > 0 || pendingMerge.groupsNew > 0 || pendingMerge.peopleNew > 0
-                      || pendingMerge.eventsNew > 0 || pendingMerge.playsNew > 0) && (
+                      || pendingMerge.eventsNew > 0 || pendingMerge.playsNew > 0
+                      || pendingMerge.shelfCategoriesNew > 0 || pendingMerge.shelfItemsNew > 0) && (
                       <> Also new here: {[
                         pendingMerge.tagsNew > 0 ? `${pendingMerge.tagsNew} tag${pendingMerge.tagsNew === 1 ? '' : 's'}` : null,
                         pendingMerge.groupsNew > 0 ? `${pendingMerge.groupsNew} group${pendingMerge.groupsNew === 1 ? '' : 's'}` : null,
                         pendingMerge.peopleNew > 0 ? `${pendingMerge.peopleNew} ${pendingMerge.peopleNew === 1 ? 'person' : 'people'}` : null,
                         pendingMerge.eventsNew > 0 ? `${pendingMerge.eventsNew} event${pendingMerge.eventsNew === 1 ? '' : 's'}` : null,
                         pendingMerge.playsNew > 0 ? `${pendingMerge.playsNew} Spotify play${pendingMerge.playsNew === 1 ? '' : 's'}` : null,
+                        pendingMerge.shelfCategoriesNew > 0 ? `${pendingMerge.shelfCategoriesNew} shelf categor${pendingMerge.shelfCategoriesNew === 1 ? 'y' : 'ies'}` : null,
+                        pendingMerge.shelfItemsNew > 0 ? `${pendingMerge.shelfItemsNew} book/recipe mark${pendingMerge.shelfItemsNew === 1 ? '' : 's'}` : null,
                       ].filter(Boolean).join(', ')}.</>
                     )}
                     {pendingMerge.entriesMissingFile > 0 && (

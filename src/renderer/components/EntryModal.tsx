@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { useStore } from '../store/useStore'
-import type { Entry, Tag, FileInfo, Person } from '../../shared/types'
+import type { Entry, Tag, FileInfo, Person, ShelfCategory, ShelfItemInfo, ShelfKind } from '../../shared/types'
 import TagEditor from './TagEditor'
 import PeopleEditor from './PeopleEditor'
 import ChangeDateModal from './ChangeDateModal'
@@ -321,6 +321,8 @@ export default function EntryModal() {
   const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal, bumpRefreshKey, setPeople } = useStore()
   const [entry, setEntry] = useState<Entry | null>(null)
   const [entryTags, setEntryTags] = useState<Tag[]>([])
+  const [shelfInfo, setShelfInfo] = useState<ShelfItemInfo | null>(null)
+  const [shelfCats, setShelfCats] = useState<ShelfCategory[]>([])
   const [entryPeople, setEntryPeople] = useState<Person[]>([])
   const [entryReferences, setEntryReferences] = useState<Entry[]>([])
   const [referencedBy, setReferencedBy] = useState<Entry[]>([])
@@ -332,7 +334,7 @@ export default function EntryModal() {
   useEffect(() => {
     if (!activeEntryId) {
       setEntry(null); setEntryTags([]); setEntryPeople([])
-      setEntryReferences([]); setReferencedBy([])
+      setEntryReferences([]); setReferencedBy([]); setShelfInfo(null)
       return
     }
     window.api.entries.get(activeEntryId).then(setEntry)
@@ -340,7 +342,40 @@ export default function EntryModal() {
     window.api.people.forEntry(activeEntryId).then(setEntryPeople)
     window.api.entries.references(activeEntryId).then(setEntryReferences)
     window.api.entries.referencedBy(activeEntryId).then(setReferencedBy)
+    window.api.shelf.forEntries([activeEntryId]).then(info => setShelfInfo(info[0] ?? null))
   }, [activeEntryId])
+
+  // Categories for the shelf section's dropdown, per the entry's current kind.
+  useEffect(() => {
+    if (!shelfInfo) { setShelfCats([]); return }
+    let cancelled = false
+    window.api.shelf.listCategories(shelfInfo.kind).then(cats => { if (!cancelled) setShelfCats(cats) })
+    return () => { cancelled = true }
+  }, [shelfInfo])
+
+  const handleShelfKind = useCallback(async (kind: ShelfKind | null) => {
+    if (!activeEntryId) return
+    if (kind === null) {
+      await window.api.shelf.unmarkEntries([activeEntryId])
+    } else {
+      const r = await window.api.shelf.markEntries([activeEntryId], kind, null)
+      if (r.failures.length > 0) window.alert(`Marked, but the file could not be moved: ${r.failures[0].error}`)
+    }
+    const [info] = await window.api.shelf.forEntries([activeEntryId])
+    setShelfInfo(info ?? null)
+    // The file may have moved on disk.
+    window.api.entries.get(activeEntryId).then(setEntry)
+    bumpRefreshKey()
+  }, [activeEntryId, bumpRefreshKey])
+
+  const handleShelfCategory = useCallback(async (categoryId: number | null) => {
+    if (!activeEntryId || !shelfInfo) return
+    const r = await window.api.shelf.markEntries([activeEntryId], shelfInfo.kind, categoryId)
+    if (r.failures.length > 0) window.alert(`Recategorized, but the file could not be moved: ${r.failures[0].error}`)
+    setShelfInfo({ ...shelfInfo, category_id: categoryId })
+    window.api.entries.get(activeEntryId).then(setEntry)
+    bumpRefreshKey()
+  }, [activeEntryId, shelfInfo, bumpRefreshKey])
 
   const handleTagsChange = useCallback(async (names: string[]) => {
     if (!activeEntryId) return
@@ -502,6 +537,48 @@ export default function EntryModal() {
             <div style={{ flex: 1 }}>
               <PeopleEditor people={entryPeople} onChange={handlePeopleChange} />
             </div>
+          </div>
+        )}
+
+        {entry && entry.type !== 'journal' && (
+          <div style={{
+            padding: '10px 16px', borderTop: '1px solid var(--border-light)',
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--text-4)', flexShrink: 0 }}>
+              Shelf
+            </span>
+            <div style={{ display: 'flex', background: 'var(--bg-subtle)', borderRadius: 6, padding: 2, gap: 1 }}>
+              {([['None', null], ['Book', 'book'], ['Recipe', 'recipe']] as [string, ShelfKind | null][]).map(([label, kind]) => {
+                const active = (shelfInfo?.kind ?? null) === kind
+                return (
+                  <button
+                    key={label}
+                    onClick={() => { if (!active) handleShelfKind(kind) }}
+                    style={{
+                      padding: '3px 10px', fontSize: 12, borderRadius: 4, border: 'none', cursor: 'pointer',
+                      background: active ? 'var(--bg-app)' : 'transparent',
+                      color: active ? 'var(--text)' : 'var(--text-3)', fontWeight: active ? 600 : 400,
+                    }}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+            {shelfInfo && (
+              <select
+                value={shelfInfo.category_id ?? 'none'}
+                onChange={e => handleShelfCategory(e.target.value === 'none' ? null : Number(e.target.value))}
+                style={{
+                  fontSize: 12, padding: '3px 6px', borderRadius: 5,
+                  background: 'var(--bg-input)', color: 'var(--text)', border: '1px solid var(--border)',
+                }}
+              >
+                <option value="none">Uncategorized</option>
+                {shelfCats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            )}
           </div>
         )}
 

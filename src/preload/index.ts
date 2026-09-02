@@ -9,6 +9,7 @@ import type {
   ListeningBucket, YearlySpotifySummary, YearDetail, VolumeStatus,
   SetDateParams, SetLocationParams, SetLocationResult, GeocodeResult, RescanProgressEvent, RescanResult, ImportPreview, PageParams, MonthBucket, Entry,
   RenameEntryResult, Person, PersonListItem, NewPerson,
+  ShelfKind, ShelfCategory, ShelfItemInfo, ShelfMoveResult, ShelfImportResult,
   PhoneStartResult, PhoneUploadProgressEvent, PhoneUploadDoneEvent,
 } from '../shared/types'
 
@@ -179,6 +180,26 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('people:addToEntries', entryIds, personIds),
     entries: (personId: number): Promise<Entry[]> =>
       ipcRenderer.invoke('people:entries', personId),
+  },
+  shelf: {
+    listCategories: (kind: ShelfKind): Promise<ShelfCategory[]> =>
+      ipcRenderer.invoke('shelf:listCategories', kind),
+    createCategory: (kind: ShelfKind, name: string): Promise<ShelfCategory> =>
+      ipcRenderer.invoke('shelf:createCategory', kind, name),
+    renameCategory: (id: number, name: string): Promise<ShelfCategory> =>
+      ipcRenderer.invoke('shelf:renameCategory', id, name),
+    deleteCategory: (id: number): Promise<ShelfMoveResult> =>
+      ipcRenderer.invoke('shelf:deleteCategory', id),
+    listEntries: (kind: ShelfKind, filter: number | 'all' | 'uncategorized'): Promise<(Entry & { category_id: number | null })[]> =>
+      ipcRenderer.invoke('shelf:listEntries', kind, filter),
+    markEntries: (entryIds: number[], kind: ShelfKind, categoryId: number | null): Promise<ShelfMoveResult> =>
+      ipcRenderer.invoke('shelf:markEntries', entryIds, kind, categoryId),
+    unmarkEntries: (entryIds: number[]): Promise<void> =>
+      ipcRenderer.invoke('shelf:unmarkEntries', entryIds),
+    forEntries: (entryIds: number[]): Promise<ShelfItemInfo[]> =>
+      ipcRenderer.invoke('shelf:forEntries', entryIds),
+    importBooksFolder: (): Promise<ShelfImportResult> =>
+      ipcRenderer.invoke('shelf:importBooksFolder'),
   },
   files: {
     getMediaUrl: (entryId: number): Promise<string | null> =>

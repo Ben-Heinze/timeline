@@ -302,6 +302,31 @@ function initSchema(db2) {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    -- Books & Recipes categories. folder_name is the sanitized lowercase
+    -- subfolder under files/books/ or files/recipes/ that copy-mode items in
+    -- the category live in; stored (not derived) so on-disk names adopted by
+    -- the books-folder import are preserved verbatim.
+    CREATE TABLE IF NOT EXISTS shelf_categories (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind        TEXT    NOT NULL CHECK(kind IN ('book','recipe')),
+      name        TEXT    NOT NULL COLLATE NOCASE,
+      folder_name TEXT    NOT NULL COLLATE NOCASE,
+      created_at  INTEGER NOT NULL,
+      UNIQUE(kind, name),
+      UNIQUE(kind, folder_name)
+    );
+
+    -- Entries marked as a book or recipe. entry_id as PK makes the kinds
+    -- mutually exclusive; marking as the other kind is an upsert.
+    CREATE TABLE IF NOT EXISTS shelf_items (
+      entry_id    INTEGER PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+      kind        TEXT    NOT NULL CHECK(kind IN ('book','recipe')),
+      category_id INTEGER REFERENCES shelf_categories(id) ON DELETE SET NULL,
+      added_at    INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_shelf_items_kind ON shelf_items(kind, category_id);
   `);
   applyMigrations(db2);
 }
@@ -2349,6 +2374,17 @@ async function analyze(s, onProgress) {
   const eventsNew = src.prepare("SELECT title, date_from, date_to FROM events").all().filter((ev) => !destEvent.get(ev.title, ev.date_from, ev.date_to)).length;
   const destPlay = dest.prepare("SELECT 1 FROM listening_history WHERE timestamp = ? AND spotify_uri IS ? AND ms_played = ?");
   const playsNew = src.prepare("SELECT timestamp, spotify_uri, ms_played FROM listening_history").all().filter((p) => !destPlay.get(p.timestamp, p.spotify_uri, p.ms_played)).length;
+  const destShelfCat = dest.prepare("SELECT id FROM shelf_categories WHERE kind = ? AND name = ? COLLATE NOCASE");
+  const shelfCategoriesNew = src.prepare("SELECT kind, name FROM shelf_categories").all().filter((c) => !destShelfCat.get(c.kind, c.name)).length;
+  const planBySrcId = new Map(plan.map((p) => [p.src.id, p]));
+  const destShelfItem = dest.prepare("SELECT 1 FROM shelf_items WHERE entry_id = ?");
+  let shelfItemsNew = 0;
+  for (const r of src.prepare("SELECT entry_id FROM shelf_items").all()) {
+    const p = planBySrcId.get(r.entry_id);
+    if (!p) continue;
+    if (p.action === "new" || p.action === "dup-of-new") shelfItemsNew++;
+    else if (!destShelfItem.get(p.existingId)) shelfItemsNew++;
+  }
   return {
     zipPath: s.zipPath,
     exportedAt: s.manifest.exportedAt,
@@ -2361,7 +2397,9 @@ async function analyze(s, onProgress) {
     peopleNew,
     eventsNew,
     playsNew,
-    volumesNew
+    volumesNew,
+    shelfCategoriesNew,
+    shelfItemsNew
   };
 }
 async function executeMerge(onProgress) {
@@ -2641,6 +2679,34 @@ function runMergeTransaction(s, onProgress) {
     const tId = tagMap.get(r.tag_id);
     if (gId != null && tId != null) insGroupTag.run(gId, tId);
   }
+  const shelfCatMap = /* @__PURE__ */ new Map();
+  let shelfCategoriesCreated = 0;
+  const destShelfCat = dest.prepare("SELECT id FROM shelf_categories WHERE kind = ? AND name = ? COLLATE NOCASE");
+  const destShelfCatByFolder = dest.prepare("SELECT id FROM shelf_categories WHERE kind = ? AND folder_name = ? COLLATE NOCASE");
+  const insShelfCat = dest.prepare(`
+    INSERT INTO shelf_categories (kind, name, folder_name, created_at) VALUES (?, ?, ?, ?)
+  `);
+  for (const c of src.prepare("SELECT * FROM shelf_categories").all()) {
+    const hit = destShelfCat.get(c.kind, c.name);
+    if (hit) {
+      shelfCatMap.set(c.id, hit.id);
+      continue;
+    }
+    let folderName = c.folder_name;
+    for (let n = 2; destShelfCatByFolder.get(c.kind, folderName); n++) folderName = `${c.folder_name}_${n}`;
+    shelfCatMap.set(c.id, insShelfCat.run(c.kind, c.name, folderName, c.created_at).lastInsertRowid);
+    shelfCategoriesCreated++;
+  }
+  let shelfItemsImported = 0;
+  const insShelfItem = dest.prepare(`
+    INSERT OR IGNORE INTO shelf_items (entry_id, kind, category_id, added_at) VALUES (?, ?, ?, ?)
+  `);
+  for (const r of src.prepare("SELECT * FROM shelf_items").all()) {
+    const eId = entryMap.get(r.entry_id);
+    if (eId == null) continue;
+    const cId = r.category_id != null ? shelfCatMap.get(r.category_id) ?? null : null;
+    shelfItemsImported += insShelfItem.run(eId, r.kind, cId, r.added_at).changes;
+  }
   const insRef = dest.prepare("INSERT OR IGNORE INTO entry_references (entry_id, ref_entry_id) VALUES (?, ?)");
   for (const r of src.prepare("SELECT * FROM entry_references").all()) {
     const a = entryMap.get(r.entry_id);
@@ -2679,7 +2745,9 @@ function runMergeTransaction(s, onProgress) {
       groupsCreated,
       peopleCreated,
       eventsCreated,
-      playsInserted
+      playsInserted,
+      shelfCategoriesCreated,
+      shelfItemsImported
     },
     journalIdsNeedingFile
   };
@@ -3291,6 +3359,357 @@ function registerPeopleHandlers() {
   electron.ipcMain.handle("people:setForEntry", (_, entryId, personIds) => setEntryPeople(entryId, personIds));
   electron.ipcMain.handle("people:addToEntries", (_, entryIds, personIds) => bulkAddPeopleToEntries(entryIds, personIds));
   electron.ipcMain.handle("people:entries", (_, personId) => getPersonEntries(personId));
+}
+function listCategories(kind) {
+  return getDb().prepare(`
+    SELECT c.*, COUNT(si.entry_id) AS count
+    FROM shelf_categories c
+    LEFT JOIN shelf_items si ON si.category_id = c.id
+    WHERE c.kind = ?
+    GROUP BY c.id
+    ORDER BY c.name COLLATE NOCASE
+  `).all(kind);
+}
+function getCategory(id) {
+  return getDb().prepare("SELECT * FROM shelf_categories WHERE id = ?").get(id);
+}
+function createCategory(kind, name, folderName) {
+  const result = getDb().prepare(`
+    INSERT INTO shelf_categories (kind, name, folder_name, created_at)
+    VALUES (?, ?, ?, ?)
+  `).run(kind, name.trim(), folderName, Date.now());
+  return getCategory(result.lastInsertRowid);
+}
+function renameCategory(id, name, folderName) {
+  getDb().prepare("UPDATE shelf_categories SET name = ?, folder_name = ? WHERE id = ?").run(name.trim(), folderName, id);
+  return getCategory(id);
+}
+function deleteCategory(id) {
+  getDb().prepare("DELETE FROM shelf_categories WHERE id = ?").run(id);
+}
+function findOrCreateCategoryByFolder(kind, folderName) {
+  const existing = getDb().prepare("SELECT * FROM shelf_categories WHERE kind = ? AND folder_name = ?").get(kind, folderName);
+  if (existing) return existing;
+  return createCategory(kind, folderName, folderName);
+}
+function upsertShelfItems(entryIds, kind, categoryId) {
+  if (entryIds.length === 0) return;
+  const db2 = getDb();
+  const ins = db2.prepare(`
+    INSERT INTO shelf_items (entry_id, kind, category_id, added_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(entry_id) DO UPDATE SET kind = excluded.kind, category_id = excluded.category_id
+  `);
+  const now = Date.now();
+  db2.transaction(() => {
+    for (const id of entryIds) ins.run(id, kind, categoryId, now);
+  })();
+}
+function markIfUnmarked(entryIds, kind, categoryId) {
+  if (entryIds.length === 0) return 0;
+  const db2 = getDb();
+  const ins = db2.prepare(`
+    INSERT OR IGNORE INTO shelf_items (entry_id, kind, category_id, added_at)
+    VALUES (?, ?, ?, ?)
+  `);
+  const now = Date.now();
+  let inserted = 0;
+  db2.transaction(() => {
+    for (const id of entryIds) inserted += ins.run(id, kind, categoryId, now).changes;
+  })();
+  return inserted;
+}
+function unmarkEntries(entryIds) {
+  if (entryIds.length === 0) return;
+  const db2 = getDb();
+  const del = db2.prepare("DELETE FROM shelf_items WHERE entry_id = ?");
+  db2.transaction(() => {
+    for (const id of entryIds) del.run(id);
+  })();
+}
+function listShelfEntries(kind, filter) {
+  const where = filter === "all" ? "" : filter === "uncategorized" ? "AND si.category_id IS NULL" : "AND si.category_id = @categoryId";
+  return getDb().prepare(`
+    SELECT e.*, si.category_id AS category_id
+    FROM entries e
+    JOIN shelf_items si ON si.entry_id = e.id
+    WHERE si.kind = @kind ${where}
+    ORDER BY e.title COLLATE NOCASE, e.timestamp
+  `).all({ kind, categoryId: typeof filter === "number" ? filter : null });
+}
+function getShelfInfoForEntries(entryIds) {
+  if (entryIds.length === 0) return [];
+  const placeholders = entryIds.map(() => "?").join(",");
+  return getDb().prepare(`
+    SELECT entry_id, kind, category_id FROM shelf_items WHERE entry_id IN (${placeholders})
+  `).all(...entryIds);
+}
+function listItemIdsInCategory(categoryId) {
+  return getDb().prepare("SELECT entry_id FROM shelf_items WHERE category_id = ?").all(categoryId).map((r) => r.entry_id);
+}
+function listCopyEntryPathsUnder(prefixDir) {
+  return getDb().prepare(`
+    SELECT id, file_path FROM entries
+    WHERE import_mode = 'copy' AND file_path LIKE ?
+  `).all(prefixDir + "%");
+}
+function rewriteCopyFilePathPrefix(oldPrefix, newPrefix) {
+  return getDb().prepare(`
+    UPDATE entries
+    SET file_path = ? || substr(file_path, ?)
+    WHERE import_mode = 'copy' AND file_path LIKE ? ESCAPE '\\'
+  `).run(
+    newPrefix,
+    oldPrefix.length + 1,
+    oldPrefix.replace(/[\\%_]/g, (c) => "\\" + c) + "%"
+  ).changes;
+}
+function shelfFolderName(kind) {
+  return kind === "book" ? "books" : "recipes";
+}
+function shelfRootDir(kind) {
+  return path.join(getFilesPath(), shelfFolderName(kind));
+}
+function sanitizeCategoryFolderName(name) {
+  let s = name.normalize("NFC").trim().toLowerCase();
+  s = s.replace(/[^a-z0-9._-]+/g, "_");
+  s = s.replace(/^[._-]+|[._-]+$/g, "");
+  s = s.slice(0, 64);
+  if (s === "" || s === "." || s === "..") {
+    throw new Error("Category name must contain a letter or digit");
+  }
+  return s;
+}
+async function renameWithUniqueName(sourceAbs, destDir, fileName) {
+  const ext = path.extname(fileName);
+  const stem = path.basename(fileName, ext);
+  for (let n = 1; ; n++) {
+    const destName = n === 1 ? fileName : `${stem} (${n})${ext}`;
+    const destPath = path.join(destDir, destName);
+    try {
+      await fs.promises.access(destPath);
+      continue;
+    } catch {
+    }
+    try {
+      await fs.promises.rename(sourceAbs, destPath);
+    } catch (err) {
+      if (err.code !== "EXDEV") throw err;
+      await fs.promises.copyFile(sourceAbs, destPath, fs.constants.COPYFILE_EXCL);
+      const [src, dst] = await Promise.all([fs.promises.stat(sourceAbs), fs.promises.stat(destPath)]);
+      if (src.size !== dst.size) {
+        await fs.promises.unlink(destPath);
+        throw new Error("copy verification failed (size mismatch)");
+      }
+      await fs.promises.unlink(sourceAbs);
+    }
+    return destName;
+  }
+}
+async function moveEntriesIntoShelf(entryIds, kind, category) {
+  const destDir = category ? path.join(shelfRootDir(kind), category.folder_name) : shelfRootDir(kind);
+  const result = { moved: 0, skippedReference: 0, failures: [] };
+  for (const id of entryIds) {
+    const entry = getEntry(id);
+    if (!entry || !entry.file_path) continue;
+    if (entry.import_mode !== "copy") {
+      result.skippedReference++;
+      continue;
+    }
+    if (entry.is_missing) continue;
+    const currentAbs = path.join(getLibraryPath(), entry.file_path);
+    if (path.dirname(currentAbs) === destDir) continue;
+    try {
+      await fs.promises.mkdir(destDir, { recursive: true });
+      const destName = await renameWithUniqueName(currentAbs, destDir, path.basename(currentAbs));
+      const newRel = path.join("files", shelfFolderName(kind), category ? category.folder_name : "", destName).split(path.sep).join("/");
+      updateEntry(id, { file_path: newRel });
+      result.moved++;
+    } catch (err) {
+      result.failures.push({ entryId: id, error: err.message });
+    }
+  }
+  return result;
+}
+async function realCasedChild(parentDir, name) {
+  let names;
+  try {
+    names = await fs.promises.readdir(parentDir);
+  } catch {
+    return null;
+  }
+  const lower = name.toLowerCase();
+  return names.find((n) => n.toLowerCase() === lower) ?? null;
+}
+async function rmdirIfEmpty(dir) {
+  try {
+    await fs.promises.rmdir(dir);
+  } catch {
+  }
+}
+async function renameCategoryFolder(kind, oldFolderName, newFolderName) {
+  if (oldFolderName === newFolderName) return { needsPerFileMove: false };
+  const root = shelfRootDir(kind);
+  const oldDir = path.join(root, oldFolderName);
+  const newDir = path.join(root, newFolderName);
+  const oldExists = await realCasedChild(root, oldFolderName) !== null;
+  if (!oldExists) return { needsPerFileMove: false };
+  const newExists = await realCasedChild(root, newFolderName) !== null;
+  if (newExists) return { needsPerFileMove: true };
+  await fs.promises.rename(oldDir, newDir);
+  const prefix = (f) => `files/${shelfFolderName(kind)}/${f}/`;
+  rewriteCopyFilePathPrefix(prefix(oldFolderName), prefix(newFolderName));
+  return { needsPerFileMove: false };
+}
+function friendlyConstraintError(err, name) {
+  const msg = err.message ?? String(err);
+  if (msg.includes("UNIQUE constraint failed")) {
+    return new Error(`A category like "${name}" already exists on this shelf`);
+  }
+  return err;
+}
+function registerShelfHandlers() {
+  electron.ipcMain.handle("shelf:listCategories", (_, kind) => listCategories(kind));
+  electron.ipcMain.handle("shelf:createCategory", async (_, kind, name) => {
+    const folderName = sanitizeCategoryFolderName(name);
+    let category;
+    try {
+      category = createCategory(kind, name, folderName);
+    } catch (err) {
+      throw friendlyConstraintError(err, name);
+    }
+    await fs.promises.mkdir(path.join(shelfRootDir(kind), folderName), { recursive: true });
+    return category;
+  });
+  electron.ipcMain.handle("shelf:renameCategory", async (_, id, name) => {
+    const category = getCategory(id);
+    if (!category) throw new Error("Unknown category");
+    const newFolderName = sanitizeCategoryFolderName(name);
+    if (newFolderName === category.folder_name) {
+      try {
+        return renameCategory(id, name, category.folder_name);
+      } catch (err) {
+        throw friendlyConstraintError(err, name);
+      }
+    }
+    stopWatcher();
+    try {
+      const { needsPerFileMove } = await renameCategoryFolder(category.kind, category.folder_name, newFolderName);
+      let renamed;
+      try {
+        renamed = renameCategory(id, name, newFolderName);
+      } catch (err) {
+        await renameCategoryFolder(category.kind, newFolderName, category.folder_name).catch(() => {
+        });
+        throw friendlyConstraintError(err, name);
+      }
+      if (needsPerFileMove) {
+        await moveEntriesIntoShelf(listItemIdsInCategory(id), category.kind, renamed);
+        await rmdirIfEmpty(path.join(shelfRootDir(category.kind), category.folder_name));
+      }
+      return renamed;
+    } finally {
+      startWatcher();
+    }
+  });
+  electron.ipcMain.handle("shelf:deleteCategory", async (_, id) => {
+    const category = getCategory(id);
+    if (!category) throw new Error("Unknown category");
+    const itemIds = listItemIdsInCategory(id);
+    stopWatcher();
+    try {
+      const move = await moveEntriesIntoShelf(itemIds, category.kind, null);
+      deleteCategory(id);
+      await rmdirIfEmpty(path.join(shelfRootDir(category.kind), category.folder_name));
+      return { marked: itemIds.length, ...move };
+    } finally {
+      startWatcher();
+    }
+  });
+  electron.ipcMain.handle("shelf:listEntries", (_, kind, filter) => listShelfEntries(kind, filter));
+  electron.ipcMain.handle("shelf:forEntries", (_, entryIds) => getShelfInfoForEntries(entryIds));
+  electron.ipcMain.handle("shelf:markEntries", async (_, entryIds, kind, categoryId) => {
+    const category = categoryId != null ? getCategory(categoryId) : null;
+    if (categoryId != null && (!category || category.kind !== kind)) throw new Error("Unknown category");
+    upsertShelfItems(entryIds, kind, category?.id ?? null);
+    stopWatcher();
+    try {
+      const move = await moveEntriesIntoShelf(entryIds, kind, category);
+      return { marked: entryIds.length, ...move };
+    } finally {
+      startWatcher();
+    }
+  });
+  electron.ipcMain.handle("shelf:unmarkEntries", (_, entryIds) => {
+    unmarkEntries(entryIds);
+  });
+  electron.ipcMain.handle("shelf:importBooksFolder", async (event) => {
+    const sender = event.sender;
+    const send2 = (channel, data) => {
+      if (!sender.isDestroyed()) sender.send(channel, data);
+    };
+    const booksRoot = shelfRootDir("book");
+    const result = { indexed: 0, alreadyIndexed: 0, marked: 0, categoriesCreated: 0, failures: [] };
+    let rootEntries;
+    try {
+      rootEntries = await fs.promises.readdir(booksRoot, { withFileTypes: true });
+    } catch {
+      return result;
+    }
+    const existingFolders = new Set(listCategories("book").map((c) => c.folder_name));
+    const categoryByFolder = /* @__PURE__ */ new Map();
+    const filePaths = [];
+    const walk = async (dir) => {
+      for (const d of await fs.promises.readdir(dir, { withFileTypes: true })) {
+        if (d.name.startsWith(".")) continue;
+        const full = path.join(dir, d.name);
+        if (d.isDirectory()) await walk(full);
+        else if (d.isFile()) filePaths.push(full);
+      }
+    };
+    for (const d of rootEntries) {
+      if (d.name.startsWith(".")) continue;
+      const full = path.join(booksRoot, d.name);
+      if (d.isDirectory()) {
+        const category = findOrCreateCategoryByFolder("book", d.name);
+        categoryByFolder.set(d.name, category.id);
+        if (!existingFolders.has(d.name)) result.categoriesCreated++;
+        await walk(full);
+      } else if (d.isFile()) {
+        filePaths.push(full);
+      }
+    }
+    stopWatcher();
+    try {
+      const { insertedIds, failures, total } = await ingestFiles(filePaths, "copy", null, (progress) => {
+        send2("ingest:progress", progress);
+      });
+      result.indexed = insertedIds.length;
+      result.alreadyIndexed = total - insertedIds.length - failures.length;
+      result.failures = failures;
+      if (total > 0) {
+        const logPath = failures.length > 0 ? await writeImportErrorLog(failures) : null;
+        const done = { total, imported: total - failures.length, failures, logPath };
+        send2("ingest:done", done);
+      }
+    } finally {
+      startWatcher();
+    }
+    const prefix = "files/books/";
+    const byCategory = /* @__PURE__ */ new Map();
+    for (const row of listCopyEntryPathsUnder(prefix)) {
+      if (!row.file_path.startsWith(prefix)) continue;
+      const parts = row.file_path.split("/");
+      const categoryId = parts.length >= 4 ? categoryByFolder.get(parts[2]) ?? null : null;
+      const bucket = byCategory.get(categoryId) ?? [];
+      bucket.push(row.id);
+      byCategory.set(categoryId, bucket);
+    }
+    for (const [categoryId, ids] of byCategory) {
+      result.marked += markIfUnmarked(ids, "book", categoryId);
+    }
+    return result;
+  });
 }
 function registerTagHandlers() {
   electron.ipcMain.handle("tags:list", () => listTags());
@@ -4302,6 +4721,7 @@ function registerAllHandlers() {
   registerIngestHandlers();
   registerMapHandlers();
   registerPeopleHandlers();
+  registerShelfHandlers();
   registerTagHandlers();
   registerSettingsHandlers();
   registerProfileHandlers();

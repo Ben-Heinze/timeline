@@ -6,6 +6,7 @@ import CalendarHeatmap from './components/CalendarHeatmap'
 import MapView from './components/MapView'
 import FilesView from './components/FilesView'
 import PeopleView from './components/PeopleView'
+import ShelfView from './components/ShelfView'
 import SpotifyView from './components/SpotifyView'
 import FileBrowser from './components/FileBrowser'
 import EntryModal from './components/EntryModal'
@@ -117,7 +118,8 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
-      {activeView !== 'people' && <GroupSidebar />}
+      {/* People and the shelf views bring their own left rail */}
+      {!['people', 'books', 'recipes'].includes(activeView) && <GroupSidebar />}
       <Main />
     </div>
   )
@@ -399,6 +401,12 @@ function Main() {
           <button style={tabStyle(activeView === 'files')} onClick={() => setActiveView('files')}>
             Files
           </button>
+          <button style={tabStyle(activeView === 'books')} onClick={() => setActiveView('books')}>
+            Books
+          </button>
+          <button style={tabStyle(activeView === 'recipes')} onClick={() => setActiveView('recipes')}>
+            Recipes
+          </button>
           <button style={tabStyle(activeView === 'people')} onClick={() => setActiveView('people')}>
             People
           </button>
@@ -483,6 +491,8 @@ function Main() {
              : activeView === 'settings' ? <SettingsView />
              : activeView === 'spotify' ? <SpotifyView />
              : activeView === 'people' ? <PeopleView />
+             : activeView === 'books' ? <ShelfView key="book" kind="book" />
+             : activeView === 'recipes' ? <ShelfView key="recipe" kind="recipe" />
              : <FilesView />}
           </div>
           {activeView === 'timeline' && <EventsPanel />}

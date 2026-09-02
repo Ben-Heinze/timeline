@@ -217,6 +217,45 @@ export interface PersonListItem extends Person {
   avatar_thumb: string | null   // thumbnail path of the avatar entry, if any
 }
 
+// Books & Recipes ("shelf"): entries marked as a book or recipe, each in at
+// most one per-kind category. Copy-mode files physically live under
+// files/books/<category folder>/ or files/recipes/<category folder>/;
+// reference-mode files are never moved.
+export type ShelfKind = 'book' | 'recipe'
+
+export interface ShelfCategory {
+  id: number
+  kind: ShelfKind
+  name: string
+  folder_name: string           // sanitized lowercase on-disk subfolder name
+  created_at: number
+  count?: number                // items in the category (list queries only)
+}
+
+export interface ShelfItemInfo {
+  entry_id: number
+  kind: ShelfKind
+  category_id: number | null
+}
+
+// Outcome of marking/recategorizing entries. Files that couldn't be moved stay
+// marked (metadata-first); re-applying the same category retries the move.
+export interface ShelfMoveResult {
+  marked: number
+  moved: number
+  skippedReference: number      // reference-mode entries marked without moving
+  failures: { entryId: number; error: string }[]
+}
+
+// Outcome of the one-time "index the existing files/books folder" action.
+export interface ShelfImportResult {
+  indexed: number               // entries newly registered in the DB
+  alreadyIndexed: number        // skipped by hash dedupe (incl. twins elsewhere in the library)
+  marked: number                // entries newly marked as books
+  categoriesCreated: number
+  failures: IngestFailure[]
+}
+
 export interface SearchFilters {
   text?: string
   types?: EntryType[]
@@ -407,6 +446,8 @@ export interface MergePreview {
   eventsNew: number
   playsNew: number
   volumesNew: number
+  shelfCategoriesNew: number
+  shelfItemsNew: number
 }
 
 export interface MergeResult {
@@ -418,6 +459,8 @@ export interface MergeResult {
   peopleCreated: number
   eventsCreated: number
   playsInserted: number
+  shelfCategoriesCreated: number
+  shelfItemsImported: number
 }
 
 export interface SpotifyPlay {

@@ -341656,6 +341656,14 @@ function useEntryContextMenu(entries) {
   const groupRowRef = reactExports.useRef(null);
   const groupSubRef = reactExports.useRef(null);
   const [groupSubPos, setGroupSubPos] = reactExports.useState(null);
+  const [shelfSubOpen, setShelfSubOpen] = reactExports.useState(null);
+  const bookRowRef = reactExports.useRef(null);
+  const recipeRowRef = reactExports.useRef(null);
+  const shelfSubRef = reactExports.useRef(null);
+  const [shelfSubPos, setShelfSubPos] = reactExports.useState(null);
+  const [shelfCats, setShelfCats] = reactExports.useState({ book: [], recipe: [] });
+  const [shelfInfo, setShelfInfo] = reactExports.useState([]);
+  const [newShelfCatName, setNewShelfCatName] = reactExports.useState("");
   const [tagModalIds, setTagModalIds] = reactExports.useState(null);
   const [peopleModalIds, setPeopleModalIds] = reactExports.useState(null);
   const [pendingPersonIds, setPendingPersonIds] = reactExports.useState([]);
@@ -341705,6 +341713,7 @@ function useEntryContextMenu(entries) {
       setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
     }
     setGroupSubOpen(false);
+    setShelfSubOpen(null);
     setMenuPos(null);
     setMenu({ x: e.clientX, y: e.clientY, ids });
   }, [setSelection]);
@@ -341718,6 +341727,39 @@ function useEntryContextMenu(entries) {
     const top = Math.max(margin, Math.min(menu.y, window.innerHeight - height - margin));
     setMenuPos({ left, top });
   }, [menu]);
+  reactExports.useEffect(() => {
+    if (!menu) {
+      setShelfInfo([]);
+      return;
+    }
+    let cancelled = false;
+    window.api.shelf.forEntries(menu.ids).then((info) => {
+      if (!cancelled) setShelfInfo(info);
+    });
+    Promise.all([window.api.shelf.listCategories("book"), window.api.shelf.listCategories("recipe")]).then(([book, recipe]) => {
+      if (!cancelled) setShelfCats({ book, recipe });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [menu]);
+  reactExports.useLayoutEffect(() => {
+    if (!shelfSubOpen) {
+      setShelfSubPos(null);
+      return;
+    }
+    const row = (shelfSubOpen === "book" ? bookRowRef : recipeRowRef).current;
+    const sub = shelfSubRef.current;
+    if (!row || !sub) return;
+    const anchor = row.getBoundingClientRect();
+    const { width, height } = sub.getBoundingClientRect();
+    const margin = 8;
+    let left = anchor.right - 2;
+    if (left + width + margin > window.innerWidth) left = anchor.left - width + 2;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    const top = Math.max(margin, Math.min(anchor.top - 4, window.innerHeight - height - margin));
+    setShelfSubPos({ left, top });
+  }, [shelfSubOpen, shelfCats]);
   reactExports.useLayoutEffect(() => {
     if (!groupSubOpen) {
       setGroupSubPos(null);
@@ -341738,6 +341780,8 @@ function useEntryContextMenu(entries) {
   const closeMenu = reactExports.useCallback(() => {
     setMenu(null);
     setGroupSubOpen(false);
+    setShelfSubOpen(null);
+    setNewShelfCatName("");
   }, []);
   reactExports.useEffect(() => {
     if (!menu && tagModalIds === null && peopleModalIds === null && renameId === null) return;
@@ -341861,6 +341905,43 @@ function useEntryContextMenu(entries) {
       hint: parent ? `Moves up to ${parent.name}` : "Leaves it ungrouped"
     };
   }, [menu, entries, groups]);
+  const markAsShelf = reactExports.useCallback(async (kind, categoryId) => {
+    if (!menu) return;
+    const ids = menu.ids;
+    closeMenu();
+    try {
+      const r2 = await window.api.shelf.markEntries(ids, kind, categoryId);
+      if (r2.failures.length > 0) {
+        window.alert(`Marked, but ${r2.failures.length} file${r2.failures.length === 1 ? "" : "s"} could not be moved: ${r2.failures[0].error}`);
+      }
+    } catch (e) {
+      window.alert(e.message ?? String(e));
+    }
+    bumpRefreshKey();
+  }, [menu, closeMenu, bumpRefreshKey]);
+  const createShelfCategoryAndMark = reactExports.useCallback(async (kind) => {
+    const name2 = newShelfCatName.trim();
+    if (!name2 || !menu) return;
+    try {
+      const cat = await window.api.shelf.createCategory(kind, name2);
+      await markAsShelf(kind, cat.id);
+    } catch (e) {
+      window.alert(e.message ?? String(e));
+    }
+  }, [newShelfCatName, menu, markAsShelf]);
+  const removeShelfInfo = reactExports.useMemo(() => {
+    if (!menu || shelfInfo.length < menu.ids.length) return null;
+    const kinds = new Set(shelfInfo.map((i) => i.kind));
+    const label = kinds.size === 1 ? `Remove from ${kinds.has("book") ? "Books" : "Recipes"}` : "Remove from Books/Recipes";
+    return { label };
+  }, [menu, shelfInfo]);
+  const removeFromShelf = reactExports.useCallback(async () => {
+    if (!menu) return;
+    const ids = menu.ids;
+    closeMenu();
+    await window.api.shelf.unmarkEntries(ids);
+    bumpRefreshKey();
+  }, [menu, closeMenu, bumpRefreshKey]);
   const deleteSelected = reactExports.useCallback(async () => {
     if (!menu) return;
     const ids = menu.ids;
@@ -341922,7 +342003,10 @@ function useEntryContextMenu(entries) {
           "div",
           {
             ref: groupRowRef,
-            onMouseEnter: () => setGroupSubOpen(true),
+            onMouseEnter: () => {
+              setGroupSubOpen(true);
+              setShelfSubOpen(null);
+            },
             onMouseLeave: () => setGroupSubOpen(false),
             children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Add to group", trailing: "›", onClick: () => setGroupSubOpen((o) => !o) }),
@@ -341961,6 +342045,81 @@ function useEntryContextMenu(entries) {
           }
         ),
         removeInfo && /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: removeInfo.label, sublabel: removeInfo.hint ?? void 0, onClick: removeFromGroup }),
+        ["book", "recipe"].map((kind) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "div",
+          {
+            ref: kind === "book" ? bookRowRef : recipeRowRef,
+            onMouseEnter: () => {
+              setShelfSubOpen(kind);
+              setGroupSubOpen(false);
+            },
+            onMouseLeave: () => setShelfSubOpen((open) => open === kind ? null : open),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                MenuItem,
+                {
+                  label: `Add to ${kind === "book" ? "Books" : "Recipes"}`,
+                  trailing: "›",
+                  onClick: () => setShelfSubOpen((open) => open === kind ? null : kind)
+                }
+              ),
+              shelfSubOpen === kind && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "div",
+                {
+                  ref: shelfSubRef,
+                  onMouseEnter: () => setShelfSubOpen(kind),
+                  onMouseLeave: () => setShelfSubOpen((open) => open === kind ? null : open),
+                  style: {
+                    position: "fixed",
+                    zIndex: 102,
+                    left: shelfSubPos ? shelfSubPos.left : 0,
+                    top: shelfSubPos ? shelfSubPos.top : 0,
+                    visibility: shelfSubPos ? "visible" : "hidden",
+                    minWidth: 200,
+                    maxHeight: "calc(100vh - 16px)",
+                    overflowY: "auto",
+                    background: "var(--bg-surface)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+                    padding: 4
+                  },
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Uncategorized", onClick: () => markAsShelf(kind, null) }),
+                    shelfCats[kind].map((c) => /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: c.name, onClick: () => markAsShelf(kind, c.id) }, c.id)),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "var(--border-light)", margin: "4px 0" } }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "input",
+                      {
+                        value: newShelfCatName,
+                        onChange: (e) => setNewShelfCatName(e.target.value),
+                        onKeyDown: (e) => {
+                          if (e.key === "Enter") createShelfCategoryAndMark(kind);
+                        },
+                        onClick: (e) => e.stopPropagation(),
+                        placeholder: "New category…",
+                        style: {
+                          width: "100%",
+                          boxSizing: "border-box",
+                          margin: "2px 0",
+                          padding: "5px 8px",
+                          fontSize: 12,
+                          border: "1px solid var(--border)",
+                          borderRadius: 5,
+                          background: "var(--bg-input)",
+                          outline: "none",
+                          color: "var(--text)"
+                        }
+                      }
+                    )
+                  ]
+                }
+              )
+            ]
+          },
+          kind
+        )),
+        removeShelfInfo && /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: removeShelfInfo.label, onClick: removeFromShelf }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Change date…", onClick: openDateModal }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(MenuItem, { label: "Set location…", onClick: openLocationModal }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: 1, background: "var(--border-light)", margin: "4px 0" } }),
@@ -343417,6 +343576,436 @@ function Field({ label, value, placeholder, type: type2, onChange, onCommit, hin
       }
     ),
     hint && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { fontSize: 11, color: "var(--text-4)", marginTop: 4 }, children: hint })
+  ] });
+}
+function ipcErrorMessage$1(e) {
+  const msg = e?.message ?? String(e);
+  return msg.replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
+}
+const KIND_LABELS = {
+  book: { one: "book", many: "Books" },
+  recipe: { one: "recipe", many: "Recipes" }
+};
+function ShelfView({ kind }) {
+  const { selectedIds, lastSelectedId, setSelection, setActiveEntryId, refreshKey, bumpRefreshKey } = useStore();
+  const [categories, setCategories] = reactExports.useState([]);
+  const [entries, setEntries] = reactExports.useState([]);
+  const [filter, setFilter] = reactExports.useState("all");
+  const [message, setMessage] = reactExports.useState(null);
+  const [newCatOpen, setNewCatOpen] = reactExports.useState(false);
+  const [newCatName, setNewCatName] = reactExports.useState("");
+  const [renamingId, setRenamingId] = reactExports.useState(null);
+  const [renameText, setRenameText] = reactExports.useState("");
+  const [busy, setBusy] = reactExports.useState(false);
+  const labels = KIND_LABELS[kind];
+  const reload = reactExports.useCallback(async () => {
+    const [cats, all] = await Promise.all([
+      window.api.shelf.listCategories(kind),
+      window.api.shelf.listEntries(kind, "all")
+    ]);
+    setCategories(cats);
+    setEntries(all);
+  }, [kind]);
+  reactExports.useEffect(() => {
+    reload();
+  }, [reload, refreshKey]);
+  const uncategorizedCount = reactExports.useMemo(() => entries.filter((e) => e.category_id === null).length, [entries]);
+  const countByCategory = reactExports.useMemo(() => {
+    const m2 = /* @__PURE__ */ new Map();
+    for (const e of entries) if (e.category_id !== null) m2.set(e.category_id, (m2.get(e.category_id) ?? 0) + 1);
+    return m2;
+  }, [entries]);
+  const visible = reactExports.useMemo(() => {
+    if (filter === "all") return entries;
+    if (filter === "uncategorized") return entries.filter((e) => e.category_id === null);
+    return entries.filter((e) => e.category_id === filter);
+  }, [entries, filter]);
+  reactExports.useEffect(() => {
+    if (typeof filter === "number" && !categories.some((c) => c.id === filter)) setFilter("all");
+  }, [filter, categories]);
+  const { onEntryContextMenu, contextMenuUI } = useEntryContextMenu(visible);
+  const selectedIdsRef = reactExports.useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
+  const lastSelectedIdRef = reactExports.useRef(lastSelectedId);
+  lastSelectedIdRef.current = lastSelectedId;
+  const visibleRef = reactExports.useRef(visible);
+  visibleRef.current = visible;
+  const onSelect = reactExports.useCallback((e, entry) => {
+    const selected = selectedIdsRef.current;
+    const lastId = lastSelectedIdRef.current;
+    const list = visibleRef.current;
+    if (e.metaKey || e.ctrlKey) {
+      const next = new Set(selected);
+      if (next.has(entry.id)) next.delete(entry.id);
+      else next.add(entry.id);
+      setSelection(next, entry.id);
+    } else if (e.shiftKey && lastId !== null) {
+      const fromIdx = list.findIndex((x2) => x2.id === lastId);
+      const toIdx = list.findIndex((x2) => x2.id === entry.id);
+      if (fromIdx >= 0 && toIdx >= 0) {
+        const [a, b] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+        setSelection(new Set(list.slice(a, b + 1).map((x2) => x2.id)), entry.id);
+      } else {
+        setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
+      }
+    } else {
+      setSelection(/* @__PURE__ */ new Set([entry.id]), entry.id);
+    }
+  }, [setSelection]);
+  const onActivate = reactExports.useCallback((entry) => setActiveEntryId(entry.id), [setActiveEntryId]);
+  const reportMove = reactExports.useCallback((r2, verb) => {
+    if (r2.failures.length > 0) {
+      setMessage(`${verb}, but ${r2.failures.length} file${r2.failures.length === 1 ? "" : "s"} could not be moved: ${r2.failures[0].error}`);
+    } else {
+      setMessage(null);
+    }
+  }, []);
+  const moveSelectionTo = reactExports.useCallback(async (categoryId) => {
+    const ids = [...selectedIdsRef.current];
+    if (ids.length === 0) return;
+    try {
+      const r2 = await window.api.shelf.markEntries(ids, kind, categoryId);
+      reportMove(r2, "Moved");
+    } catch (e) {
+      setMessage(ipcErrorMessage$1(e));
+    }
+    setSelection(/* @__PURE__ */ new Set(), null);
+    bumpRefreshKey();
+  }, [kind, reportMove, setSelection, bumpRefreshKey]);
+  const removeSelection = reactExports.useCallback(async () => {
+    const ids = [...selectedIdsRef.current];
+    if (ids.length === 0) return;
+    await window.api.shelf.unmarkEntries(ids);
+    setSelection(/* @__PURE__ */ new Set(), null);
+    bumpRefreshKey();
+  }, [setSelection, bumpRefreshKey]);
+  const createCategory = reactExports.useCallback(async () => {
+    const name2 = newCatName.trim();
+    if (!name2) {
+      setNewCatOpen(false);
+      return;
+    }
+    try {
+      const cat = await window.api.shelf.createCategory(kind, name2);
+      setNewCatName("");
+      setNewCatOpen(false);
+      await reload();
+      setFilter(cat.id);
+    } catch (e) {
+      setMessage(ipcErrorMessage$1(e));
+    }
+  }, [kind, newCatName, reload]);
+  const commitRename = reactExports.useCallback(async () => {
+    const id2 = renamingId;
+    const name2 = renameText.trim();
+    setRenamingId(null);
+    if (id2 === null || !name2) return;
+    try {
+      await window.api.shelf.renameCategory(id2, name2);
+      bumpRefreshKey();
+    } catch (e) {
+      setMessage(ipcErrorMessage$1(e));
+    }
+  }, [renamingId, renameText, bumpRefreshKey]);
+  const deleteCategory = reactExports.useCallback(async (cat) => {
+    const n2 = countByCategory.get(cat.id) ?? 0;
+    const files = kind === "book" ? "books" : "recipes";
+    if (!window.confirm(
+      `Delete category "${cat.name}"?
+
+${n2} item${n2 === 1 ? "" : "s"} become${n2 === 1 ? "s" : ""} uncategorized; their files move to the ${files} folder. No files are deleted.`
+    )) return;
+    try {
+      const r2 = await window.api.shelf.deleteCategory(cat.id);
+      reportMove(r2, "Deleted");
+    } catch (e) {
+      setMessage(ipcErrorMessage$1(e));
+    }
+    bumpRefreshKey();
+  }, [kind, countByCategory, reportMove, bumpRefreshKey]);
+  const importBooksFolder = reactExports.useCallback(async () => {
+    if (!window.confirm(
+      "Index the existing books folder?\n\nEvery file already inside the library’s files/books/ folder is added to the timeline in place (nothing is copied, moved, or renamed), marked as a book, and its subfolder becomes a category. Generating thumbnails can take several minutes. Safe to run again."
+    )) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const r2 = await window.api.shelf.importBooksFolder();
+      const bits = [
+        `${r2.indexed} file${r2.indexed === 1 ? "" : "s"} indexed`,
+        r2.alreadyIndexed > 0 ? `${r2.alreadyIndexed} already indexed or duplicates` : null,
+        `${r2.marked} marked as books`,
+        r2.categoriesCreated > 0 ? `${r2.categoriesCreated} categor${r2.categoriesCreated === 1 ? "y" : "ies"} created` : null,
+        r2.failures.length > 0 ? `${r2.failures.length} failed` : null
+      ].filter(Boolean);
+      setMessage(`Books folder import: ${bits.join(", ")}.`);
+    } catch (e) {
+      setMessage(ipcErrorMessage$1(e));
+    } finally {
+      setBusy(false);
+      bumpRefreshKey();
+    }
+  }, [bumpRefreshKey]);
+  const railItem = (active) => ({
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "5px 10px",
+    borderRadius: 6,
+    cursor: "pointer",
+    userSelect: "none",
+    background: active ? "var(--bg-entry-sel)" : "transparent",
+    color: active ? "var(--text)" : "var(--text-2)",
+    fontSize: 13,
+    fontWeight: active ? 600 : 400
+  });
+  const railCount = { marginLeft: "auto", fontSize: 11, color: "var(--text-4)" };
+  const railBtn = {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    color: "var(--text-4)",
+    fontSize: 12,
+    padding: "0 2px",
+    lineHeight: 1
+  };
+  const inputStyle2 = {
+    padding: "4px 8px",
+    fontSize: 12,
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    background: "var(--bg-input)",
+    outline: "none",
+    color: "var(--text)",
+    width: "100%"
+  };
+  const size = THUMB_SIZE.medium;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+      width: 230,
+      flexShrink: 0,
+      borderRight: "1px solid var(--border)",
+      display: "flex",
+      flexDirection: "column",
+      background: "var(--bg-sidebar)"
+    }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "12px 12px 6px", fontSize: 11, fontWeight: 700, letterSpacing: 0.8, color: "var(--text-4)", textTransform: "uppercase" }, children: labels.many }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, overflowY: "auto", padding: "2px 8px 12px", display: "flex", flexDirection: "column", gap: 1 }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: railItem(filter === "all"), onClick: () => setFilter("all"), children: [
+          "All",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: railCount, children: entries.length })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: railItem(filter === "uncategorized"), onClick: () => setFilter("uncategorized"), children: [
+          "Uncategorized",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: railCount, children: uncategorizedCount })
+        ] }),
+        categories.map((cat) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: railItem(filter === cat.id), onClick: () => setFilter(cat.id), className: "shelf-cat-row", children: renamingId === cat.id ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            autoFocus: true,
+            value: renameText,
+            onChange: (e) => setRenameText(e.target.value),
+            onBlur: commitRename,
+            onKeyDown: (e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") setRenamingId(null);
+            },
+            onClick: (e) => e.stopPropagation(),
+            style: inputStyle2
+          }
+        ) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: cat.name }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: railCount, children: countByCategory.get(cat.id) ?? 0 }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              title: "Rename category",
+              style: railBtn,
+              onClick: (e) => {
+                e.stopPropagation();
+                setRenamingId(cat.id);
+                setRenameText(cat.name);
+              },
+              children: "✎"
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              title: "Delete category",
+              style: railBtn,
+              onClick: (e) => {
+                e.stopPropagation();
+                deleteCategory(cat);
+              },
+              children: "✕"
+            }
+          )
+        ] }) }, cat.id)),
+        newCatOpen ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "4px 2px" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            autoFocus: true,
+            value: newCatName,
+            onChange: (e) => setNewCatName(e.target.value),
+            onBlur: createCategory,
+            onKeyDown: (e) => {
+              if (e.key === "Enter") createCategory();
+              if (e.key === "Escape") {
+                setNewCatOpen(false);
+                setNewCatName("");
+              }
+            },
+            placeholder: "Category name…",
+            style: inputStyle2
+          }
+        ) }) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            onClick: () => setNewCatOpen(true),
+            style: {
+              marginTop: 4,
+              padding: "5px 10px",
+              fontSize: 12,
+              textAlign: "left",
+              background: "none",
+              border: "1px dashed var(--border)",
+              borderRadius: 6,
+              color: "var(--text-3)",
+              cursor: "pointer"
+            },
+            children: "+ New category"
+          }
+        )
+      ] }),
+      kind === "book" && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: 10, borderTop: "1px solid var(--border)" }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: importBooksFolder,
+          disabled: busy,
+          style: {
+            width: "100%",
+            padding: "6px 10px",
+            fontSize: 12,
+            background: "var(--bg-subtle)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            color: "var(--text-2)",
+            cursor: busy ? "wait" : "pointer"
+          },
+          children: busy ? "Importing…" : "Import books folder…"
+        }
+      ) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 14px",
+        borderBottom: "1px solid var(--border)",
+        minHeight: 40
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 13, fontWeight: 600, color: "var(--text)" }, children: filter === "all" ? `All ${labels.many.toLowerCase()}` : filter === "uncategorized" ? "Uncategorized" : categories.find((c) => c.id === filter)?.name ?? "" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-4)" }, children: [
+          visible.length,
+          " item",
+          visible.length === 1 ? "" : "s"
+        ] }),
+        selectedIds.size > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { style: { fontSize: 12, color: "var(--text-3)" }, children: [
+            selectedIds.size,
+            " selected"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "select",
+            {
+              value: "",
+              onChange: (e) => {
+                const v2 = e.target.value;
+                if (v2 === "") return;
+                moveSelectionTo(v2 === "none" ? null : Number(v2));
+              },
+              style: {
+                fontSize: 12,
+                padding: "3px 6px",
+                borderRadius: 5,
+                background: "var(--bg-input)",
+                color: "var(--text)",
+                border: "1px solid var(--border)"
+              },
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", disabled: true, children: "Move to category…" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "none", children: "Uncategorized" }),
+                categories.map((c) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: c.id, children: c.name }, c.id))
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "button",
+            {
+              onClick: removeSelection,
+              style: {
+                fontSize: 12,
+                padding: "3px 8px",
+                borderRadius: 5,
+                cursor: "pointer",
+                background: "none",
+                border: "1px solid var(--border)",
+                color: "var(--text-2)"
+              },
+              children: [
+                "Remove from ",
+                labels.many
+              ]
+            }
+          )
+        ] })
+      ] }),
+      message && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+        padding: "6px 14px",
+        fontSize: 12,
+        color: "var(--text-2)",
+        background: "var(--bg-subtle)",
+        borderBottom: "1px solid var(--border)",
+        display: "flex",
+        alignItems: "center",
+        gap: 8
+      }, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { flex: 1 }, children: message }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => setMessage(null), style: { background: "none", border: "none", cursor: "pointer", color: "var(--text-4)" }, children: "✕" })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "div",
+        {
+          style: { flex: 1, overflowY: "auto", padding: 12 },
+          onClick: (e) => {
+            if (e.target === e.currentTarget) setSelection(/* @__PURE__ */ new Set(), null);
+          },
+          children: visible.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { style: { fontSize: 13, color: "var(--text-4)", textAlign: "center", marginTop: 40, lineHeight: 1.6 }, children: [
+            "No ",
+            labels.many.toLowerCase(),
+            " here yet.",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("br", {}),
+            "Right-click files anywhere and choose “Add to ",
+            labels.many,
+            "”."
+          ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, alignContent: "flex-start" }, children: visible.map((entry) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            GridCell,
+            {
+              entry,
+              size,
+              selected: selectedIds.has(entry.id),
+              onSelect,
+              onActivate,
+              onContextMenu: onEntryContextMenu
+            },
+            entry.id
+          )) })
+        }
+      )
+    ] }),
+    contextMenuUI
   ] });
 }
 const MONTH_LABELS$1 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -363676,6 +364265,8 @@ function EntryModal() {
   const { activeEntryId, setActiveEntryId, selectedPeriod, selectedLocation, selectedGroupId, openJournalModal, bumpRefreshKey, setPeople } = useStore();
   const [entry, setEntry] = reactExports.useState(null);
   const [entryTags, setEntryTags] = reactExports.useState([]);
+  const [shelfInfo, setShelfInfo] = reactExports.useState(null);
+  const [shelfCats, setShelfCats] = reactExports.useState([]);
   const [entryPeople, setEntryPeople] = reactExports.useState([]);
   const [entryReferences, setEntryReferences] = reactExports.useState([]);
   const [referencedBy, setReferencedBy] = reactExports.useState([]);
@@ -363690,6 +364281,7 @@ function EntryModal() {
       setEntryPeople([]);
       setEntryReferences([]);
       setReferencedBy([]);
+      setShelfInfo(null);
       return;
     }
     window.api.entries.get(activeEntryId).then(setEntry);
@@ -363697,7 +364289,42 @@ function EntryModal() {
     window.api.people.forEntry(activeEntryId).then(setEntryPeople);
     window.api.entries.references(activeEntryId).then(setEntryReferences);
     window.api.entries.referencedBy(activeEntryId).then(setReferencedBy);
+    window.api.shelf.forEntries([activeEntryId]).then((info) => setShelfInfo(info[0] ?? null));
   }, [activeEntryId]);
+  reactExports.useEffect(() => {
+    if (!shelfInfo) {
+      setShelfCats([]);
+      return;
+    }
+    let cancelled = false;
+    window.api.shelf.listCategories(shelfInfo.kind).then((cats) => {
+      if (!cancelled) setShelfCats(cats);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [shelfInfo]);
+  const handleShelfKind = reactExports.useCallback(async (kind) => {
+    if (!activeEntryId) return;
+    if (kind === null) {
+      await window.api.shelf.unmarkEntries([activeEntryId]);
+    } else {
+      const r2 = await window.api.shelf.markEntries([activeEntryId], kind, null);
+      if (r2.failures.length > 0) window.alert(`Marked, but the file could not be moved: ${r2.failures[0].error}`);
+    }
+    const [info] = await window.api.shelf.forEntries([activeEntryId]);
+    setShelfInfo(info ?? null);
+    window.api.entries.get(activeEntryId).then(setEntry);
+    bumpRefreshKey();
+  }, [activeEntryId, bumpRefreshKey]);
+  const handleShelfCategory = reactExports.useCallback(async (categoryId) => {
+    if (!activeEntryId || !shelfInfo) return;
+    const r2 = await window.api.shelf.markEntries([activeEntryId], shelfInfo.kind, categoryId);
+    if (r2.failures.length > 0) window.alert(`Recategorized, but the file could not be moved: ${r2.failures[0].error}`);
+    setShelfInfo({ ...shelfInfo, category_id: categoryId });
+    window.api.entries.get(activeEntryId).then(setEntry);
+    bumpRefreshKey();
+  }, [activeEntryId, shelfInfo, bumpRefreshKey]);
   const handleTagsChange = reactExports.useCallback(async (names) => {
     if (!activeEntryId) return;
     const updated = await window.api.tags.setForEntry(activeEntryId, names);
@@ -363854,6 +364481,57 @@ function EntryModal() {
           }, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0 }, children: "People" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(PeopleEditor, { people: entryPeople, onChange: handlePeopleChange }) })
+          ] }),
+          entry && entry.type !== "journal" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
+            padding: "10px 16px",
+            borderTop: "1px solid var(--border-light)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10
+          }, children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--text-4)", flexShrink: 0 }, children: "Shelf" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { display: "flex", background: "var(--bg-subtle)", borderRadius: 6, padding: 2, gap: 1 }, children: [["None", null], ["Book", "book"], ["Recipe", "recipe"]].map(([label, kind]) => {
+              const active = (shelfInfo?.kind ?? null) === kind;
+              return /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "button",
+                {
+                  onClick: () => {
+                    if (!active) handleShelfKind(kind);
+                  },
+                  style: {
+                    padding: "3px 10px",
+                    fontSize: 12,
+                    borderRadius: 4,
+                    border: "none",
+                    cursor: "pointer",
+                    background: active ? "var(--bg-app)" : "transparent",
+                    color: active ? "var(--text)" : "var(--text-3)",
+                    fontWeight: active ? 600 : 400
+                  },
+                  children: label
+                },
+                label
+              );
+            }) }),
+            shelfInfo && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "select",
+              {
+                value: shelfInfo.category_id ?? "none",
+                onChange: (e) => handleShelfCategory(e.target.value === "none" ? null : Number(e.target.value)),
+                style: {
+                  fontSize: 12,
+                  padding: "3px 6px",
+                  borderRadius: 5,
+                  background: "var(--bg-input)",
+                  color: "var(--text)",
+                  border: "1px solid var(--border)"
+                },
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "none", children: "Uncategorized" }),
+                  shelfCats.map((c) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: c.id, children: c.name }, c.id))
+                ]
+              }
+            )
           ] }),
           entry?.type === "journal" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: {
             padding: "10px 16px",
@@ -366446,7 +367124,9 @@ function SettingsView() {
         res.groupsCreated > 0 ? `${res.groupsCreated} new group${res.groupsCreated === 1 ? "" : "s"}` : null,
         res.peopleCreated > 0 ? `${res.peopleCreated} new ${res.peopleCreated === 1 ? "person" : "people"}` : null,
         res.eventsCreated > 0 ? `${res.eventsCreated} new event${res.eventsCreated === 1 ? "" : "s"}` : null,
-        res.playsInserted > 0 ? `${res.playsInserted} Spotify play${res.playsInserted === 1 ? "" : "s"}` : null
+        res.playsInserted > 0 ? `${res.playsInserted} Spotify play${res.playsInserted === 1 ? "" : "s"}` : null,
+        res.shelfCategoriesCreated > 0 ? `${res.shelfCategoriesCreated} new shelf categor${res.shelfCategoriesCreated === 1 ? "y" : "ies"}` : null,
+        res.shelfItemsImported > 0 ? `${res.shelfItemsImported} book/recipe mark${res.shelfItemsImported === 1 ? "" : "s"}` : null
       ].filter(Boolean);
       if (extras.length > 0) msg += `, ${extras.join(", ")}`;
       if (res.missingFiles > 0) msg += ` — ${res.missingFiles} entr${res.missingFiles === 1 ? "y" : "ies"} had no file in the archive and are marked missing`;
@@ -366772,14 +367452,16 @@ function SettingsView() {
                 " will be imported; ",
                 pendingMerge.entriesDuplicate,
                 " already in this library will be skipped.",
-                (pendingMerge.tagsNew > 0 || pendingMerge.groupsNew > 0 || pendingMerge.peopleNew > 0 || pendingMerge.eventsNew > 0 || pendingMerge.playsNew > 0) && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                (pendingMerge.tagsNew > 0 || pendingMerge.groupsNew > 0 || pendingMerge.peopleNew > 0 || pendingMerge.eventsNew > 0 || pendingMerge.playsNew > 0 || pendingMerge.shelfCategoriesNew > 0 || pendingMerge.shelfItemsNew > 0) && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
                   " Also new here: ",
                   [
                     pendingMerge.tagsNew > 0 ? `${pendingMerge.tagsNew} tag${pendingMerge.tagsNew === 1 ? "" : "s"}` : null,
                     pendingMerge.groupsNew > 0 ? `${pendingMerge.groupsNew} group${pendingMerge.groupsNew === 1 ? "" : "s"}` : null,
                     pendingMerge.peopleNew > 0 ? `${pendingMerge.peopleNew} ${pendingMerge.peopleNew === 1 ? "person" : "people"}` : null,
                     pendingMerge.eventsNew > 0 ? `${pendingMerge.eventsNew} event${pendingMerge.eventsNew === 1 ? "" : "s"}` : null,
-                    pendingMerge.playsNew > 0 ? `${pendingMerge.playsNew} Spotify play${pendingMerge.playsNew === 1 ? "" : "s"}` : null
+                    pendingMerge.playsNew > 0 ? `${pendingMerge.playsNew} Spotify play${pendingMerge.playsNew === 1 ? "" : "s"}` : null,
+                    pendingMerge.shelfCategoriesNew > 0 ? `${pendingMerge.shelfCategoriesNew} shelf categor${pendingMerge.shelfCategoriesNew === 1 ? "y" : "ies"}` : null,
+                    pendingMerge.shelfItemsNew > 0 ? `${pendingMerge.shelfItemsNew} book/recipe mark${pendingMerge.shelfItemsNew === 1 ? "" : "s"}` : null
                   ].filter(Boolean).join(", "),
                   "."
                 ] }),
@@ -370350,7 +371032,7 @@ function App() {
     };
   }, [setSyncProgress, refreshExtent, bumpRefreshKey, setVolumes]);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { display: "flex", height: "100vh" }, children: [
-    activeView !== "people" && /* @__PURE__ */ jsxRuntimeExports.jsx(GroupSidebar, {}),
+    !["people", "books", "recipes"].includes(activeView) && /* @__PURE__ */ jsxRuntimeExports.jsx(GroupSidebar, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(Main, {})
   ] });
 }
@@ -370602,6 +371284,8 @@ function Main() {
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "calendar"), onClick: () => setActiveView("calendar"), children: "Calendar" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "map"), onClick: () => setActiveView("map"), children: "Map" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "files"), onClick: () => setActiveView("files"), children: "Files" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "books"), onClick: () => setActiveView("books"), children: "Books" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "recipes"), onClick: () => setActiveView("recipes"), children: "Recipes" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "people"), onClick: () => setActiveView("people"), children: "People" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "spotify"), onClick: () => setActiveView("spotify"), children: "Spotify" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { style: tabStyle(activeView === "settings"), onClick: () => setActiveView("settings"), children: "Settings" })
@@ -370700,7 +371384,7 @@ function Main() {
           flexDirection: "column",
           overflow: "hidden"
         }, children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "map" ? /* @__PURE__ */ jsxRuntimeExports.jsx(MapView, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : activeView === "spotify" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyView, {}) : activeView === "people" ? /* @__PURE__ */ jsxRuntimeExports.jsx(PeopleView, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }, children: activeView === "timeline" ? /* @__PURE__ */ jsxRuntimeExports.jsx(TimelineCanvas, {}) : activeView === "calendar" ? /* @__PURE__ */ jsxRuntimeExports.jsx(CalendarHeatmap, {}) : activeView === "map" ? /* @__PURE__ */ jsxRuntimeExports.jsx(MapView, {}) : activeView === "settings" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsView, {}) : activeView === "spotify" ? /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyView, {}) : activeView === "people" ? /* @__PURE__ */ jsxRuntimeExports.jsx(PeopleView, {}) : activeView === "books" ? /* @__PURE__ */ jsxRuntimeExports.jsx(ShelfView, { kind: "book" }, "book") : activeView === "recipes" ? /* @__PURE__ */ jsxRuntimeExports.jsx(ShelfView, { kind: "recipe" }, "recipe") : /* @__PURE__ */ jsxRuntimeExports.jsx(FilesView, {}) }),
           activeView === "timeline" && /* @__PURE__ */ jsxRuntimeExports.jsx(EventsPanel, {}),
           activeView === "timeline" && /* @__PURE__ */ jsxRuntimeExports.jsx(SpotifyPanel, {})
         ] }) }),

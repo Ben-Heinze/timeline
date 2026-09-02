@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import type { AppSettings, Bucket, Group, IngestProgress, Entry, ZoomLevel, Tag, SyncProgressEvent, LifeEvent, VolumeStatus, YearlySpotifySummary, SearchFilters, PersonListItem } from '../../shared/types'
 
+export type ActiveView = 'timeline' | 'calendar' | 'map' | 'files' | 'books' | 'recipes' | 'people' | 'spotify' | 'settings'
+
 interface TimelineStore {
   tags: Tag[]
   setTags: (tags: Tag[]) => void
@@ -15,7 +17,7 @@ interface TimelineStore {
   setSearchFilters: (filters: SearchFilters | null) => void
   visibleRange: [number, number]
   zoomLevel: ZoomLevel
-  activeView: 'timeline' | 'calendar' | 'map' | 'files' | 'people' | 'spotify' | 'settings'
+  activeView: ActiveView
   settings: AppSettings | null
   setSettings: (s: AppSettings) => void
   histogramBuckets: Bucket[]
@@ -38,7 +40,7 @@ interface TimelineStore {
 
   setVisibleRange: (range: [number, number]) => void
   setZoomLevel: (level: ZoomLevel) => void
-  setActiveView: (view: 'timeline' | 'calendar' | 'map' | 'files' | 'people' | 'spotify' | 'settings') => void
+  setActiveView: (view: ActiveView) => void
   setHistogramBuckets: (buckets: Bucket[]) => void
   setGroups: (groups: Group[]) => void
   setSelection: (ids: Set<number>, lastId: number | null) => void
@@ -90,7 +92,7 @@ const fiveYearsAgo = now - 5 * 365.25 * 24 * 60 * 60 * 1000
 export const useStore = create<TimelineStore>((set) => ({
   visibleRange: [fiveYearsAgo, now],
   zoomLevel: 'year' as ZoomLevel,
-  activeView: 'timeline' as 'timeline' | 'calendar' | 'map' | 'files' | 'people' | 'spotify' | 'settings',
+  activeView: 'timeline' as ActiveView,
   settings: null,
   histogramBuckets: [],
   groups: [],
